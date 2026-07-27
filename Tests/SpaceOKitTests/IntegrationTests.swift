@@ -450,7 +450,11 @@ final class IntegrationTests: XCTestCase {
     // Apps open windows after launch — restore prompts, dialogs, second documents — and every
     // one of those lands on the user's screen unless something pulls it back.
 
-    func testWindowWatcherContainsLateWindows() async throws {
+    /// Containment must come from the janitor itself — the AX observer, or the periodic sweep
+    /// behind it. This test deliberately never calls `sweepStrayWindows()`: the old version did,
+    /// inside its polling loop, which meant it passed whether or not a single notification was
+    /// ever delivered. It was testing the sweep it performed, not the janitor.
+    func testWindowWatcherContainsLateWindowsWithoutBeingSweptByHand() async throws {
         let appURL = try XCTUnwrap(AppLauncher.resolve("TextEdit"))
         let pool = DisplayPool(sessionsPerDisplay: 1)
         let session = AgentSession(id: "test-late", slot: try pool.allocate())
@@ -461,6 +465,10 @@ final class IntegrationTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: first) }
         _ = try await session.launch(app: appURL, opening: [first])
 
+        XCTAssertEqual(session.watcherRegistrationFailures, [String](),
+                       "the AX observer must be fully registered, or containment is degraded "
+                       + "to the periodic sweep alone and the audit should already say so")
+
         // Cmd-N asks the already-owned process to create a window after initial placement.
         // It keeps the test off the user's display and exercises the AX observer, not a second
         // independent app launch.
@@ -468,18 +476,54 @@ final class IntegrationTests: XCTestCase {
         try InputRouter.prepareForInput(firstWindow)
         try InputRouter.key(try KeyCombo.parse("cmd+n"), to: firstWindow.pid)
 
-        let deadline = Date().addingTimeInterval(5)
+        // Generous enough for several periodic sweeps, so a missed notification is caught by the
+        // backstop rather than failing the run.
+        let deadline = Date().addingTimeInterval(max(10, WindowWatcher.periodicSweepInterval * 4))
         while Date() < deadline {
-            session.sweepStrayWindows()
             session.refreshWindows()
-            if session.windows.count >= 2 { break }
-            try await Task.sleep(nanoseconds: 150_000_000)
+            if session.windows.count >= 2,
+               session.windows.allSatisfy({
+                   WindowPlacement.isFullyInRegion($0.windowID, session.frame) ?? false
+               }) {
+                break
+            }
+            try await Task.sleep(nanoseconds: 200_000_000)
         }
 
+        session.refreshWindows()
         XCTAssertGreaterThanOrEqual(session.windows.count, 2, "expected both documents")
         for window in session.windows {
-            XCTAssertTrue(WindowPlacement.isInRegion(window, session.frame),
-                          "window '\(window.title)' escaped onto the user's screen")
+            // Full bounds, not the midpoint: a window whose centre is in the tile can still be
+            // spilling across the user's screen, which is the failure that matters.
+            XCTAssertEqual(WindowPlacement.isFullyInRegion(window.windowID, session.frame), true,
+                           "window '\(window.title)' is not fully inside the agent's tile")
         }
+    }
+
+    /// The janitor must reap a process that exited on its own, without waiting for an operator
+    /// command — and reaping must release the ownership claim so the PID is adoptable again.
+    func testJanitorReapsAnExitedAppAndReleasesItsClaim() async throws {
+        let appURL = try XCTUnwrap(AppLauncher.resolve("TextEdit"))
+        let pool = DisplayPool(sessionsPerDisplay: 1)
+        let session = AgentSession(id: "test-reap", slot: try pool.allocate())
+        defer { session.destroy(); pool.releaseAll() }
+
+        let document = URL(fileURLWithPath: NSTemporaryDirectory() + "spaceo-reap-\(UUID().uuidString).txt")
+        try "reap me".write(to: document, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: document) }
+        let app = try await session.launch(app: appURL, opening: [document])
+        XCTAssertEqual(ProcessOwnership.owner(of: app.identity), "test-reap")
+
+        AppLauncher.quit(app, force: true)
+        let deadline = Date().addingTimeInterval(10)
+        while app.identity.isAlive && Date() < deadline {
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        XCTAssertFalse(app.identity.isAlive, "the app should have exited")
+
+        XCTAssertEqual(session.runJanitorPass(), 1, "the janitor should reap exactly one app")
+        XCTAssertTrue(session.apps.isEmpty)
+        XCTAssertNil(ProcessOwnership.owner(of: app.identity),
+                     "a reaped app must not keep its process claim")
     }
 }

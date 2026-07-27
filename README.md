@@ -96,6 +96,15 @@ the auto-started daemon reads it:
 The MCP server starts the shared daemon on demand, so every agent on the machine pools the same
 agent displays instead of each spinning up its own.
 
+Display creation is admitted against a resource budget before anything is allocated — live
+sessions, attached displays, total framebuffer pixels and bytes, displays created per minute, and
+a minimum usable tile. A virtual display is a framebuffer the WindowServer composites inside
+*your* login session, so an agent stuck in a retry loop must not be able to walk the machine into
+a reboot. `spaceo doctor` and `spaceo pool` print current usage against the limits, and every
+refusal states the requested value, the limit, and what to do about it. Setting
+`SPACEO_UNSAFE_RESOURCE_LIMITS=1` in the daemon's environment raises the limits considerably; it
+is deliberately an operator decision at daemon start rather than something an agent can request.
+
 Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`, `spaceo_open_app`, `spaceo_read_screen`,
 `spaceo_click`, `spaceo_type`, `spaceo_press_key`, `spaceo_screenshot`, `spaceo_list_windows`,
 `spaceo_verify_isolation`, `spaceo_pool_status`, `spaceo_session_destroy`.

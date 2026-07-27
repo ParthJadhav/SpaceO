@@ -15,9 +15,49 @@ public actor SessionManager {
     private var idleDisplayRetirement: Task<Void, Never>?
     private let idleDisplayGraceNanoseconds: UInt64 = 15_000_000_000
     private var displayLifecycleFailures: Set<CGDirectDisplayID> = []
+    private var janitor: Task<Void, Never>?
+    private let janitorIntervalNanoseconds: UInt64 = 3_000_000_000
 
-    public init(pool: DisplayPool = DisplayPool()) {
+    public init(pool: DisplayPool = DisplayPool(), runJanitor: Bool = true) {
         self.pool = pool
+        guard runJanitor else { return }
+        Task { [weak self] in await self?.startJanitor() }
+    }
+
+    // MARK: - Janitor
+
+    /// The runtime janitor the architecture always promised.
+    ///
+    /// Per-app `WindowWatcher`s handle containment; this loop covers what they structurally
+    /// cannot — an app that exited (nothing left to notify us), and a session whose watchers
+    /// all failed to register. It is bounded (one pass per interval, no concurrency) and
+    /// cancellable, so daemon shutdown leaves no task behind.
+    private func startJanitor() {
+        janitor?.cancel()
+        let interval = janitorIntervalNanoseconds
+        janitor = Task { [weak self] in
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(nanoseconds: interval)
+                } catch {
+                    return
+                }
+                guard let self else { return }
+                await self.runJanitorPass()
+            }
+        }
+    }
+
+    /// One pass over every session. Exposed so a test can drive the janitor deterministically
+    /// instead of sleeping on a timer.
+    @discardableResult
+    public func runJanitorPass() -> Int {
+        sessions.values.reduce(0) { $0 + $1.runJanitorPass() }
+    }
+
+    public func stopJanitor() {
+        janitor?.cancel()
+        janitor = nil
     }
 
     public var isEmpty: Bool { sessions.isEmpty }
@@ -119,6 +159,7 @@ public actor SessionManager {
     public func destroyAll(quitApps: Bool) -> [CGDirectDisplayID] {
         idleDisplayRetirement?.cancel()
         idleDisplayRetirement = nil
+        stopJanitor()
         for (_, session) in sessions {
             session.destroy(quitApps: quitApps)
         }
@@ -287,8 +328,14 @@ public actor SessionManager {
         case "pool":
             var response = Response(ok: true)
             response.displays = pool.report()
-            response.message = "\(pool.displayCount) display(s), \(pool.sessionCount) session(s), "
-                             + "\(pool.sessionsPerDisplay) per display"
+            let usage = pool.usage()
+            response.usage = usage
+            response.limits = ResourceLimitsReport(pool.budget)
+            response.message = Self.poolSummary(displays: pool.displayCount,
+                                                sessions: pool.sessionCount,
+                                                perDisplay: pool.sessionsPerDisplay,
+                                                usage: usage,
+                                                budget: pool.budget)
             return response
 
         case "pool.configure":
@@ -299,6 +346,8 @@ public actor SessionManager {
             var response = Response(ok: true)
             response.message = "new displays will host \(value) session(s) each"
             response.displays = pool.report()
+            response.usage = pool.usage()
+            response.limits = ResourceLimitsReport(pool.budget)
             return response
 
         case "ax":
@@ -516,6 +565,27 @@ public actor SessionManager {
         default:
             throw SpaceOError.badRequest("unknown command '\(request.cmd)'")
         }
+    }
+
+    /// The `pool` message: what is allocated, and how close that is to the limits.
+    static func poolSummary(displays: Int,
+                            sessions: Int,
+                            perDisplay: Int,
+                            usage: ResourceBudget.Usage,
+                            budget: ResourceBudget) -> String {
+        var lines = ["\(displays) display(s), \(sessions) session(s), \(perDisplay) per display"]
+        let parts = [
+            "sessions \(usage.sessions)/\(budget.maximumSessions)",
+            "displays \(usage.displays)/\(budget.maximumDisplays)",
+            "pixels \(usage.pixels)/\(budget.maximumTotalPixels)",
+            "new displays this minute \(usage.creationsInLastMinute)/\(budget.maximumCreationsPerMinute)",
+        ]
+        lines.append("  budget: " + parts.joined(separator: ", "))
+        if budget.isUnsafe {
+            lines.append("  (unsafe operator limits are in force — "
+                       + "SPACEO_UNSAFE_RESOURCE_LIMITS is set)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func failOnIsolationBreach(_ response: inout Response, action: String) {

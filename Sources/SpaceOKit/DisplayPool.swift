@@ -27,15 +27,33 @@ public final class DisplayPool {
     private final class Occupancy {
         let stage: Stage
         let capacity: Int
+        /// Framebuffer area as *requested*, not as the display later reports it. Budget
+        /// accounting must not depend on a WindowServer round trip that can fail or lag —
+        /// the cost was incurred when we asked for the pixels.
+        let pixels: Int
         var taken: Set<Int> = []
-        init(stage: Stage, capacity: Int) { self.stage = stage; self.capacity = capacity }
+        init(stage: Stage, capacity: Int, pixels: Int) {
+            self.stage = stage
+            self.capacity = capacity
+            self.pixels = pixels
+        }
         var isFull: Bool { taken.count >= capacity }
         var isEmpty: Bool { taken.isEmpty }
         var free: Int? { (0..<capacity).first { !taken.contains($0) } }
     }
 
+    /// How a `Stage` is built. Injectable so admission control can be tested without asking the
+    /// WindowServer for a real framebuffer — the tests that matter here are about *refusing*
+    /// allocations, and they should not need a graphical login to run.
+    public typealias StageFactory = (_ name: String, _ width: UInt32, _ height: UInt32,
+                                     _ hiDPI: Bool) throws -> Stage
+
     private var displays: [Occupancy] = []
     private var nextDisplayNumber = 0
+    /// Creation timestamps inside the rate window, oldest first.
+    private var recentCreations: [Date] = []
+    private let stageFactory: StageFactory
+    private let lock = NSLock()
 
     /// How many sessions share one display. Changing it affects displays created afterwards;
     /// existing displays keep the capacity they were built with, because re-tiling underneath
@@ -43,60 +61,104 @@ public final class DisplayPool {
     public private(set) var sessionsPerDisplay: Int
     public let displaySize: CGSize
     public let hiDPI: Bool
+    public let budget: ResourceBudget
 
     public init(sessionsPerDisplay: Int = 1,
                 displaySize: CGSize = CGSize(width: 1920, height: 1080),
-                hiDPI: Bool = true) {
+                hiDPI: Bool = true,
+                budget: ResourceBudget = .fromEnvironment(),
+                stageFactory: StageFactory? = nil) {
         self.sessionsPerDisplay = max(1, sessionsPerDisplay)
         self.displaySize = displaySize
         self.hiDPI = hiDPI
+        self.budget = budget
+        self.stageFactory = stageFactory ?? { name, width, height, hiDPI in
+            try Stage(name: name, width: width, height: height, hiDPI: hiDPI)
+        }
     }
 
-    public var displayCount: Int { displays.count }
-    public var sessionCount: Int { displays.reduce(0) { $0 + $1.taken.count } }
-    public var stages: [Stage] { displays.map(\.stage) }
+    public var displayCount: Int { lock.withLock { displays.count } }
+    public var sessionCount: Int { lock.withLock { displays.reduce(0) { $0 + $1.taken.count } } }
+    public var stages: [Stage] { lock.withLock { displays.map(\.stage) } }
 
     /// Change the packing density for displays created from now on.
     public func setSessionsPerDisplay(_ value: Int) throws {
         guard value > 0 else {
             throw SpaceOError.badRequest("sessions per display must be a positive integer")
         }
-        _ = try validatedDisplayDimensions()
-        sessionsPerDisplay = value
+        guard value <= TileLayout.maximumCapacity else {
+            throw SpaceOError.badRequest(
+                "sessions per display must be at most \(TileLayout.maximumCapacity); "
+                + "\(value) would give each session a tile no window can use")
+        }
+        // Validate against the *new* density, so a change that would make future tiles unusable
+        // is refused now rather than at the next allocation.
+        _ = try budget.validateDisplaySize(displaySize, capacity: value)
+        lock.withLock { sessionsPerDisplay = value }
     }
 
     // MARK: - Allocation
 
     /// Reserve a tile, reusing a display that has room before making a new one.
+    ///
+    /// Admission runs under the same lock as the allocation it guards. Checking a budget and then
+    /// creating a display in a separate step is a race by construction: two concurrent
+    /// `session.create` calls both see room, and the machine ends up with one more display than
+    /// the limit allows — which is precisely the case where one extra matters.
     public func allocate() throws -> Slot {
+        lock.lock()
+        defer { lock.unlock() }
+
         if let existing = displays.first(where: { !$0.isFull }), let index = existing.free {
+            try budget.admitSession(usage: usageLocked())
             existing.taken.insert(index)
             return Slot(stage: existing.stage, index: index, capacity: existing.capacity)
         }
-        let dimensions = try validatedDisplayDimensions()
+
+        pruneCreationWindowLocked()
+        let dimensions = try budget.validateDisplaySize(displaySize, capacity: sessionsPerDisplay)
+        try budget.admitDisplay(size: displaySize,
+                                capacity: sessionsPerDisplay,
+                                usage: usageLocked())
 
         nextDisplayNumber = nextDisplayNumber == Int.max ? 1 : nextDisplayNumber + 1
-        let stage = try Stage(name: "SpaceO display \(nextDisplayNumber)",
-                              width: dimensions.width,
-                              height: dimensions.height,
-                              hiDPI: hiDPI)
+        let stage = try stageFactory("SpaceO display \(nextDisplayNumber)",
+                                     dimensions.width, dimensions.height, hiDPI)
         AgentActivity.claim(spaces: stage.spaces)
+        recentCreations.append(Date())
 
-        let occupancy = Occupancy(stage: stage, capacity: sessionsPerDisplay)
+        let occupancy = Occupancy(stage: stage,
+                                  capacity: sessionsPerDisplay,
+                                  pixels: Int(dimensions.width) * Int(dimensions.height))
         occupancy.taken.insert(0)
         displays.append(occupancy)
         return Slot(stage: stage, index: 0, capacity: occupancy.capacity)
     }
 
-    private func validatedDisplayDimensions() throws -> (width: UInt32, height: UInt32) {
-        guard displaySize.width.isFinite, displaySize.height.isFinite,
-              displaySize.width > 0, displaySize.height > 0,
-              let width = UInt32(exactly: displaySize.width),
-              let height = UInt32(exactly: displaySize.height) else {
-            throw SpaceOError.badRequest(
-                "display size must use positive whole pixels representable by UInt32")
+    // MARK: - Budget accounting
+
+    /// What the pool is currently holding. Read by `pool` and `doctor` so the limits are visible
+    /// before someone hits them, not only in the error that refuses them.
+    public func usage() -> ResourceBudget.Usage {
+        lock.withLock {
+            pruneCreationWindowLocked()
+            return usageLocked()
         }
-        return (width, height)
+    }
+
+    private func usageLocked() -> ResourceBudget.Usage {
+        let pixels = displays.reduce(0) { $0 + $1.pixels }
+        return ResourceBudget.Usage(
+            sessions: displays.reduce(0) { $0 + $1.taken.count },
+            displays: displays.count,
+            pixels: pixels,
+            bytes: pixels * ResourceBudget.bytesPerPixel,
+            creationsInLastMinute: recentCreations.count)
+    }
+
+    private func pruneCreationWindowLocked() {
+        let cutoff = Date().addingTimeInterval(-60)
+        recentCreations.removeAll { $0 < cutoff }
     }
 
     /// Give a tile back.
@@ -105,6 +167,8 @@ public final class DisplayPool {
     /// until `retireEmptyDisplays()` or `releaseAll()` is called.
     @discardableResult
     public func release(_ slot: Slot, retainEmpty: Bool = false) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
         guard let position = displays.firstIndex(where: { $0.stage === slot.stage }) else {
             return true
         }
@@ -120,6 +184,8 @@ public final class DisplayPool {
     /// Retire empty displays, optionally preserving a small warm standby set.
     @discardableResult
     public func retireEmptyDisplays(keeping retainedCount: Int = 0) -> [CGDirectDisplayID] {
+        lock.lock()
+        defer { lock.unlock() }
         let empty = displays.filter(\.isEmpty)
         let retiring = Array(empty.dropFirst(max(0, retainedCount)))
         let retiringStages = Set(retiring.map { ObjectIdentifier($0.stage) })
@@ -135,11 +201,15 @@ public final class DisplayPool {
     /// Tear down everything. Used on daemon shutdown.
     @discardableResult
     public func releaseAll() -> [CGDirectDisplayID] {
+        lock.lock()
+        defer { lock.unlock() }
         let failed = displays.compactMap { occupancy -> CGDirectDisplayID? in
             let id = occupancy.stage.displayID
             return retire(occupancy) ? nil : id
         }
         displays.removeAll()
+        // `recentCreations` deliberately survives: the rate limit exists to stop churn, and a
+        // create/destroy loop that reset it on every cycle would sail straight through.
         return failed
     }
 
@@ -159,7 +229,7 @@ public final class DisplayPool {
     }
 
     public func report() -> [DisplayReport] {
-        displays.map { occupancy in
+        lock.withLock { displays }.map { occupancy in
             let bounds = occupancy.stage.bounds
             return DisplayReport(displayID: occupancy.stage.displayID,
                                  x: bounds.origin.x, y: bounds.origin.y,

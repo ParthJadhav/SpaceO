@@ -100,6 +100,33 @@ public struct SessionInfo: Codable, Sendable {
     }
 }
 
+/// The active resource budget, flattened for the wire.
+public struct ResourceLimitsReport: Codable, Sendable, Equatable {
+    public var maximumSessions: Int
+    public var maximumDisplays: Int
+    public var maximumTotalPixels: Int
+    public var maximumTotalBytes: Int
+    public var maximumCreationsPerMinute: Int
+    public var minimumTileWidth: Int
+    public var minimumTileHeight: Int
+    public var maximumDisplayEdge: Int
+    /// True when the operator started the daemon with the unsafe budget, so a reader is never
+    /// left guessing why the numbers look generous.
+    public var unsafeOperatorMode: Bool
+
+    public init(_ budget: ResourceBudget) {
+        maximumSessions = budget.maximumSessions
+        maximumDisplays = budget.maximumDisplays
+        maximumTotalPixels = budget.maximumTotalPixels
+        maximumTotalBytes = budget.maximumTotalBytes
+        maximumCreationsPerMinute = budget.maximumCreationsPerMinute
+        minimumTileWidth = Int(budget.minimumTileSize.width)
+        minimumTileHeight = Int(budget.minimumTileSize.height)
+        maximumDisplayEdge = budget.maximumDisplayEdge
+        unsafeOperatorMode = budget.isUnsafe
+    }
+}
+
 public struct Response: Codable, Sendable {
     public var ok: Bool
     public var error: String?
@@ -113,6 +140,10 @@ public struct Response: Codable, Sendable {
     public var ambient: [String]?
     public var findings: [String]?
     public var displays: [DisplayPool.DisplayReport]?
+    /// What the pool is holding right now, against the limits it will refuse at. Reported by
+    /// `pool` so an operator can see how close they are before an allocation is denied.
+    public var usage: ResourceBudget.Usage?
+    public var limits: ResourceLimitsReport?
     public var value: String?
 
     public init(ok: Bool) { self.ok = ok }

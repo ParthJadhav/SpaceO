@@ -63,6 +63,15 @@ public final class AgentSession {
         lastLaunchRestoredFocus = nil
 
         let (app, placed) = try await AppLauncher.launch(appURL: appURL, opening: files, into: frame)
+        do {
+            try ProcessOwnership.claim(app.identity, owner: id)
+        } catch {
+            // We started this process, so a claim conflict means its PID was recycled onto a
+            // stale record. Do not leave an unowned invisible app behind.
+            AppLauncher.quit(app, force: true)
+            AppLauncher.cleanupTemporaryProfileEventually(for: app)
+            throw error
+        }
 
         if let userRoute, userRoute.app.processIdentifier != app.pid {
             // Both notions of "frontmost" matter. AppKit's view and the WindowServer's can
@@ -84,7 +93,7 @@ public final class AgentSession {
         if let port = app.devToolsPort {
             let bridge = ChromiumBridge(port: port)
             if await bridge.waitUntilReady(),
-               (try? await bridge.attachToFrontTarget()) != nil {
+               (try? await bridge.attachToLaunchedTarget()) != nil {
                 bridges[app.pid] = bridge
             }
         }
@@ -113,11 +122,26 @@ public final class AgentSession {
 
     public var hasWebBridge: Bool { !bridges.isEmpty }
 
+    /// Adopt a process the user points us at.
+    ///
+    /// Ownership is claimed before the first window moves, so a PID already spoken for by
+    /// another session is refused without this session having disturbed anything.
     @discardableResult
     public func adopt(pid: pid_t) throws -> LaunchedApp {
-        let (app, placed) = try AppLauncher.adopt(pid: pid, into: frame)
-        register(app: app, windows: placed)
-        return app
+        let app = try AppLauncher.describe(pid: pid)
+        guard !apps.contains(where: { $0.identity == app.identity }) else {
+            throw SpaceOError.badRequest(
+                "session '\(id)' already owns pid \(pid)")
+        }
+        try ProcessOwnership.claim(app.identity, owner: id)
+        do {
+            let placed = try AppLauncher.place(app, into: frame)
+            register(app: app, windows: placed)
+            return app
+        } catch {
+            ProcessOwnership.release(app.identity)
+            throw error
+        }
     }
 
     private func register(app: LaunchedApp, windows placed: [WindowRef]) {
@@ -142,10 +166,26 @@ public final class AgentSession {
         if let bridge = bridges.removeValue(forKey: pid) {
             Task { await bridge.detach() }
         }
+        for app in apps where app.pid == pid { ProcessOwnership.release(app.identity) }
         apps.removeAll { $0.pid == pid }
         windows.removeAll { $0.pid == pid }
         AgentActivity.release(pid: pid)
         lastSnapshot = nil
+    }
+
+    /// Drop apps whose process has exited, releasing their PID, ownership claim, and watcher.
+    ///
+    /// Without this the session holds a claim on a dead process indefinitely, and the janitor
+    /// keeps observing an app that will never emit another notification. Returns how many it
+    /// reaped, so a caller can report the sweep honestly.
+    @discardableResult
+    public func reapExitedApps() -> Int {
+        let dead = apps.filter { !$0.identity.isAlive }
+        for app in dead {
+            unregister(pid: app.pid)
+            AppLauncher.cleanupTemporaryProfileEventually(for: app)
+        }
+        return dead.count
     }
 
     /// How many stray windows the watchers have contained, and how many refused to move.
@@ -156,9 +196,32 @@ public final class AgentSession {
         }
     }
 
+    /// Notifications the AX observers refused to register, per app. Containment for these apps
+    /// depends on the periodic sweep alone, so the audit reports it rather than letting a
+    /// half-deaf watcher look healthy.
+    public var watcherRegistrationFailures: [String] {
+        watchers.compactMap { pid, watcher in
+            guard !watcher.registrationFailures.isEmpty else { return nil }
+            let name = apps.first { $0.pid == pid }?.name ?? "pid \(pid)"
+            return "\(name): \(watcher.registrationFailures.joined(separator: ", "))"
+        }
+    }
+
     /// Run every watcher now. Cheap, and useful as a belt-and-braces sweep before a screenshot.
     public func sweepStrayWindows() {
         for watcher in watchers.values { watcher.sweep() }
+    }
+
+    /// One janitor pass: reap exited apps, then contain whatever is left.
+    ///
+    /// Reaping first matters — sweeping an app that has already exited is a pointless
+    /// WindowServer round trip, and its watcher would otherwise live until the session is
+    /// destroyed. Returns how many apps were reaped.
+    @discardableResult
+    public func runJanitorPass() -> Int {
+        let reaped = reapExitedApps()
+        sweepStrayWindows()
+        return reaped
     }
 
     // MARK: - Windows
@@ -167,7 +230,7 @@ public final class AgentSession {
     @discardableResult
     public func refreshWindows() -> [WindowRef] {
         var live: [WindowRef] = []
-        for app in apps where NSRunningApplication(processIdentifier: app.pid) != nil {
+        for app in apps where app.identity.isAlive {
             live.append(contentsOf: WindowPlacement.windows(of: app.pid))
         }
         windows = live
@@ -234,8 +297,12 @@ public final class AgentSession {
                 : "escaped the agent display"
             findings.append("window \(window.windowID) (\(window.title)) \(where_)")
         }
-        for app in apps where NSRunningApplication(processIdentifier: app.pid) == nil {
+        for app in apps where !app.identity.isAlive {
             findings.append("app \(app.name) (pid \(app.pid)) exited")
+        }
+        for failure in watcherRegistrationFailures {
+            findings.append("window notifications are not fully registered for \(failure); "
+                          + "late windows rely on the periodic sweep alone")
         }
         let contained = containment
         if contained.refused > 0 {
@@ -297,20 +364,22 @@ public final class AgentSession {
             }
         }
 
-        // 2. Quit ours, then confirm they are really gone.
+        // 2. Quit ours, then confirm they are really gone. Liveness is by identity throughout:
+        // a PID that reappears mid-teardown belongs to someone else and must not be waited on,
+        // let alone force-terminated.
         if quitApps {
             for app in apps where app.startedByUs { AppLauncher.quit(app) }
             let deadline = Date().addingTimeInterval(safeTimeout)
             var pending = apps.filter(\.startedByUs)
             while !pending.isEmpty && Date() < deadline {
                 usleep(120_000)
-                pending = pending.filter { NSRunningApplication(processIdentifier: $0.pid) != nil }
+                pending = pending.filter { $0.identity.isAlive }
             }
             if force {
                 for app in pending { AppLauncher.quit(app, force: true) }
                 let hardDeadline = Date().addingTimeInterval(3)
                 while Date() < hardDeadline,
-                      pending.contains(where: { NSRunningApplication(processIdentifier: $0.pid) != nil }) {
+                      pending.contains(where: { $0.identity.isAlive }) {
                     usleep(120_000)
                 }
             }
@@ -333,8 +402,12 @@ public final class AgentSession {
 
         for app in apps {
             AgentActivity.release(pid: app.pid)
+            ProcessOwnership.release(app.identity)
             AppLauncher.cleanupTemporaryProfileEventually(for: app)
         }
+        // Belt and braces: a claim that somehow outlived its app record would lock that process
+        // out of every future session, so sweep anything still filed under this session's name.
+        ProcessOwnership.releaseAll(owner: id)
         for watcher in watchers.values { watcher.stop() }
         watchers.removeAll()
         for bridge in bridges.values { Task { await bridge.detach() } }

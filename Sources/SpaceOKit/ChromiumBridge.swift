@@ -24,10 +24,20 @@ public actor ChromiumBridge {
         let webSocketURL: URL
     }
 
+    /// Largest `/json/list` body we will read. Enforced *while* reading, not after.
+    static let maximumTargetListBytes = 1_048_576
+
     public let port: Int
     private let session: URLSession
     private var socket: URLSessionWebSocketTask?
     private var nextID = 0
+    /// The page this bridge is bound to. Every command belongs to this target and nothing else;
+    /// once set it is never silently re-pointed at whatever happens to be first in a later
+    /// target list.
+    private var attachedTargetID: String?
+
+    /// The page this bridge drives, or nil when it is not attached.
+    public var boundTargetID: String? { attachedTargetID }
 
     /// FIFO of callers waiting for the single in-flight DevTools command to finish.
     ///
@@ -59,17 +69,18 @@ public actor ChromiumBridge {
     // MARK: - Discovery
 
     /// Page targets the browser is currently showing.
+    ///
+    /// The body is read incrementally and abandoned the moment it crosses the size limit. The
+    /// previous version buffered the whole response and *then* checked its length, which means a
+    /// DevTools endpoint that is wedged, compromised, or simply broken could stream unbounded
+    /// data into the daemon's memory before the check ever ran — the check was a report, not a
+    /// limit.
     public func targets() async throws -> [Target] {
         guard (1...65_535).contains(port) else {
             throw SpaceOError.badRequest("DevTools port is invalid")
         }
         let url = URL(string: "http://127.0.0.1:\(port)/json/list")!
-        let (data, response) = try await session.data(from: url)
-        guard let response = response as? HTTPURLResponse,
-              response.statusCode == 200,
-              data.count <= 1_048_576 else {
-            throw SpaceOError.badRequest("DevTools returned an invalid target-list response")
-        }
+        let data = try await boundedBody(from: url)
         guard let raw = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw SpaceOError.badRequest("DevTools returned an unexpected target list")
         }
@@ -83,6 +94,35 @@ public actor ChromiumBridge {
                           url: entry["url"] as? String ?? "",
                           webSocketURL: wsURL)
         }
+    }
+
+    /// Read an HTTP body, cancelling the transfer as soon as it exceeds the limit.
+    func boundedBody(from url: URL) async throws -> Data {
+        let (stream, response) = try await session.bytes(from: url)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            stream.task.cancel()
+            throw SpaceOError.badRequest("DevTools returned an invalid target-list response")
+        }
+        // A declared length over the limit is refused before a single byte of body is read.
+        if http.expectedContentLength > Int64(Self.maximumTargetListBytes) {
+            stream.task.cancel()
+            throw SpaceOError.badRequest(
+                "DevTools target list declares \(http.expectedContentLength) bytes, over the "
+                + "\(Self.maximumTargetListBytes)-byte limit")
+        }
+        var data = Data()
+        data.reserveCapacity(min(64 * 1024, Self.maximumTargetListBytes))
+        for try await byte in stream {
+            data.append(byte)
+            if data.count > Self.maximumTargetListBytes {
+                // Cancelling the task is what actually stops the transfer; leaving it running
+                // and merely throwing would keep the socket draining in the background.
+                stream.task.cancel()
+                throw SpaceOError.badRequest(
+                    "DevTools target list exceeded the \(Self.maximumTargetListBytes)-byte limit")
+            }
+        }
+        return data
     }
 
     /// Wait for the browser to start serving DevTools. Chrome takes a moment after launch.
@@ -108,20 +148,75 @@ public actor ChromiumBridge {
         task.maximumMessageSize = 32 * 1_048_576
         task.resume()
         socket = task
+        attachedTargetID = target.id
     }
 
-    public func attachToFrontTarget() async throws -> Target {
+    /// Bind to the single page of a browser SpaceO just launched.
+    ///
+    /// A private-profile browser we started ourselves has exactly one page, so "exactly one" is a
+    /// contract we can actually check — unlike the old `targets().first`, which took DevTools'
+    /// list order as evidence of which page is in front. That order is not documented to mean
+    /// anything, so when a second page existed the bridge could type into, click, and screenshot
+    /// a page nobody asked about while reporting success.
+    ///
+    /// Ambiguity fails closed and names the candidates, so the caller can pick one with
+    /// `attach(toTargetID:)`.
+    @discardableResult
+    public func attachToLaunchedTarget() async throws -> Target {
         let found = try await targets()
-        guard let first = found.first else {
+        guard !found.isEmpty else {
             throw SpaceOError.badRequest("browser has no page targets on port \(port)")
         }
-        try await connect(to: first)
-        return first
+        guard found.count == 1, let only = found.first else {
+            let listed = found
+                .prefix(8)
+                .map { "\($0.id) — \($0.title.isEmpty ? $0.url : $0.title)" }
+                .joined(separator: "\n    ")
+            throw SpaceOError.badRequest(
+                "browser on port \(port) has \(found.count) page targets, so SpaceO cannot tell "
+                + "which one you mean. Attach to one explicitly:\n    \(listed)")
+        }
+        try await connect(to: only)
+        return only
+    }
+
+    /// Bind to a caller-chosen page. The explicit form of `attachToLaunchedTarget`.
+    @discardableResult
+    public func attach(toTargetID id: String) async throws -> Target {
+        guard !id.isEmpty, id.count <= 256, id.utf8.count <= 1_024 else {
+            throw SpaceOError.badRequest("target id must be 1 through 256 characters")
+        }
+        let found = try await targets()
+        guard let target = found.first(where: { $0.id == id }) else {
+            throw SpaceOError.badRequest(
+                "no page target '\(id)' on port \(port); it may have been closed")
+        }
+        try await connect(to: target)
+        return target
+    }
+
+    /// Confirm the bound page is still the one we attached to.
+    ///
+    /// Navigation keeps a target id; closure and replacement do not. Checking before an action
+    /// is what turns "the page went away" into an error instead of a command silently delivered
+    /// nowhere — or, worse, a reconnect to a different page.
+    public func verifyBoundTarget() async throws {
+        guard let attachedTargetID, socket != nil else {
+            throw SpaceOError.badRequest("not attached to a DevTools target")
+        }
+        let found = try await targets()
+        guard found.contains(where: { $0.id == attachedTargetID }) else {
+            detach()
+            throw SpaceOError.badRequest(
+                "the page SpaceO was driving (target \(attachedTargetID)) is gone; "
+                + "attach again before sending more commands")
+        }
     }
 
     public func detach() {
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
+        attachedTargetID = nil
     }
 
     @discardableResult
@@ -148,7 +243,11 @@ public actor ChromiumBridge {
     }
 
     private func performCommand(_ method: String, _ params: [String: Any]) async throws -> [String: Any] {
-        guard let socket else { throw SpaceOError.badRequest("not attached to a DevTools target") }
+        // Fail closed on both halves of the binding. A socket without a target id would mean
+        // the bridge reconnected to something it never chose, which must never happen silently.
+        guard let socket, attachedTargetID != nil else {
+            throw SpaceOError.badRequest("not attached to a DevTools target")
+        }
         nextID = nextID == Int.max ? 1 : nextID + 1
         let id = nextID
         let payload: [String: Any] = ["id": id, "method": method, "params": params]

@@ -175,6 +175,7 @@ spaceo — give each agent its own screen, and leave the user's alone.
 
 Global: --session ID   --socket PATH   --json
 Env:    SPACEO_SOCKET   SPACEO_SESSIONS_PER_DISPLAY   SPACEO_DISPLAY_SIZE (WxH)
+        SPACEO_UNSAFE_RESOURCE_LIMITS=1  raise the display/session budgets (see `doctor`)
 """
 
 // MARK: - Dispatch
@@ -324,6 +325,19 @@ case "doctor":
             print("  orphaned displays  : "
                   + orphanedDisplayIDs.map(String.init).joined(separator: ", "))
         }
+        let doctorBudget = ResourceBudget.fromEnvironment()
+        let budgetParts: [String] = [
+            "\(doctorBudget.maximumSessions) session(s)",
+            "\(doctorBudget.maximumDisplays) display(s)",
+            "\(doctorBudget.maximumTotalPixels) pixel(s)",
+            "\(doctorBudget.maximumCreationsPerMinute) new display(s)/min",
+            "min tile \(Int(doctorBudget.minimumTileSize.width))x\(Int(doctorBudget.minimumTileSize.height))",
+        ]
+        print("  resource budget    : " + budgetParts.joined(separator: ", "))
+        if doctorBudget.isUnsafe {
+            print("  budget mode        : UNSAFE (SPACEO_UNSAFE_RESOURCE_LIMITS is set); "
+                  + "a runaway caller can destabilise this login session")
+        }
     }
     exit(capabilities.canDrive ? 0 : 1)
 
@@ -333,6 +347,7 @@ case "daemon":
         remote { $0.cmd = "daemon.stop" }
     }
 
+    let budget = ResourceBudget.fromEnvironment()
     var displaySize = CGSize(width: 1920, height: 1080)
     var sizeWasPinned = false
     if let raw = stringArgument("display-size")
@@ -343,8 +358,10 @@ case "daemon":
         guard parts.count == 2,
               let width = Int(parts[0]),
               let height = Int(parts[1]),
-              width > 0, height > 0 else {
-            fail("--display-size wants WxH, e.g. 2560x1440")
+              width > 0, height > 0,
+              width <= budget.maximumDisplayEdge, height <= budget.maximumDisplayEdge else {
+            fail("--display-size wants WxH in whole pixels up to "
+                 + "\(budget.maximumDisplayEdge) per edge, e.g. 2560x1440")
         }
         displaySize = CGSize(width: width, height: height)
     }
@@ -369,7 +386,16 @@ case "daemon":
         displaySize = TileLayout.displaySize(forCapacity: perDisplay)
     }
 
-    let pool = DisplayPool(sessionsPerDisplay: 1, displaySize: displaySize)
+    // Refuse unsafe geometry here, at the command line, rather than at the first session.create.
+    // A daemon that starts and then fails every allocation is a worse experience than one that
+    // never starts and says why.
+    do {
+        _ = try budget.validateDisplaySize(displaySize, capacity: perDisplay)
+    } catch {
+        fail("\(error.localizedDescription)")
+    }
+
+    let pool = DisplayPool(sessionsPerDisplay: 1, displaySize: displaySize, budget: budget)
     do { try pool.setSessionsPerDisplay(perDisplay) } catch { fail("\(error)") }
     let manager = SessionManager(pool: pool)
     let server = Transport.Server(path: socketPath) { request in

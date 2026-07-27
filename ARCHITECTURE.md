@@ -83,12 +83,28 @@ ones are full. Tiles never overlap — an overlap would put one agent's window i
 agent's screenshot, which is a context leak between agents rather than a cosmetic bug.
 
 `sessionsPerDisplay` applies to displays created afterwards; existing displays keep their layout,
-because re-tiling underneath a running agent would move its windows out from under it. Every
-positive density is accepted, with no pool-level display-count or tile-size cap. When the caller
-does not pin a size, the CLI grows the display to match the requested density; an explicitly sized
-display is split as requested even if the tiles are small. The daemon keeps one empty display warm
-for its lifetime so rapid agent churn reuses a stable framebuffer; excess empty displays from a
-larger peak are retired after a grace period.
+because re-tiling underneath a running agent would move its windows out from under it. When the
+caller does not pin a size, the CLI grows the display to match the requested density. The daemon
+keeps one empty display warm for its lifetime so rapid agent churn reuses a stable framebuffer;
+excess empty displays from a larger peak are retired after a grace period.
+
+**Admission — `ResourceBudget`.** A framebuffer is composited every frame, out of GPU and wired
+memory, in the *user's own* graphical login session. So `allocate()` admits against a budget
+before a `Stage` is ever constructed, under the same lock as the allocation it guards — checking
+and then creating in two steps is a race in which two concurrent `session.create` calls both see
+room. The gates are: live sessions, attached displays, total framebuffer pixels and bytes,
+displays created per rolling minute (a crash-loop can churn the WindowServer while staying under
+every standing limit), and a minimum usable tile — a "successful" allocation that hands an agent a
+40x30 tile is a bug that reports success. Refusals carry the requested value, the limit, current
+usage, and a remedy. `pool` and `doctor` print usage against the limits so an operator sees the
+approach, not just the wall.
+
+`SPACEO_UNSAFE_RESOURCE_LIMITS=1` selects a much higher operator budget. It is an environment
+variable, not a request field: raising this must be a decision by whoever starts the daemon, never
+something an agent can ask for mid-conversation. It is still bounded — by representable platform
+values and by what a tile needs to be usable — because "unlimited" would only move the crash.
+Capacity is likewise bounded by `TileLayout.maximumCapacity`, so the materialised layout cannot
+scale with a caller-supplied integer; per-tile lookup stays O(1) and allocation-free.
 
 ### 3.1 Stage — `VirtualDisplay`
 
@@ -136,13 +152,33 @@ let app = try await session.launch(app: appURL, opening: [fileURL])   // placed 
   returns an existing PID, launch fails instead of relocating user-owned windows.
 - Windows present at launch are relocated immediately via `kAXPosition`.
 - Explicit `spaceo adopt --pid` enumerates `kAXWindowsAttribute` and relocates an already-running
-  app; launch never adopts implicitly.
+  app; launch never adopts implicitly. Adoption claims the process through `ProcessOwnership`
+  *before* the first window moves, so a PID a second session already owns is refused without this
+  one having disturbed anything.
+- Process identity is `(pid, kernel start time)`, not a bare PID — see `ProcessIdentity`. A PID is
+  a recycled integer, and a long-lived session holding one would otherwise keep capture, input,
+  and *force-terminate* authority over whatever inherited the number. Every teardown and liveness
+  check goes through the identity; `quit(force:)` additionally refuses an imprecise one.
 - `WindowWatcher` keeps watching. One-shot placement at launch is not enough: apps open windows
   *later* — a restore-session prompt, an update notice, a file dialog, a second document — and
   those land wherever macOS likes, which in practice is the user's screen. Measured with Cursor,
   whose "Reopen?" dialog appeared mid-screen a second after launch. The watcher relocates them
   on the AX notification and counts the ones that refuse (app-modal sheets), so the audit can
   say so rather than quietly pretending everything is contained.
+- The watcher does not trust notifications alone. Registration failures are recorded and surfaced
+  in the session audit; a bounded periodic sweep (`WindowWatcher.periodicSweepInterval`) runs as a
+  backstop for the notification that never arrives; and a notification that lands *during* a sweep
+  is coalesced into a repeat rather than dropped (`SweepCoalescer`) — a window created just after
+  a sweep began is in neither that sweep nor any later one otherwise.
+- Containment is judged on **full window bounds**, not the midpoint. A dialog twice its tile's
+  width has its centre in the right place while spilling across a neighbouring session, or off the
+  agent display entirely onto the user's screen. Every sweep re-derives containment from the
+  WindowServer for every window, including ones already marked handled: `handled` records that we
+  acted, not that the window stayed where we put it.
+- `SessionManager` runs a daemon-level janitor pass on an interval, covering what a per-app
+  watcher structurally cannot — an app that exited, which will never emit another notification.
+  Reaping releases the ownership claim, the watcher, and the bridge. Both the watcher timer and
+  the janitor task are cancellable, and shutdown cancels them.
 - Some apps activate themselves regardless of `activates = false` (Electron shells calling
   `NSApp.activate`). SpaceO cannot prevent that, so it hands the user's frontmost app straight
   back and reports that it had to — a blip rather than a state change.
@@ -199,6 +235,20 @@ Silently succeeding here is the worst possible outcome — the agent believes it
 `spaceo ax` on a browser appends the page's own elements under `wN` references, so an agent sees
 one list covering both the browser's chrome and its content.
 
+The bridge binds to **one deliberately chosen page** and never re-points itself. `/json/list`
+order is not documented to mean anything, so treating `targets().first` as "the front page" meant
+that with a second page open the bridge could read, type into, click, and screenshot a page nobody
+asked about — and report success. `attachToLaunchedTarget()` therefore requires exactly one page
+(the contract a private-profile browser we started ourselves actually satisfies) and otherwise
+fails closed while naming the candidates; `attach(toTargetID:)` is the explicit form. Commands
+refuse on an unbound bridge rather than reconnecting to whatever is there now.
+
+The target list is read incrementally and abandoned the moment it crosses
+`ChromiumBridge.maximumTargetListBytes` — an over-length `Content-Length` is refused before any
+body is read, and the transfer is *cancelled*, not merely thrown away. Buffering first and
+checking the size afterwards makes the limit a report rather than a limit, which is what let a
+wedged or hostile local endpoint stream unbounded data into the daemon.
+
 ### 3.4 Vision — `Capture`, `AXTree`
 
 - `Capture.display(stage)` — `SCContentFilter(display:excludingWindows:)` → PNG. The whole agent
@@ -235,9 +285,21 @@ Continuous move and drag events remain a live stream on the input queue.
 - Stream and toolbar-screenshot framebuffers use ScreenCaptureKit's authoritative display pixel
   dimensions rather than guessing a scale factor from AppKit points.
 - Hit-testing walks the WindowServer's front-to-back on-screen list without layer, process-family,
-  display-provenance or Viewer-self exclusions.
+  or display-provenance exclusions — but **always excluding the viewer's own PID**. Viewing a
+  physical display that contains the viewer's window would otherwise let a click select that
+  window and be posted straight back into the process that generated it: each forwarded click
+  produces another, the queue grows, and the user watches the viewer operate its own controls.
+  `MirrorInput`'s delivery primitives refuse a self-target outright as well, so a future code path
+  that forgets to filter still cannot start the loop.
 - Viewer input has no display-provenance guard. SpaceO and physical displays are both valid
   control targets.
+- Every event is admitted through an `InputControlGate` on the main thread and **rechecked at the
+  delivery boundary** after the queue hop. Validating only at enqueue meant a click could execute
+  after Control was switched off, or against the display that was selected a moment ago. Disabling
+  Control or switching displays bumps a monotonic epoch *synchronously*, so the whole queued
+  backlog is invalid before the cleanup that follows it is even scheduled, and route restoration —
+  guarded by its own lock rather than confined to the input queue — does not wait behind the stale
+  events it is cancelling.
 - The viewer creates no displays. It streams displays that already exist, primes the selected
   target through the shared focus route, and forwards per-PID events when Control is enabled.
 
