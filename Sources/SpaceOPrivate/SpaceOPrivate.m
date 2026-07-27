@@ -1,0 +1,337 @@
+//
+//  SpaceOPrivate.m
+//
+#import "SpaceOPrivate.h"
+#import <dlfcn.h>
+#import <math.h>
+#import <objc/runtime.h>
+
+// GetProcessForPID/GetProcessPID are soft-deprecated but remain the only way to obtain the
+// ProcessSerialNumber that SLPSPostEventRecordTo requires. There is no replacement.
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
+#pragma mark - Lazy symbol resolution
+
+typedef int CGSConnectionID;
+
+static CGSConnectionID (*p_SLSMainConnectionID)(void);
+static CFArrayRef (*p_SLSCopyManagedDisplaySpaces)(CGSConnectionID);
+static CFArrayRef (*p_SLSCopySpacesForWindows)(CGSConnectionID, int, CFArrayRef);
+static uint64_t   (*p_SLSGetActiveSpace)(CGSConnectionID);
+static OSStatus   (*p_SLPSPostEventRecordTo)(ProcessSerialNumber *, uint8_t *);
+static CGError    (*p_SLSGetWindowBounds)(CGSConnectionID, uint32_t, CGRect *);
+static AXError    (*p_AXUIElementGetWindow)(AXUIElementRef, uint32_t *);
+static void       *p_CGEventPostToPid;
+
+static NSMutableArray<NSString *> *g_missing = nil;
+
+static void *resolve(void *handle, const char *name) {
+    void *sym = dlsym(handle, name);
+    if (!sym) [g_missing addObject:@(name)];
+    return sym;
+}
+
+static void SPOLoad(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        g_missing = [NSMutableArray array];
+
+        void *sky = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight",
+                           RTLD_LAZY | RTLD_LOCAL);
+        if (!sky) {
+            [g_missing addObject:@"SkyLight.framework"];
+        } else {
+            p_SLSMainConnectionID         = resolve(sky, "SLSMainConnectionID");
+            p_SLSCopyManagedDisplaySpaces = resolve(sky, "SLSCopyManagedDisplaySpaces");
+            p_SLSCopySpacesForWindows     = resolve(sky, "SLSCopySpacesForWindows");
+            p_SLSGetActiveSpace           = resolve(sky, "SLSGetActiveSpace");
+            p_SLPSPostEventRecordTo       = resolve(sky, "SLPSPostEventRecordTo");
+            p_SLSGetWindowBounds          = resolve(sky, "SLSGetWindowBounds");
+        }
+
+        // _AXUIElementGetWindow lives in the (public) HIServices sub-framework but is not declared.
+        void *self_handle = dlopen(NULL, RTLD_LAZY);
+        p_AXUIElementGetWindow = resolve(self_handle, "_AXUIElementGetWindow");
+        p_CGEventPostToPid = resolve(self_handle, "CGEventPostToPid");
+
+        // The virtual-display classes are ObjC, so presence is a class lookup, not a dlsym.
+        const char *classes[] = { "CGVirtualDisplay", "CGVirtualDisplayDescriptor",
+                                  "CGVirtualDisplayMode", "CGVirtualDisplaySettings" };
+        for (size_t i = 0; i < sizeof(classes) / sizeof(*classes); i++)
+            if (!objc_getClass(classes[i])) [g_missing addObject:@(classes[i])];
+    });
+}
+
+#pragma mark - Capability gate
+
+BOOL SPOCapabilityAvailable(SPOCapability cap) {
+    SPOLoad();
+    switch (cap) {
+        case SPOCapabilityVirtualDisplay:
+            return objc_getClass("CGVirtualDisplay") != Nil
+                && objc_getClass("CGVirtualDisplayDescriptor") != Nil
+                && objc_getClass("CGVirtualDisplayMode") != Nil
+                && objc_getClass("CGVirtualDisplaySettings") != Nil;
+        case SPOCapabilityFocusWithoutRaise:
+            return p_SLPSPostEventRecordTo != NULL;
+        case SPOCapabilitySpaceQuery:
+            return p_SLSMainConnectionID != NULL && p_SLSCopyManagedDisplaySpaces != NULL;
+        case SPOCapabilityPerPIDEvents:
+            return p_CGEventPostToPid != NULL;
+        case SPOCapabilityAXWindowID:
+            return p_AXUIElementGetWindow != NULL;
+        default:
+            return NO;
+    }
+}
+
+NSString *SPOCapabilityName(SPOCapability cap) {
+    switch (cap) {
+        case SPOCapabilityVirtualDisplay:    return @"virtual-display";
+        case SPOCapabilityFocusWithoutRaise: return @"focus-without-raise";
+        case SPOCapabilitySpaceQuery:        return @"space-query";
+        case SPOCapabilityPerPIDEvents:      return @"per-pid-events";
+        case SPOCapabilityAXWindowID:        return @"ax-window-id";
+        default:                             return @"unknown";
+    }
+}
+
+NSArray<NSString *> *SPOMissingSymbols(void) {
+    SPOLoad();
+    return [g_missing copy];
+}
+
+BOOL SPOBuiltWithARC(void) {
+#if __has_feature(objc_arc)
+    return YES;
+#else
+    return NO;
+#endif
+}
+
+#pragma mark - Virtual display class surface
+
+@interface CGVirtualDisplayDescriptor : NSObject
+@property (nonatomic, assign) unsigned int vendorID, productID, serialNum;
+@property (nonatomic, strong) NSString *name;
+@property (nonatomic, assign) CGSize sizeInMillimeters;
+@property (nonatomic, assign) unsigned int maxPixelsWide, maxPixelsHigh;
+@property (nonatomic, assign) CGPoint redPrimary, greenPrimary, bluePrimary, whitePoint;
+@property (nonatomic, strong) dispatch_queue_t queue;
+@property (nonatomic, copy)   void (^terminationHandler)(id a, id b);
+@end
+
+@interface CGVirtualDisplayMode : NSObject
+- (instancetype)initWithWidth:(unsigned int)w height:(unsigned int)h refreshRate:(double)r;
+@end
+
+@interface CGVirtualDisplaySettings : NSObject
+@property (nonatomic, strong) NSArray *modes;
+@property (nonatomic, assign) unsigned int hiDPI;
+@end
+
+@interface CGVirtualDisplay : NSObject
+- (instancetype)initWithDescriptor:(CGVirtualDisplayDescriptor *)d;
+- (BOOL)applySettings:(CGVirtualDisplaySettings *)s;
+@property (nonatomic, readonly) CGDirectDisplayID displayID;
+@end
+
+@implementation SPOVirtualDisplay {
+    CGVirtualDisplay *_display;      // strong ref *is* the display's lifetime
+    dispatch_queue_t _queue;         // must outlive _display
+    CGDirectDisplayID _displayID;
+}
+
+- (nullable instancetype)initWithName:(NSString *)name
+                                width:(uint32_t)width
+                               height:(uint32_t)height
+                                hiDPI:(BOOL)hiDPI {
+    self = [super init];
+    if (!self) return nil;
+    if (!SPOCapabilityAvailable(SPOCapabilityVirtualDisplay)) return nil;
+    if (width == 0 || height == 0) return nil;
+
+    Class descClass = objc_getClass("CGVirtualDisplayDescriptor");
+    Class modeClass = objc_getClass("CGVirtualDisplayMode");
+    Class setClass  = objc_getClass("CGVirtualDisplaySettings");
+    Class dispClass = objc_getClass("CGVirtualDisplay");
+
+    CGVirtualDisplayDescriptor *desc = [[descClass alloc] init];
+    desc.name              = name;
+    desc.vendorID          = 0x1AF2;                 // identifies a SpaceO stage
+    desc.productID         = 0x0001;
+    desc.serialNum         = (unsigned int)(name.hash & 0xFFFFFFFF);
+    desc.maxPixelsWide     = width;
+    desc.maxPixelsHigh     = height;
+    desc.sizeInMillimeters = CGSizeMake(width / 4.0, height / 4.0);   // ~101 dpi
+    desc.redPrimary        = CGPointMake(0.6800, 0.3200);
+    desc.greenPrimary      = CGPointMake(0.2650, 0.6900);
+    desc.bluePrimary       = CGPointMake(0.1500, 0.0600);
+    desc.whitePoint        = CGPointMake(0.3127, 0.3290);
+
+    // A private serial queue, NOT the main queue.
+    //
+    // CoreGraphics publishes the display's lifecycle messages (it is live, here are your
+    // bounds, it has been retired) on this queue. Binding it to the main queue makes display
+    // creation and teardown silently depend on the *caller* running a main run loop — which
+    // an XCTest case or a CLI one-shot does not. Symptom when we got this wrong: the display
+    // registered but never reported bounds, and never went away on release.
+    _queue = dispatch_queue_create("dev.spaceo.virtual-display", DISPATCH_QUEUE_SERIAL);
+    desc.queue = _queue;
+
+    _display = [[dispClass alloc] initWithDescriptor:desc];
+    if (!_display) return nil;
+
+    CGVirtualDisplaySettings *settings = [[setClass alloc] init];
+    settings.modes = @[ [[modeClass alloc] initWithWidth:width height:height refreshRate:60.0] ];
+    settings.hiDPI = hiDPI ? 1 : 0;
+    if (![_display applySettings:settings]) { _display = nil; return nil; }
+
+    _displayID = _display.displayID;
+    return self;
+}
+
+- (CGDirectDisplayID)displayID { return _displayID; }
+- (BOOL)valid                  { return _display != nil && _displayID != 0; }
+- (CGRect)bounds               { return _displayID ? CGDisplayBounds(_displayID) : CGRectZero; }
+- (void)invalidate             { _display = nil; _displayID = 0; _queue = nil; }
+- (void)dealloc                { _display = nil; _queue = nil; }
+
+@end
+
+#pragma mark - Space graph
+
+static NSString *_Nullable UUIDStringForDisplay(CGDirectDisplayID did) {
+    CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(did);
+    if (!uuid) return nil;
+    CFStringRef s = CFUUIDCreateString(kCFAllocatorDefault, uuid);
+    NSString *result = (__bridge_transfer NSString *)s;
+    CFRelease(uuid);
+    return result;
+}
+
+NSArray *_Nullable SPOManagedDisplaySpaces(void) {
+    SPOLoad();
+    if (!p_SLSMainConnectionID || !p_SLSCopyManagedDisplaySpaces) return nil;
+    CFArrayRef raw = p_SLSCopyManagedDisplaySpaces(p_SLSMainConnectionID());
+    if (!raw) return nil;
+    if (CFGetTypeID(raw) != CFArrayGetTypeID()) {
+        CFRelease(raw);
+        return nil;
+    }
+    return (__bridge_transfer NSArray *)raw;
+}
+
+NSArray<NSNumber *> *_Nullable SPOSpacesForDisplay(CGDirectDisplayID displayID) {
+    NSArray *displays = SPOManagedDisplaySpaces();
+    if (!displays) return nil;
+    NSString *want = UUIDStringForDisplay(displayID);
+    for (id value in displays) {
+        if (![value isKindOfClass:NSDictionary.class]) continue;
+        NSDictionary *d = value;
+        id rawIdent = d[@"Display Identifier"];
+        NSString *ident = [rawIdent isKindOfClass:NSString.class] ? rawIdent : nil;
+        BOOL match = (want && [ident isEqualToString:want])
+                  || (displays.count == 1)
+                  || [ident isEqualToString:@"Main"];
+        if (!match) continue;
+        NSMutableArray<NSNumber *> *out = [NSMutableArray array];
+        id rawSpaces = d[@"Spaces"];
+        if (![rawSpaces isKindOfClass:NSArray.class]) return out;
+        for (id spaceValue in (NSArray *)rawSpaces) {
+            if (![spaceValue isKindOfClass:NSDictionary.class]) continue;
+            id sid = ((NSDictionary *)spaceValue)[@"ManagedSpaceID"];
+            if ([sid isKindOfClass:NSNumber.class]) [out addObject:sid];
+        }
+        return out;
+    }
+    return @[];
+}
+
+NSArray<NSNumber *> *_Nullable SPOSpacesForWindow(uint32_t windowID) {
+    SPOLoad();
+    if (!p_SLSMainConnectionID || !p_SLSCopySpacesForWindows) return nil;
+    CFArrayRef raw = p_SLSCopySpacesForWindows(p_SLSMainConnectionID(), 0x7,
+                                               (__bridge CFArrayRef)@[ @(windowID) ]);
+    if (!raw) return nil;
+    if (CFGetTypeID(raw) != CFArrayGetTypeID()) {
+        CFRelease(raw);
+        return nil;
+    }
+    NSArray *values = (__bridge_transfer NSArray *)raw;
+    NSMutableArray<NSNumber *> *out = [NSMutableArray array];
+    for (id value in values) {
+        if ([value isKindOfClass:NSNumber.class]) [out addObject:value];
+    }
+    return out;
+}
+
+uint64_t SPOActiveSpace(void) {
+    SPOLoad();
+    if (!p_SLSMainConnectionID || !p_SLSGetActiveSpace) return 0;
+    return p_SLSGetActiveSpace(p_SLSMainConnectionID());
+}
+
+#pragma mark - Focus routing
+
+BOOL SPOFocusWithoutRaise(pid_t pid, uint32_t windowID) {
+    SPOLoad();
+    // Do not rely on Swift callers having checked the capability. This C function is public to
+    // the package and validates the runtime symbol at the mutation boundary itself.
+    if (!SPOCapabilityAvailable(SPOCapabilityFocusWithoutRaise)) return NO;
+    if (!p_SLPSPostEventRecordTo) return NO;
+
+    ProcessSerialNumber psn = {0, kNoProcess};
+    if (GetProcessForPID(pid, &psn) != noErr) return NO;
+
+    // Record 1: "you are now the active app for input routing".
+    // Crucially this is NOT SLPSSetFrontProcessWithOptions, so nothing is raised and the
+    // user is not dragged to this app's Space.
+    uint8_t activate[0xf8] = {0};
+    activate[0x04] = 0xf8;
+    activate[0x08] = 0x0d;
+    memcpy(activate + 0x3c, &windowID, sizeof windowID);
+    memset(activate + 0x20, 0xff, 0x10);
+    activate[0x8a] = 0x01;
+    if (p_SLPSPostEventRecordTo(&psn, activate) != noErr) return NO;
+
+    // Record 2 & 3: make that specific window the key window within the app.
+    uint8_t key[0xf8] = {0};
+    key[0x04] = 0xf8;
+    key[0x3a] = 0x10;
+    memcpy(key + 0x3c, &windowID, sizeof windowID);
+    memset(key + 0x20, 0xff, 0x10);
+    key[0x08] = 0x01;
+    if (p_SLPSPostEventRecordTo(&psn, key) != noErr) return NO;
+    key[0x08] = 0x02;
+    if (p_SLPSPostEventRecordTo(&psn, key) != noErr) return NO;
+
+    return YES;
+}
+
+pid_t SPOFrontProcessPID(void) {
+    // Retained as an ABI-compatible stub for existing package clients. A symbol resolving via
+    // dlsym does not prove its private calling convention, and the product has a public AppKit
+    // source for the frontmost application. Do not query another guessed ProcessSerialNumber ABI.
+    return 0;
+}
+
+#pragma mark - Window geometry
+
+BOOL SPOWindowBounds(uint32_t windowID, CGRect *outBounds) {
+    SPOLoad();
+    if (!p_SLSMainConnectionID || !p_SLSGetWindowBounds || !outBounds) return NO;
+    if (p_SLSGetWindowBounds(p_SLSMainConnectionID(), windowID, outBounds)
+        != kCGErrorSuccess) return NO;
+    return isfinite(outBounds->origin.x) && isfinite(outBounds->origin.y)
+        && isfinite(outBounds->size.width) && isfinite(outBounds->size.height)
+        && outBounds->size.width >= 0 && outBounds->size.height >= 0;
+}
+
+uint32_t SPOWindowIDForAXElement(AXUIElementRef element) {
+    SPOLoad();
+    if (!p_AXUIElementGetWindow || !element) return 0;
+    uint32_t wid = 0;
+    if (p_AXUIElementGetWindow(element, &wid) != kAXErrorSuccess) return 0;
+    return wid;
+}

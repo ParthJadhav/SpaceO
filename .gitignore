@@ -1,0 +1,11 @@
+.build/
+.DS_Store
+*.dSYM/
+
+# Locally compiled research probes; keep their Objective-C sources.
+/probes/probe[0-9]
+/probes/vdisplay
+
+# Demo and test captures.
+spaceo-*.png
+
