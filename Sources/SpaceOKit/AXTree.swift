@@ -23,13 +23,26 @@ public struct AXNode: Sendable {
 /// and it keeps working if the window moves between the screenshot and the click.
 public struct AXSnapshot {
     public let pid: pid_t
+    public let windowID: CGWindowID
+    public let processIdentity: ProcessIdentity
+    public let generation: UUID
     public let nodes: [AXNode]
     private let elements: [Int: AXUIElement]
 
     public var actionableCount: Int { elements.count }
 
-    init(pid: pid_t, nodes: [AXNode], elements: [Int: AXUIElement]) {
+    init(
+        pid: pid_t,
+        windowID: CGWindowID,
+        processIdentity: ProcessIdentity,
+        generation: UUID,
+        nodes: [AXNode],
+        elements: [Int: AXUIElement]
+    ) {
         self.pid = pid
+        self.windowID = windowID
+        self.processIdentity = processIdentity
+        self.generation = generation
         self.nodes = nodes
         self.elements = elements
     }
@@ -78,22 +91,28 @@ public enum AXTree {
         pid: pid_t,
         window: WindowRef? = nil,
         maxDepth: Int = 22,
-        maxNodes: Int = 1500
+        maxNodes: Int = 1500,
+        generation: UUID = UUID()
     ) throws -> AXSnapshot {
         try snapshot(
             pid: pid,
             window: window,
-            limits: AXTraversalLimits(maxDepth: maxDepth, maxNodes: maxNodes))
+            limits: AXTraversalLimits(maxDepth: maxDepth, maxNodes: maxNodes),
+            generation: generation)
     }
 
     /// Walk with an explicit aggregate safety envelope.
     public static func snapshot(
         pid: pid_t,
         window: WindowRef? = nil,
-        limits: AXTraversalLimits
+        limits: AXTraversalLimits,
+        generation: UUID = UUID()
     ) throws -> AXSnapshot {
         try limits.validate()
         guard AX.isTrusted else { throw SpaceOError.accessibilityDenied }
+        guard let processIdentity = ProcessIdentity.current(of: pid) else {
+            throw SpaceOError.windowNotFound("pid \(pid) exited before accessibility traversal")
+        }
 
         let provider = SystemAXTraversalProvider()
         let budget = try AXTraversalBudget(
@@ -103,7 +122,17 @@ public enum AXTree {
         let root = try AXTraversal.root(
             pid: pid, window: window, provider: provider, budget: budget)
         let output = try AXTraversal.walk(root: root, provider: provider, budget: budget)
-        return AXSnapshot(pid: pid, nodes: output.nodes, elements: output.elements)
+        guard ProcessIdentity.current(of: pid) == processIdentity else {
+            throw SpaceOError.windowNotFound(
+                "pid \(pid) changed identity during accessibility traversal")
+        }
+        return AXSnapshot(
+            pid: pid,
+            windowID: window?.windowID ?? 0,
+            processIdentity: processIdentity,
+            generation: generation,
+            nodes: output.nodes,
+            elements: output.elements)
     }
 
     /// The element that currently has keyboard focus inside an app, if any.

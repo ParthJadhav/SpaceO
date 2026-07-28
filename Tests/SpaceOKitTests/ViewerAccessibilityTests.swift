@@ -352,6 +352,31 @@ final class ViewerAccessibilityTests: XCTestCase {
         XCTAssertFalse(controller.interactionEnabled)
     }
 
+    func testTransitionRestoresRouteInstalledByInFlightDownWhileQueueDrains() {
+        var route: Int?
+        var restored: [Int] = []
+        var events: [String] = []
+
+        ViewerInputTransition.drainAndRestore(
+            restore: {
+                events.append("restore")
+                if let current = route {
+                    restored.append(current)
+                    route = nil
+                }
+            },
+            drain: {
+                events.append("drain")
+                // Models a down that passed admission before the transition and publishes its
+                // captured route while the transition waits for the delivery queue.
+                route = 41
+            })
+
+        XCTAssertEqual(events, ["restore", "drain", "restore"])
+        XCTAssertEqual(restored, [41])
+        XCTAssertNil(route)
+    }
+
     func testEntryAndExitAnnouncementsIncludeStateAndEscapeRoute() {
         let entered = ViewerAccessibility.controlAnnouncement(
             enabled: true,

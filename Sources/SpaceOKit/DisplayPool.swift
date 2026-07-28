@@ -12,7 +12,7 @@ public final class DisplayPool {
 
     /// A tile reservation. The frame is derived from the stage's live bounds rather than
     /// cached, so it stays correct if the display arrangement shifts underneath us.
-    public struct Slot {
+    public struct Slot: Sendable {
         public let stage: Stage
         public let index: Int
         public let capacity: Int
@@ -53,6 +53,7 @@ public final class DisplayPool {
     /// Creation timestamps inside the rate window, oldest first.
     private var recentCreations: [Date] = []
     private let stageFactory: StageFactory
+    private let stageRetirer: @Sendable (Stage) -> Bool
     private let lock = NSLock()
 
     /// How many sessions share one display. Changing it affects displays created afterwards;
@@ -75,6 +76,23 @@ public final class DisplayPool {
         self.stageFactory = stageFactory ?? { name, width, height, hiDPI in
             try Stage(name: name, width: width, height: height, hiDPI: hiDPI)
         }
+        self.stageRetirer = { $0.invalidate() }
+    }
+
+    init(sessionsPerDisplay: Int = 1,
+         displaySize: CGSize = CGSize(width: 1920, height: 1080),
+         hiDPI: Bool = true,
+         budget: ResourceBudget = .fromEnvironment(),
+         stageFactory: StageFactory? = nil,
+         stageRetirer: @escaping @Sendable (Stage) -> Bool) {
+        self.sessionsPerDisplay = max(1, sessionsPerDisplay)
+        self.displaySize = displaySize
+        self.hiDPI = hiDPI
+        self.budget = budget
+        self.stageFactory = stageFactory ?? { name, width, height, hiDPI in
+            try Stage(name: name, width: width, height: height, hiDPI: hiDPI)
+        }
+        self.stageRetirer = stageRetirer
     }
 
     public var displayCount: Int { lock.withLock { displays.count } }
@@ -177,8 +195,9 @@ public final class DisplayPool {
         guard occupancy.isEmpty else { return true }
         guard !retainEmpty else { return true }
 
+        guard retire(occupancy) else { return false }
         displays.remove(at: position)
-        return retire(occupancy)
+        return true
     }
 
     /// Retire empty displays, optionally preserving a small warm standby set.
@@ -188,13 +207,16 @@ public final class DisplayPool {
         defer { lock.unlock() }
         let empty = displays.filter(\.isEmpty)
         let retiring = Array(empty.dropFirst(max(0, retainedCount)))
-        let retiringStages = Set(retiring.map { ObjectIdentifier($0.stage) })
+        let retiredStages = Set(retiring.compactMap { occupancy -> ObjectIdentifier? in
+            retire(occupancy) ? ObjectIdentifier(occupancy.stage) : nil
+        })
         displays.removeAll {
-            retiringStages.contains(ObjectIdentifier($0.stage))
+            retiredStages.contains(ObjectIdentifier($0.stage))
         }
-        return retiring.compactMap { occupancy in
-            let id = occupancy.stage.displayID
-            return retire(occupancy) ? nil : id
+        return retiring.compactMap {
+            retiredStages.contains(ObjectIdentifier($0.stage))
+                ? nil
+                : $0.stage.displayID
         }
     }
 
@@ -203,19 +225,26 @@ public final class DisplayPool {
     public func releaseAll() -> [CGDirectDisplayID] {
         lock.lock()
         defer { lock.unlock() }
-        let failed = displays.compactMap { occupancy -> CGDirectDisplayID? in
-            let id = occupancy.stage.displayID
-            return retire(occupancy) ? nil : id
+        // Direct pool users call this after destroying their sessions and do not release every
+        // slot individually. Mark those reservations empty, but retain any display whose actual
+        // invalidation still fails so a later releaseAll can retry it.
+        for occupancy in displays { occupancy.taken.removeAll() }
+        let retiredStages = Set(displays.compactMap { occupancy -> ObjectIdentifier? in
+            return retire(occupancy) ? ObjectIdentifier(occupancy.stage) : nil
+        })
+        displays.removeAll {
+            retiredStages.contains(ObjectIdentifier($0.stage))
         }
-        displays.removeAll()
         // `recentCreations` deliberately survives: the rate limit exists to stop churn, and a
         // create/destroy loop that reset it on every cycle would sail straight through.
-        return failed
+        return displays.map { $0.stage.displayID }.sorted()
     }
 
     private func retire(_ occupancy: Occupancy) -> Bool {
-        AgentActivity.release(spaces: occupancy.stage.spaces)
-        return occupancy.stage.invalidate()
+        let spaces = occupancy.stage.spaces
+        guard stageRetirer(occupancy.stage) else { return false }
+        AgentActivity.release(spaces: spaces)
+        return true
     }
 
     // MARK: - Reporting

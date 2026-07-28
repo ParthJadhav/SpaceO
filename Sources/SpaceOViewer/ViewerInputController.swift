@@ -11,6 +11,20 @@ struct InputNote: Equatable, Sendable {
     let isWarning: Bool
 }
 
+/// A transition has two restoration opportunities. The first promptly releases an established
+/// pointer route; the second catches a route published by a mouse-down that was already running
+/// when the input gate changed.
+enum ViewerInputTransition {
+    static func drainAndRestore(
+        restore: () -> Void,
+        drain: () -> Void
+    ) {
+        restore()
+        drain()
+        restore()
+    }
+}
+
 /// The one keyboard chord the Viewer owns while remote Control is active.
 ///
 /// An unmodified Escape must remain available to remote apps, and Control-Option is VoiceOver's
@@ -190,17 +204,21 @@ final class ViewerInputController: @unchecked Sendable {
             // becomes a no-op immediately, rather than executing against it. Then release held
             // state synchronously; invalid queued events drain as no-ops before cleanup runs.
             gate.select(displayID: newValue?.id)
-            restorePointerRoute()
-            // Synchronizing here lets any currently executing down finish and be recorded. The
-            // gate rejects queued/new work, then matching ups are delivered before targets clear.
-            queue.sync {
-                releaseHeldKeys()
-                dragTarget = nil
-                keyTarget = nil
-                accessibilityPressHandled = false
-                pointerTransactionBlocked = false
-                candidateCache = nil
-            }
+            ViewerInputTransition.drainAndRestore(
+                restore: { restorePointerRoute() },
+                drain: {
+                    // Synchronizing here lets any currently executing down finish and be
+                    // recorded. The gate rejects queued/new work, then matching ups are
+                    // delivered before targets clear.
+                    queue.sync {
+                        releaseHeldKeys()
+                        dragTarget = nil
+                        keyTarget = nil
+                        accessibilityPressHandled = false
+                        pointerTransactionBlocked = false
+                        candidateCache = nil
+                    }
+                })
             stateLock.withLock { _interactionEnabled = false }
         }
     }
@@ -219,15 +237,18 @@ final class ViewerInputController: @unchecked Sendable {
                 }
             }
             gate.disable()
-            restorePointerRoute()
-            queue.sync {
-                releaseHeldKeys()
-                dragTarget = nil
-                keyTarget = nil
-                accessibilityPressHandled = false
-                pointerTransactionBlocked = false
-                lastNote = nil
-            }
+            ViewerInputTransition.drainAndRestore(
+                restore: { restorePointerRoute() },
+                drain: {
+                    queue.sync {
+                        releaseHeldKeys()
+                        dragTarget = nil
+                        keyTarget = nil
+                        accessibilityPressHandled = false
+                        pointerTransactionBlocked = false
+                        lastNote = nil
+                    }
+                })
             stateLock.withLock { _interactionEnabled = false }
         }
     }

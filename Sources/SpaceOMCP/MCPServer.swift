@@ -279,7 +279,9 @@ public enum MCPServer {
 
             tool("spaceo_session_destroy", """
                 End a session: quit the apps it started and free its tile. Always do this when \
-                you are finished, or the apps keep running invisibly.
+                you are finished, or the apps keep running invisibly. If cleanup reports \
+                surviving processes or displays, resolve the named resource and call this tool \
+                again; SpaceO retains ownership specifically so the retry is safe.
                 """, ["session": sessionArg,
                       "all": ["type": "boolean", "description": "Destroy every session."]]),
 
@@ -480,6 +482,10 @@ public enum MCPServer {
     /// including per-check coverage, is exercised without a socket or JSON-RPC process.
     static func renderFailure(_ response: Response) -> String {
         var error = response.error ?? "unknown failure"
+        if let teardown = response.teardown,
+           !error.contains(teardown.recoveryDescription) {
+            error += "\n" + teardown.recoveryDescription
+        }
         if let isolation = response.isolation {
             error += "\n" + renderIsolation(isolation)
         } else if let drift = response.drift {
@@ -529,6 +535,9 @@ public enum MCPServer {
         var text = "session '\(session.id)' on \(tile), "
                  + "\(whole(session.width))x\(whole(session.height)) "
                  + "at (\(whole(session.x)),\(whole(session.y)))"
+        if session.teardownPending {
+            text += " [cleanup pending — retry destroy]"
+        }
         for app in session.apps {
             text += "\n  app \(app.name) (pid \(app.pid))\(app.startedByUs ? "" : " [adopted]")"
         }

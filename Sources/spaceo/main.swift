@@ -85,6 +85,9 @@ func printSession(_ session: SessionInfo) {
                  session.width, session.height, session.x, session.y,
                  session.spaces.map(String.init).joined(separator: ","),
                  session.hasOwnSpace ? "yes" : "no"))
+    if session.teardownPending {
+        print("   ! cleanup pending; retry session destroy after resolving surviving resources")
+    }
     for app in session.apps {
         print("   app  pid \(app.pid)  \(app.name)\(app.startedByUs ? "" : "  (adopted)")")
     }
@@ -323,12 +326,29 @@ case "doctor":
             "ok": capabilities.canDrive,
             "macOS": ProcessInfo.processInfo.operatingSystemVersionString,
             "capabilities": capabilities.items.map {
-                ["name": $0.name, "available": $0.available, "detail": $0.detail]
+                [
+                    "name": $0.name,
+                    "available": $0.available,
+                    "detail": $0.detail,
+                    "unavailableReason":
+                        $0.unavailableReason.map { $0 as Any } ?? NSNull(),
+                ]
             },
             "missingSymbols": capabilities.missingSymbols,
             "canDrive": capabilities.canDrive,
             "canCapture": capabilities.canCapture,
             "builtWithARC": capabilities.builtWithARC,
+            "privateAPIHost": [
+                "operatingSystemVersion":
+                    capabilities.privateAPIHost.operatingSystemVersion,
+                "darwinBuild": capabilities.privateAPIHost.darwinBuild,
+                "architecture": capabilities.privateAPIHost.architecture,
+                "tuple": capabilities.privateAPIHost.tupleDescription,
+                "registryEntryCount":
+                    capabilities.privateAPIHost.registryEntryCount,
+                "qualifiedCapabilities":
+                    capabilities.privateAPIHost.qualifiedCapabilities,
+            ],
             "daemon": ["socket": socketPath, "running": daemonIsRunning],
             "displays": [
                 "spaceO": attachedSpaceODisplays,
@@ -435,7 +455,7 @@ case "daemon":
     let manager = SessionManager(pool: pool)
     let server = Transport.Server(path: socketPath) { request in
         let response = await manager.handle(request)
-        if request.cmd == "daemon.stop" {
+        if request.cmd == "daemon.stop", response.ok {
             // Give the socket response a moment to flush before ending the process.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 daemonServer?.stop()
@@ -462,7 +482,15 @@ case "daemon":
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {
             Task {
-                await manager.destroyAll(quitApps: true)
+                let response = await manager.handle(Request(cmd: "daemon.stop"))
+                guard response.ok else {
+                    let recovery = response.teardown?.recoveryDescription
+                        ?? response.error
+                        ?? "daemon teardown failed; retry `spaceo daemon stop`"
+                    FileHandle.standardError.write(
+                        Data(("error: " + recovery + "\n").utf8))
+                    return
+                }
                 daemonServer?.stop()
                 exit(0)
             }

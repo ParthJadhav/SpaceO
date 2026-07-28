@@ -220,7 +220,7 @@ final class IntegrationTests: XCTestCase {
         let manager = SessionManager()
         _ = try await manager.create(name: "a")
         _ = try await manager.create(name: "b")
-        defer { Task { await manager.destroyAll(quitApps: false) } }
+        defer { Task { try? await manager.destroyAll(quitApps: false) } }
 
         let response = await manager.handle(Request(cmd: "windows"))
         XCTAssertFalse(response.ok, "with two sessions live, an unnamed command must not pick one")

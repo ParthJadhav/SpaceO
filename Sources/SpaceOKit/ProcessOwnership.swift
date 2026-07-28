@@ -9,7 +9,7 @@ import Darwin
 /// believes it may capture, drive, and force-terminate that process. Pairing the number with the
 /// kernel's start timestamp makes the identity unique for as long as it matters: two processes
 /// can share a PID, but not a PID *and* a start time.
-public struct ProcessIdentity: Hashable, Sendable, CustomStringConvertible {
+public struct ProcessIdentity: Codable, Hashable, Sendable, CustomStringConvertible {
 
     public let pid: pid_t
     /// Kernel start time, microseconds since the epoch. Zero only when the platform refused to

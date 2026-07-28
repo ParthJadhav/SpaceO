@@ -4,15 +4,14 @@ Give each AI agent its own screen on your Mac, so it can drive real apps while p
 user's cursor, keyboard focus, and display.
 
 > [!NOTE]
-> Virtual-display creation and focus routing are enabled. The unsafe private focus getters from
-> the 2026-07-26 incident remain removed; focus preparation and route restoration are best-effort.
-> Isolation verification therefore reports the key-event and text-input routes as unknown, and a
-> no-breach live result as `partial` rather than claiming the user was verified as undisturbed.
-> Display creation no longer has product caps or preflight refusals for mirroring,
-> ownerless displays, physical-display activity, overlap, or cursor-fence availability. Those
-> conditions remain visible in diagnostics, and teardown is still verified. See the
+> Private display, Space, event-delivery, window-lookup, and focus behavior is enabled only for
+> an exact macOS version, Darwin build, architecture, and capability with recorded disposable-host
+> evidence. The qualification registry is currently empty, so no host is supported for those
+> mutations and `spaceo doctor` reports them as unavailable even when every private symbol exists.
+> The package can still build on macOS 14+, but that deployment target is not a support claim.
+> See the [private API support matrix](docs/PRIVATE_API_SUPPORT.md),
 > [incident report](docs/incidents/2026-07-26-display-input-lockout.md) and
-> [release audit](RELEASE_AUDIT.md) for the historical failure and accepted policy change.
+> [release audit](RELEASE_AUDIT.md) for the evidence procedure and historical failure.
 
 > [!WARNING]
 > **SpaceO isolates attention, not security.** Agent apps still run as your logged-in macOS user
@@ -21,7 +20,7 @@ user's cursor, keyboard focus, and display.
 > OS sandbox or hostile multi-tenant boundary. Run untrusted agents or applications in a separate
 > macOS login session or a VM.
 
-Expected UX:
+Expected UX once the required host capabilities have been qualified:
 
 ```
 $ spaceo demo
@@ -150,20 +149,23 @@ tiles are very small.
 
 ## Requirements and support status
 
-- Apple Silicon Mac; the package deployment target is macOS 14
+- Apple Silicon Mac for development; the package deployment target is macOS 14
 - **SIP stays on.** Nothing here needs it disabled.
 - Accessibility and Screen Recording granted to whatever runs `spaceo`
 
-The current development machine runs a macOS 27 developer build. Private framework behavior can
-change between macOS releases, so inspect `spaceo doctor` on each host before sessions are used;
-the deployment target is not itself a compatibility guarantee. Its display-graph findings are
-diagnostic and do not block creation.
+There is currently no supported release-host tuple. The macOS 27 development machine is
+deliberately not allowlisted merely because its symbols resolve. Every private capability fails
+closed until its exact host tuple has passed the disposable-login workflow and durable evidence
+has been reviewed. Run `spaceo doctor` for the detected tuple and per-capability reason; see the
+[private API support matrix](docs/PRIVATE_API_SUPPORT.md) for the required checks and known
+limitations.
 
 ## Install a release
 
 Public releases use a versioned, Developer-ID signed, notarized, and stapled disk image containing
-both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar. Verify the checksum,
-signatures, stapled ticket, and Gatekeeper assessment before installation.
+both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar and its detached SpaceO
+publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or executing
+the payload; then verify the stapled ticket and Gatekeeper assessment before installation.
 
 See [Installing a SpaceO release](docs/INSTALL.md) for exact installation, upgrade, rollback,
 uninstall, artifact-verification, and maintainer publication procedures.

@@ -191,7 +191,11 @@ public enum InputRouter {
     /// The original route is captured first so a partial private failure can always be repaired.
     public static func focus(_ window: WindowRef) throws {
         guard SPOCapabilityAvailable(.focusWithoutRaise) else {
-            throw SpaceOError.unavailable(capability: "focus-without-raise")
+            let name = SPOCapabilityName(.focusWithoutRaise)
+            let reason = SPOCapabilityUnavailableReason(.focusWithoutRaise)
+            throw SpaceOError.unavailable(
+                capability: reason.map { "\(name): \($0)" } ?? name
+            )
         }
         let originalRoute = try captureUserInputRoute(excluding: [window.pid])
         guard try applyFocus(window, recoveringTo: originalRoute) else {
@@ -299,8 +303,44 @@ public enum InputRouter {
     }
 
     static func userRouteIsCurrent(_ route: UserInputRoute) -> Bool {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier
-            == route.app.processIdentifier
+        let pid = route.app.processIdentifier
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        guard frontmostPID == pid else {
+            return false
+        }
+        // When capture identified a concrete focused window, restoring only the application is
+        // insufficient: another window in that application can be key and receive the user's
+        // next keystroke. An unreadable or mismatched focused window therefore fails closed.
+        guard route.windowID != 0 else {
+            return routeIdentityMatches(
+                expectedPID: pid,
+                expectedWindowID: 0,
+                frontmostPID: frontmostPID,
+                focusedWindowID: nil)
+        }
+        let appElement = AX.application(pid)
+        guard AX.setTimeout(appElement, seconds: 0.25),
+              let focused = AX.element(appElement, kAXFocusedWindowAttribute as String)
+        else {
+            return false
+        }
+        return routeIdentityMatches(
+            expectedPID: pid,
+            expectedWindowID: route.windowID,
+            frontmostPID: frontmostPID,
+            focusedWindowID: AX.windowID(focused))
+    }
+
+    /// Pure identity check kept separate from the AX query so same-process/wrong-window
+    /// recovery has deterministic regression coverage.
+    static func routeIdentityMatches(
+        expectedPID: pid_t,
+        expectedWindowID: CGWindowID,
+        frontmostPID: pid_t?,
+        focusedWindowID: CGWindowID?
+    ) -> Bool {
+        guard frontmostPID == expectedPID else { return false }
+        return expectedWindowID == 0 || focusedWindowID == expectedWindowID
     }
 
     @discardableResult
@@ -395,8 +435,8 @@ public enum InputRouter {
                 else { continue }
                 down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
                 up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-                down.postToPid(pid)
-                up.postToPid(pid)
+                try postEventToPID(down, pid: pid)
+                try postEventToPID(up, pid: pid)
                 usleep(delay)
             }
         }
@@ -463,9 +503,9 @@ public enum InputRouter {
         else { throw SpaceOError.badRequest("could not synthesise key event") }
         down.flags = combo.flags
         up.flags = combo.flags
-        down.postToPid(pid)
+        try postEventToPID(down, pid: pid)
         usleep(15_000)
-        up.postToPid(pid)
+        try postEventToPID(up, pid: pid)
         usleep(30_000)
     }
 
@@ -522,7 +562,7 @@ public enum InputRouter {
         if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
                               mouseCursorPosition: global, mouseButton: button.cgButton) {
             addressToWindow(move)
-            move.postToPid(window.pid)
+            try postEventToPID(move, pid: window.pid)
             usleep(15_000)
         }
 
@@ -536,9 +576,9 @@ public enum InputRouter {
                 event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
                 addressToWindow(event)
             }
-            down.postToPid(window.pid)
+            try postEventToPID(down, pid: window.pid)
             usleep(25_000)
-            up.postToPid(window.pid)
+            try postEventToPID(up, pid: window.pid)
             usleep(40_000)
         }
         try endPointerInputChecked(userRoute)
@@ -559,7 +599,7 @@ public enum InputRouter {
             guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
                                       wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)
             else { continue }
-            event.postToPid(window.pid)
+            try postEventToPID(event, pid: window.pid)
             usleep(20_000)
         }
     }

@@ -153,4 +153,34 @@ final class FocusRecoveryTests: XCTestCase {
         XCTAssertEqual(simulatedRoutePID, route.app.processIdentifier)
         XCTAssertTrue(inputWasSent)
     }
+
+    func testRouteVerificationRejectsDifferentWindowInSameFrontmostProcess() {
+        let pid = getpid()
+
+        XCTAssertFalse(InputRouter.routeIdentityMatches(
+            expectedPID: pid,
+            expectedWindowID: 41,
+            frontmostPID: pid,
+            focusedWindowID: 42))
+        XCTAssertTrue(InputRouter.routeIdentityMatches(
+            expectedPID: pid,
+            expectedWindowID: 41,
+            frontmostPID: pid,
+            focusedWindowID: 41))
+    }
+
+    func testRouteWithoutCapturedWindowFallsBackToFrontmostProcessIdentity() {
+        let pid = getpid()
+
+        XCTAssertTrue(InputRouter.routeIdentityMatches(
+            expectedPID: pid,
+            expectedWindowID: 0,
+            frontmostPID: pid,
+            focusedWindowID: nil))
+        XCTAssertFalse(InputRouter.routeIdentityMatches(
+            expectedPID: pid,
+            expectedWindowID: 0,
+            frontmostPID: pid + 1,
+            focusedWindowID: nil))
+    }
 }

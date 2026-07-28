@@ -218,7 +218,7 @@ public enum MirrorInput {
             event.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
         }
         stamp(event, windowID: target.windowID)
-        event.postToPid(target.pid)
+        try postEventToPID(event, pid: target.pid)
     }
 
     /// Forward a scroll at a global point. Deltas are in pixels, positive `dy` scrolls up.
@@ -239,7 +239,7 @@ public enum MirrorInput {
         }
         event.location = global
         stamp(event, windowID: target.windowID)
-        event.postToPid(target.pid)
+        try postEventToPID(event, pid: target.pid)
     }
 
     // MARK: - Keyboard
@@ -264,7 +264,7 @@ public enum MirrorInput {
             var utf16 = Array(characters.utf16)
             event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
         }
-        event.postToPid(pid)
+        try postEventToPID(event, pid: pid)
     }
 
     /// Control characters and AppKit's function-key code points (U+F700…U+F8FF) must not be

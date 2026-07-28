@@ -26,10 +26,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref }}
+          # A manual input is data, not a generic Git checkout expression. Fully qualifying the
+          # tag prevents a same-named branch from supplying code to this credentialed job.
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.release_tag) || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
 
-      - name: Validate release tag and repository version
-        run: bash scripts/release.sh check
+      - name: Validate immutable release source
+        id: source
+        env:
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "$SPACEO_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "error: release tag must be vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          }
+          release_ref="refs/tags/$SPACEO_RELEASE_TAG"
+          git show-ref --verify --quiet "$release_ref" || {
+            echo "error: $release_ref is not an existing tag" >&2
+            exit 1
+          }
+          release_commit="$(git rev-parse "$release_ref^{commit}")"
+          release_tag_object="$(git rev-parse "$release_ref")"
+          checked_out_commit="$(git rev-parse "HEAD^{commit}")"
+          [[ "$release_commit" == "$checked_out_commit" ]] || {
+            echo "error: checkout does not match $release_ref" >&2
+            exit 1
+          }
+          default_branch_ref="refs/remotes/origin/$GITHUB_DEFAULT_BRANCH"
+          git show-ref --verify --quiet "$default_branch_ref" || {
+            echo "error: the trusted default branch was not fetched" >&2
+            exit 1
+          }
+          default_branch_commit="$(git rev-parse "$default_branch_ref^{commit}")"
+          git merge-base --is-ancestor "$release_commit" "$default_branch_commit" || {
+            echo "error: release commit is not contained in $GITHUB_DEFAULT_BRANCH" >&2
+            exit 1
+          }
+          echo "tag_object=$release_tag_object" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release policy, tag, and repository version
+        run: |
+          bash Tests/ReleaseSecurityTests.sh
+          bash scripts/release.sh check
 
       - name: Require release credentials
         env:
@@ -101,10 +142,12 @@ jobs:
           architecture="$(uname -m)"
           artifact=".release/$version/SpaceO-$version-macOS-$architecture.dmg"
           checksum=".release/$version/SpaceO-$version-macOS-$architecture.sha256"
-          [[ -f "$artifact" && -f "$checksum" ]]
+          signature="$checksum.sig"
+          [[ -f "$artifact" && -f "$checksum" && -f "$signature" ]]
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
           echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          echo "signature=$signature" >> "$GITHUB_OUTPUT"
 
       - name: Retain verified workflow artifacts
         uses: actions/upload-artifact@v4
@@ -113,16 +156,26 @@ jobs:
           path: |
             ${{ steps.package.outputs.artifact }}
             ${{ steps.package.outputs.checksum }}
+            ${{ steps.package.outputs.signature }}
           if-no-files-found: error
 
       - name: Publish tagged release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
+          EXPECTED_TAG_OBJECT: ${{ steps.source.outputs.tag_object }}
         run: |
+          remote_tag_object="$(
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha
+          )"
+          [[ "$remote_tag_object" == "$EXPECTED_TAG_OBJECT" ]] || {
+            echo "error: release tag moved after source validation" >&2
+            exit 1
+          }
           gh release create "$GITHUB_REF_NAME" \
             "${{ steps.package.outputs.artifact }}" \
             "${{ steps.package.outputs.checksum }}" \
+            "${{ steps.package.outputs.signature }}" \
             --verify-tag \
             --generate-notes \
             --title "SpaceO ${{ steps.package.outputs.version }}"

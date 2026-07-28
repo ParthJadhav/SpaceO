@@ -25,33 +25,81 @@ final class SessionOperationGate: @unchecked Sendable {
         deinit { finish() }
     }
 
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Lease, any Error>
+    }
+
+    private enum Registration {
+        case grant
+        case queued
+        case cancelled
+    }
+
     private let lock = NSLock()
     private var occupied = false
-    private var waiters: [CheckedContinuation<Lease, Never>] = []
+    private var waiters: [Waiter] = []
 
-    func enter() async -> Lease {
-        await withCheckedContinuation { continuation in
-            let resumeNow = lock.withLock {
-                if occupied {
-                    waiters.append(continuation)
-                    return false
+    func enter() async throws -> Lease {
+        let waiterID = UUID()
+        let lease = try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                let registration = lock.withLock {
+                    guard !Task.isCancelled else {
+                        return Registration.cancelled
+                    }
+                    if occupied {
+                        waiters.append(Waiter(
+                            id: waiterID,
+                            continuation: continuation))
+                        return Registration.queued
+                    }
+                    occupied = true
+                    return Registration.grant
                 }
-                occupied = true
-                return true
+                switch registration {
+                case .grant:
+                    continuation.resume(returning: Lease(gate: self))
+                case .queued:
+                    break
+                case .cancelled:
+                    continuation.resume(throwing: CancellationError())
+                }
             }
-            if resumeNow {
-                continuation.resume(returning: Lease(gate: self))
-            }
+        } onCancel: {
+            self.cancelWaiter(id: waiterID)
+        }
+
+        // Cancellation can race the atomic queue-to-owner handoff. If the handoff won, release
+        // its authority here instead of returning a lease to code that has already been
+        // cancelled.
+        do {
+            try Task.checkCancellation()
+            return lease
+        } catch {
+            lease.finish()
+            throw error
         }
     }
 
+    private func cancelWaiter(id: UUID) {
+        let continuation = lock.withLock {
+            guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+                return nil as CheckedContinuation<Lease, any Error>?
+            }
+            return waiters.remove(at: index).continuation
+        }
+        continuation?.resume(throwing: CancellationError())
+    }
+
     private func leave() {
-        let next = lock.withLock { () -> CheckedContinuation<Lease, Never>? in
+        let next = lock.withLock { () -> CheckedContinuation<Lease, any Error>? in
             guard !waiters.isEmpty else {
                 occupied = false
                 return nil
             }
-            return waiters.removeFirst()
+            return waiters.removeFirst().continuation
         }
         next?.resume(returning: Lease(gate: self))
     }

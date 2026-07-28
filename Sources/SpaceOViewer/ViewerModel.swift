@@ -52,6 +52,168 @@ enum ViewerStreamState: Equatable {
     }
 }
 
+enum ViewerSessionBadge: Equatable, Sendable {
+    case owned
+    case abandoned
+    case reclaimable
+    case cleanupPending
+
+    var title: String {
+        switch self {
+        case .owned: "Owned"
+        case .abandoned: "Abandoned"
+        case .reclaimable: "Reclaimable"
+        case .cleanupPending: "Cleanup pending"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .owned: "person.crop.circle.fill"
+        case .abandoned: "exclamationmark.triangle.fill"
+        case .reclaimable: "arrow.uturn.backward.circle.fill"
+        case .cleanupPending: "hourglass.circle.fill"
+        }
+    }
+}
+
+/// A small, deterministic presentation model keeps lifecycle precedence, duration wording, and
+/// overlay admission consistent without making the Viewer's read-only polling path stateful.
+struct ViewerSessionPresentation: Equatable, Sendable {
+    let badge: ViewerSessionBadge?
+    let ownerText: String?
+    let timingText: String?
+
+    init(session: SessionInfo, now: Date = Date()) {
+        self.init(
+            teardownPending: session.teardownPending,
+            controllerOwner: session.controllerOwner,
+            ageSeconds: session.ageSeconds,
+            lastActivityAt: session.lastActivityAt,
+            abandoned: session.abandoned,
+            reclaimable: session.reclaimable,
+            now: now
+        )
+    }
+
+    init(
+        teardownPending: Bool,
+        controllerOwner: DurableSessionOwner?,
+        ageSeconds: TimeInterval?,
+        lastActivityAt: Date?,
+        abandoned: Bool?,
+        reclaimable: Bool?,
+        now: Date = Date()
+    ) {
+        if teardownPending {
+            badge = .cleanupPending
+        } else if reclaimable == true {
+            badge = .reclaimable
+        } else if abandoned == true {
+            badge = .abandoned
+        } else if controllerOwner != nil {
+            badge = .owned
+        } else {
+            // Older daemons do not send controller metadata. Absence is not abandonment.
+            badge = nil
+        }
+
+        if let controllerOwner {
+            let trimmedLabel = controllerOwner.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayName = trimmedLabel.isEmpty ? controllerOwner.id : trimmedLabel
+            ownerText = "Owner: \(displayName) · \(Self.ownerKindName(controllerOwner.kind))"
+        } else {
+            ownerText = nil
+        }
+
+        var timingParts: [String] = []
+        if let lastActivityAt {
+            let elapsed = max(0, now.timeIntervalSince(lastActivityAt))
+            if elapsed.isFinite {
+                let relative = elapsed < 10
+                    ? "just now"
+                    : "\(Self.compactDuration(elapsed)) ago"
+                timingParts.append("Last activity \(relative)")
+            }
+        }
+        if let ageSeconds, ageSeconds.isFinite {
+            timingParts.append("Age \(Self.compactDuration(max(0, ageSeconds)))")
+        }
+        timingText = timingParts.isEmpty ? nil : timingParts.joined(separator: " · ")
+    }
+
+    func accessibilityDescription(sessionID: String) -> String {
+        var parts = ["Session \(sessionID)."]
+        if let badge {
+            parts.append("Status: \(badge.title).")
+        }
+        if let ownerText {
+            parts.append("\(ownerText).")
+        }
+        if let timingText {
+            parts.append("\(timingText).")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    /// Only live SpaceO geometry is eligible for an overlay. `session.list` currently contains
+    /// attached runtime sessions; if durable detached records are later added to the wire, their
+    /// attachment state must be rejected before calling this geometry gate.
+    static func overlayFrame(
+        displayID: UInt32,
+        frame: CGRect,
+        on display: DisplayEntry
+    ) -> CGRect? {
+        guard display.isSpaceO, display.isActive, display.id == displayID else { return nil }
+        let values = [
+            display.bounds.minX, display.bounds.minY,
+            display.bounds.width, display.bounds.height,
+            frame.minX, frame.minY, frame.width, frame.height,
+        ]
+        guard values.allSatisfy(\.isFinite),
+              display.bounds.width > 0,
+              display.bounds.height > 0,
+              frame.width > 0,
+              frame.height > 0 else {
+            return nil
+        }
+
+        // WindowServer geometry can differ by a sub-point during a display transition. Admit
+        // that rounding only; records whose old tiles no longer belong to this display stay out.
+        let liveBounds = display.bounds.insetBy(dx: -0.5, dy: -0.5)
+        guard liveBounds.contains(frame) else { return nil }
+        return frame
+    }
+
+    private static func compactDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = Int(seconds.rounded(.down))
+        if totalSeconds < 60 {
+            return "\(totalSeconds)s"
+        }
+        if totalSeconds < 3_600 {
+            return "\(totalSeconds / 60)m"
+        }
+        if totalSeconds < 86_400 {
+            let hours = totalSeconds / 3_600
+            let minutes = (totalSeconds % 3_600) / 60
+            return minutes == 0 ? "\(hours)h" : "\(hours)h \(minutes)m"
+        }
+        let days = totalSeconds / 86_400
+        let hours = (totalSeconds % 86_400) / 3_600
+        return hours == 0 ? "\(days)d" : "\(days)d \(hours)h"
+    }
+
+    private static func ownerKindName(_ kind: DurableSessionOwnerKind) -> String {
+        switch kind {
+        case .cli: "CLI"
+        case .mcp: "MCP"
+        case .viewer: "Viewer"
+        case .other: "Other"
+        @unknown default: "Other"
+        }
+    }
+}
+
 @MainActor
 final class ViewerModel: ObservableObject {
 
@@ -114,8 +276,20 @@ final class ViewerModel: ObservableObject {
     var stages: [DisplayEntry] { displays.filter(\.isSpaceO) }
     var physicalDisplays: [DisplayEntry] { displays.filter { !$0.isSpaceO } }
     var sessionsOnSelectedDisplay: [SessionInfo] {
-        guard let selectedID else { return [] }
-        return sessions.filter { $0.displayID == selectedID }
+        guard let selected else { return [] }
+        return sessions.filter { session in
+            let frame = CGRect(
+                x: session.x,
+                y: session.y,
+                width: session.width,
+                height: session.height
+            )
+            return ViewerSessionPresentation.overlayFrame(
+                displayID: session.displayID,
+                frame: frame,
+                on: selected
+            ) != nil
+        }
     }
 
     init(

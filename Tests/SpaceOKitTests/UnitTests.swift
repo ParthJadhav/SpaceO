@@ -144,22 +144,35 @@ final class UnitTests: XCTestCase {
         XCTAssertTrue(SpaceOError.unavailable(capability: "x").description.contains("spaceo doctor"))
     }
 
-    func testFocusCapabilityMatchesRuntimeSymbolInventory() {
+    func testFocusCapabilityRequiresBothHostQualificationAndRuntimeSymbol() {
         let missing = Set(SPOMissingSymbols())
+        let current = SPOCurrentHostTuple()
+        let expected = SPOCapabilityAllowedForHost(
+            .focusWithoutRaise,
+            current,
+            SPOQualifiedHostRegistry(),
+            !missing.contains("SLPSPostEventRecordTo")
+        )
         let available = Capabilities().items.first {
             $0.name == "focus-without-raise"
         }?.available
-        XCTAssertEqual(available, !missing.contains("SLPSPostEventRecordTo"))
+        XCTAssertEqual(available, expected)
     }
 
-    func testVirtualDisplayCapabilityMatchesRuntimeClassInventory() {
+    func testVirtualDisplayCapabilityRequiresHostQualificationAndClassInventory() {
         let classes = [
             "CGVirtualDisplay",
             "CGVirtualDisplayDescriptor",
             "CGVirtualDisplayMode",
             "CGVirtualDisplaySettings",
         ]
-        let expected = classes.allSatisfy { NSClassFromString($0) != nil }
+        let classesPresent = classes.allSatisfy { NSClassFromString($0) != nil }
+        let expected = SPOCapabilityAllowedForHost(
+            .virtualDisplay,
+            SPOCurrentHostTuple(),
+            SPOQualifiedHostRegistry(),
+            classesPresent
+        )
         let available = Capabilities().items.first {
             $0.name == "virtual-display"
         }?.available

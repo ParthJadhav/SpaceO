@@ -9,14 +9,21 @@ import SpaceOPrivate
 /// window moves would produce exactly the kind of flakiness that is miserable to debug.
 public actor SessionManager {
 
+    typealias SessionFactory =
+        @Sendable (_ id: String, _ slot: DisplayPool.Slot) throws -> AgentSession
+
     private var sessions: [String: AgentSession] = [:]
     private var counter = 0
     private let pool: DisplayPool
+    private let sessionFactory: SessionFactory
+    private let daemonInstanceID: UUID
+    private let reclamationPolicy: SessionReclamationPolicy
+    private let successfulMutationHook: @Sendable () -> Void
     /// Actor isolation does not serialize across `await`; this gate deliberately does. It is
     /// process-wide rather than per-session because display allocation, user input routing, and
     /// shutdown all mutate shared host resources, so ordering only same-session commands would
     /// still allow cross-session lifecycle races.
-    private let operationGate = SessionOperationGate()
+    private let operationGate: SessionOperationGate
     private var isShuttingDown = false
     private var idleDisplayRetirement: Task<Void, Never>?
     private let idleDisplayGraceNanoseconds: UInt64 = 15_000_000_000
@@ -26,6 +33,30 @@ public actor SessionManager {
 
     public init(pool: DisplayPool = DisplayPool(), runJanitor: Bool = true) {
         self.pool = pool
+        self.sessionFactory = { AgentSession(id: $0, slot: $1) }
+        self.operationGate = SessionOperationGate()
+        self.daemonInstanceID = UUID()
+        self.reclamationPolicy = SessionReclamationPolicy()
+        self.successfulMutationHook = {}
+        guard runJanitor else { return }
+        Task { [weak self] in await self?.startJanitor() }
+    }
+
+    init(
+        pool: DisplayPool,
+        runJanitor: Bool,
+        operationGate: SessionOperationGate = SessionOperationGate(),
+        daemonInstanceID: UUID = UUID(),
+        reclamationPolicy: SessionReclamationPolicy = SessionReclamationPolicy(),
+        successfulMutationHook: @escaping @Sendable () -> Void = {},
+        sessionFactory: @escaping SessionFactory
+    ) {
+        self.pool = pool
+        self.sessionFactory = sessionFactory
+        self.operationGate = operationGate
+        self.daemonInstanceID = daemonInstanceID
+        self.reclamationPolicy = reclamationPolicy
+        self.successfulMutationHook = successfulMutationHook
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
@@ -49,7 +80,7 @@ public actor SessionManager {
                     return
                 }
                 guard let self else { return }
-                await self.runJanitorPass()
+                _ = try? await self.runJanitorPass()
             }
         }
     }
@@ -57,19 +88,32 @@ public actor SessionManager {
     /// One pass over every session. Exposed so a test can drive the janitor deterministically
     /// instead of sleeping on a timer.
     @discardableResult
-    public func runJanitorPass() async -> Int {
-        let commandLease = await operationGate.enter()
+    public func runJanitorPass() async throws -> Int {
+        let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
         guard !isShuttingDown else { return 0 }
         return runJanitorPassNow()
     }
 
     private func runJanitorPassNow() -> Int {
-        sessions.values.reduce(0) { count, session in
-            guard let lifecycleLease = try? session.beginOperation() else { return count }
-            defer { lifecycleLease.finish() }
-            return count + session.runJanitorPass()
+        var reapedApps = 0
+        for id in sessions.keys.sorted() {
+            guard let session = sessions[id] else { continue }
+            if session.controllerSnapshot()?.reclaimable == true {
+                // This is resource reclamation, not controller takeover. The existing teardown
+                // path quits only SpaceO-launched apps and evacuates/releases adopted apps.
+                _ = try? destroyNow(id, quitApps: true)
+                continue
+            }
+            do {
+                let lifecycleLease = try session.beginOperation()
+                defer { lifecycleLease.finish() }
+                reapedApps += session.runJanitorPass()
+            } catch {
+                continue
+            }
         }
+        return reapedApps
     }
 
     public func stopJanitor() {
@@ -92,15 +136,24 @@ public actor SessionManager {
 
     @discardableResult
     public func create(name: String?) async throws -> AgentSession {
-        let commandLease = await operationGate.enter()
+        let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
         guard !isShuttingDown else {
             throw SpaceOError.badRequest("the daemon is shutting down")
         }
-        return try createNow(name: name)
+        return try createNow(
+            name: name,
+            controllerOwner: nil,
+            controllerLeaseID: nil,
+            controllerTTLSeconds: nil)
     }
 
-    private func createNow(name: String?) throws -> AgentSession {
+    private func createNow(
+        name: String?,
+        controllerOwner: DurableSessionOwner?,
+        controllerLeaseID: UUID?,
+        controllerTTLSeconds: TimeInterval?
+    ) throws -> AgentSession {
         let namedID: String?
         if let name {
             let trimmed = try Self.canonicalSessionID(name)
@@ -128,13 +181,54 @@ public actor SessionManager {
             id = candidateID
             nextCounter = candidateNumber
         }
+        let owner = try validatedControllerOwner(controllerOwner, sessionID: id)
+        let duration = try reclamationPolicy.duration(requested: controllerTTLSeconds)
         // The pool reuses a display that still has a free tile, and only builds a new one
         // when they are all full.
         let slot = try pool.allocate()
-        let session = AgentSession(id: id, slot: slot)
+        let session: AgentSession
+        do {
+            session = try sessionFactory(id, slot)
+        } catch {
+            _ = pool.release(slot)
+            throw error
+        }
+        session.configureController(
+            owner: owner,
+            daemonInstanceID: daemonInstanceID,
+            leaseID: controllerLeaseID ?? UUID(),
+            duration: duration,
+            policy: reclamationPolicy)
         sessions[id] = session
         if let nextCounter { counter = nextCounter }
         return session
+    }
+
+    private func validatedControllerOwner(
+        _ requested: DurableSessionOwner?,
+        sessionID: String
+    ) throws -> DurableSessionOwner {
+        let owner = requested ?? DurableSessionOwner(
+            id: "legacy-\(sessionID)",
+            kind: .other,
+            label: "legacy local controller",
+            processIdentity: ProcessIdentity.current(of: getpid()))
+        let id = owner.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = owner.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, id == owner.id,
+              !label.isEmpty, label == owner.label,
+              id.utf8.count <= 256, label.utf8.count <= 256,
+              id.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }),
+              label.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }) else {
+            throw SpaceOError.badRequest(
+                "controller owner id and label must be trimmed, non-empty, "
+                    + "control-free, and at most 256 UTF-8 bytes")
+        }
+        return owner
     }
 
     static func canonicalSessionID(_ name: String) throws -> String {
@@ -171,41 +265,86 @@ public actor SessionManager {
         return only
     }
 
-    public func destroy(_ id: String, quitApps: Bool) async throws {
-        let commandLease = await operationGate.enter()
-        defer { commandLease.finish() }
-        try destroyNow(id, quitApps: quitApps)
+    private func resolveForMutation(
+        _ id: String?,
+        leaseID: UUID?
+    ) throws -> AgentSession {
+        let session = try resolve(id)
+        try session.authorizeControllerMutation(leaseID: leaseID)
+        return session
     }
 
-    private func destroyNow(_ id: String, quitApps: Bool) throws {
+    private func renewAfterSuccessfulMutation(
+        _ session: AgentSession,
+        leaseID: UUID?
+    ) throws {
+        successfulMutationHook()
+        try session.recordSuccessfulControllerMutation(leaseID: leaseID)
+    }
+
+    public func destroy(_ id: String, quitApps: Bool) async throws -> TeardownReport {
+        let commandLease = try await operationGate.enter()
+        defer { commandLease.finish() }
+        let report = try destroyNow(id, quitApps: quitApps)
+        guard report.isComplete else {
+            throw SpaceOError.teardownIncomplete(report)
+        }
+        return report
+    }
+
+    private func destroyNow(_ id: String, quitApps: Bool) throws -> TeardownReport {
         let canonical = try Self.canonicalSessionID(id)
-        guard let session = sessions.removeValue(forKey: canonical) else {
+        guard let session = sessions[canonical] else {
             throw SpaceOError.unknownSession(canonical)
         }
-        session.destroy(quitApps: quitApps)      // empties the tile
-        pool.release(session.slot, retainEmpty: true)
+        var report = session.destroy(quitApps: quitApps)
+        guard report.isComplete else {
+            report.stillAttachedDisplayIDs = Array(
+                Set(report.stillAttachedDisplayIDs + [session.stage.displayID])
+            ).sorted()
+            return report
+        }
+
+        _ = pool.release(session.slot, retainEmpty: true)
+        sessions.removeValue(forKey: canonical)
         scheduleIdleDisplayRetirement()
+        return report
     }
 
     @discardableResult
-    public func destroyAll(quitApps: Bool) async -> [CGDirectDisplayID] {
-        let commandLease = await operationGate.enter()
+    public func destroyAll(quitApps: Bool) async throws -> TeardownReport {
+        let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
         return destroyAllNow(quitApps: quitApps)
     }
 
-    private func destroyAllNow(quitApps: Bool) -> [CGDirectDisplayID] {
+    private func destroyAllNow(quitApps: Bool) -> TeardownReport {
         idleDisplayRetirement?.cancel()
         idleDisplayRetirement = nil
         stopJanitor()
-        let destroying = Array(sessions.values)
-        sessions.removeAll()
-        for session in destroying {
-            session.destroy(quitApps: quitApps)
+        var report = TeardownReport()
+        for id in sessions.keys.sorted() {
+            guard let session = sessions[id] else { continue }
+            var sessionReport = session.destroy(quitApps: quitApps)
+            if sessionReport.isComplete {
+                _ = pool.release(session.slot, retainEmpty: true)
+                sessions.removeValue(forKey: id)
+            } else {
+                sessionReport.stillAttachedDisplayIDs = Array(
+                    Set(sessionReport.stillAttachedDisplayIDs + [session.stage.displayID])
+                ).sorted()
+            }
+            report.merge(sessionReport)
         }
-        let failed = pool.releaseAll()
-        displayLifecycleFailures.formUnion(failed)
-        return failed
+        // Sessions with surviving processes still own their slots. Only empty displays may be
+        // retired; direct `DisplayPool.releaseAll()` deliberately has stronger force-release
+        // semantics for callers that have already destroyed their own session objects.
+        let attachedDisplayIDs = pool.retireEmptyDisplays()
+        report.stillAttachedDisplayIDs = Array(
+            Set(report.stillAttachedDisplayIDs).union(attachedDisplayIDs)
+        ).sorted()
+        displayLifecycleFailures.formUnion(attachedDisplayIDs)
+        return report
     }
 
     private func scheduleIdleDisplayRetirement() {
@@ -239,8 +378,8 @@ public actor SessionManager {
         return displayLifecycleFailures
     }
 
-    public func infos() async -> [SessionInfo] {
-        let commandLease = await operationGate.enter()
+    public func infos() async throws -> [SessionInfo] {
+        let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
         return infosNow()
     }
@@ -248,8 +387,10 @@ public actor SessionManager {
     private func infosNow() -> [SessionInfo] {
         sessions.values
             .sorted { $0.createdAt < $1.createdAt }
-            .compactMap { session in
-                guard let lifecycleLease = try? session.beginOperation() else { return nil }
+            .map { session in
+                guard let lifecycleLease = try? session.beginOperation() else {
+                    return SessionInfo(session)
+                }
                 defer { lifecycleLease.finish() }
                 session.refreshWindows()
                 return SessionInfo(session)
@@ -259,9 +400,9 @@ public actor SessionManager {
     // MARK: - Command dispatch
 
     public func handle(_ request: Request) async -> Response {
-        let commandLease = await operationGate.enter()
-        defer { commandLease.finish() }
         do {
+            let commandLease = try await operationGate.enter()
+            defer { commandLease.finish() }
             if isShuttingDown, request.cmd != "daemon.stop" {
                 throw SpaceOError.badRequest("the daemon is shutting down")
             }
@@ -284,16 +425,21 @@ public actor SessionManager {
 
         case "daemon.stop":
             isShuttingDown = true
-            let failed = destroyAllNow(quitApps: true)
-            let suffix = failed.isEmpty
-                ? ""
-                : "; display id(s) \(failed.sorted()) are still detaching"
-            return .success("stopping SpaceO daemon\(suffix)")
+            let report = destroyAllNow(quitApps: true)
+            guard report.isComplete else {
+                throw SpaceOError.teardownIncomplete(report)
+            }
+            return .success("stopping SpaceO daemon")
 
         case "session.create":
-            let session = try createNow(name: request.session)
+            let session = try createNow(
+                name: request.session,
+                controllerOwner: request.controllerOwner,
+                controllerLeaseID: request.controllerLeaseID,
+                controllerTTLSeconds: request.controllerTTLSeconds)
             var response = Response(ok: true)
             response.session = SessionInfo(session)
+            response.controllerLeaseID = session.controllerSnapshot()?.lease.leaseID
             response.message = session.hasExclusiveDisplay
                 ? "created '\(session.id)' with exclusive display \(session.stage.displayID)"
                 : "created '\(session.id)' on display \(session.stage.displayID), tile \(session.slot.index + 1)/\(session.slot.capacity)"
@@ -304,17 +450,35 @@ public actor SessionManager {
             response.sessions = infosNow()
             return response
 
+        case "session.heartbeat":
+            guard let leaseID = request.controllerLeaseID else {
+                throw SpaceOError.badRequest(
+                    "session.heartbeat needs controllerLeaseID")
+            }
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
+            _ = try session.heartbeatController(leaseID: leaseID)
+            var response = Response(ok: true)
+            response.session = SessionInfo(session)
+            response.controllerLeaseID = leaseID
+            response.message = "renewed controller lease for '\(session.id)'"
+            return response
+
         case "session.destroy":
             if request.session == nil && (request.full ?? false) {
-                let failed = destroyAllNow(quitApps: request.quitApps ?? true)
-                let suffix = failed.isEmpty
-                    ? ""
-                    : "; display id(s) \(failed.sorted()) are still detaching"
-                return .success("destroyed all sessions\(suffix)")
+                let report = destroyAllNow(quitApps: request.quitApps ?? true)
+                guard report.isComplete else {
+                    throw SpaceOError.teardownIncomplete(report)
+                }
+                return .success("destroyed all sessions")
             }
             let session = try resolve(request.session)
             let id = session.id
-            try destroyNow(id, quitApps: request.quitApps ?? true)
+            let report = try destroyNow(id, quitApps: request.quitApps ?? true)
+            guard report.isComplete else {
+                throw SpaceOError.teardownIncomplete(report)
+            }
             return .success("destroyed '\(id)'")
 
         case "run":
@@ -335,7 +499,9 @@ public actor SessionManager {
                 throw SpaceOError.badRequest(
                     "every file path must be at most 4096 characters and 16384 UTF-8 bytes")
             }
-            let session = try resolve(request.session)
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             guard let appURL = AppLauncher.resolve(trimmedAppName) else {
@@ -350,7 +516,6 @@ public actor SessionManager {
             let after = IsolationSnapshot.capture()
 
             var response = Response(ok: true)
-            response.session = SessionInfo(session)
             response.isolation = after.report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
             response.ambient = after.ambientChanges(from: before)
@@ -360,16 +525,27 @@ public actor SessionManager {
             }
             response.message = message
             failOnIsolationBreach(&response, action: "launch")
+            if response.ok {
+                try renewAfterSuccessfulMutation(
+                    session,
+                    leaseID: request.controllerLeaseID)
+                response.session = SessionInfo(session)
+            }
             return response
 
         case "adopt":
             guard let pid = request.pid, pid > 0 else {
                 throw SpaceOError.badRequest("adopt needs a positive --pid")
             }
-            let session = try resolve(request.session)
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             let app = try session.adopt(pid: pid)
+            try renewAfterSuccessfulMutation(
+                session,
+                leaseID: request.controllerLeaseID)
             var response = Response(ok: true)
             response.session = SessionInfo(session)
             response.message = "adopted \(app.name) (pid \(pid))"
@@ -456,11 +632,14 @@ public actor SessionManager {
                 throw SpaceOError.badRequest(
                     "element reference must be at most 32 characters and 128 UTF-8 bytes")
             }
-            let session = try resolve(request.session)
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             let before = IsolationSnapshot.capture()
             let window = try session.resolveWindow(request.window)
+            defer { session.invalidateAXSnapshot() }
             let button: MouseButton = (request.button == "right") ? .right : .left
 
             if let reference = request.element, reference.hasPrefix("w") {
@@ -485,7 +664,7 @@ public actor SessionManager {
                 guard index >= 0 else {
                     throw SpaceOError.badRequest("element indices cannot be negative")
                 }
-                let element = try session.element(at: index)
+                let element = try session.element(at: index, for: window)
                 try InputRouter.press(element)
             } else if let x = request.x, let y = request.y {
                 if let bridge = session.webBridge(for: window.pid) {
@@ -510,6 +689,11 @@ public actor SessionManager {
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
             failOnIsolationBreach(&response, action: "click")
+            if response.ok {
+                try renewAfterSuccessfulMutation(
+                    session,
+                    leaseID: request.controllerLeaseID)
+            }
             return response
 
         case "type":
@@ -521,10 +705,13 @@ public actor SessionManager {
                     + "and 32000 UTF-8 bytes)")
             }
             if request.web != true { try InputRouter.validateTyping(text) }
-            let session = try resolve(request.session)
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             let window = try session.resolveWindow(request.window)
+            defer { session.invalidateAXSnapshot() }
             let before = IsolationSnapshot.capture()
             if request.web == true {
                 if let bridge = session.webBridge(for: window.pid) {
@@ -544,6 +731,11 @@ public actor SessionManager {
             response.ambient = now.ambientChanges(from: before)
             response.value = AXTree.focusedValue(pid: window.pid)
             failOnIsolationBreach(&response, action: "typing")
+            if response.ok {
+                try renewAfterSuccessfulMutation(
+                    session,
+                    leaseID: request.controllerLeaseID)
+            }
             return response
 
         case "key":
@@ -552,10 +744,13 @@ public actor SessionManager {
                 throw SpaceOError.badRequest(
                     "key combo must be 1 through 64 characters and at most 256 UTF-8 bytes")
             }
-            let session = try resolve(request.session)
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             let window = try session.resolveWindow(request.window)
+            defer { session.invalidateAXSnapshot() }
             // Parse once before choosing native versus DevTools delivery. In particular this
             // keeps Command-C/X recognition identical on both guarded production routes.
             let parsedCombo = try KeyCombo.parse(combo)
@@ -577,6 +772,11 @@ public actor SessionManager {
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
             failOnIsolationBreach(&response, action: "key press")
+            if response.ok {
+                try renewAfterSuccessfulMutation(
+                    session,
+                    leaseID: request.controllerLeaseID)
+            }
             return response
 
         case "screenshot":
@@ -647,10 +847,15 @@ public actor SessionManager {
             return response
 
         case "repark":
-            let session = try resolve(request.session)
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             let moved = session.reparkEscapedWindows()
+            try renewAfterSuccessfulMutation(
+                session,
+                leaseID: request.controllerLeaseID)
             return .success("re-parked \(moved) window(s)")
 
         default:

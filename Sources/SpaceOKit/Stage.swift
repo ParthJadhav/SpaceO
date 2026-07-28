@@ -2,6 +2,15 @@ import Foundation
 import CoreGraphics
 import SpaceOPrivate
 
+protocol StageDisplayBacking: AnyObject {
+    var displayID: CGDirectDisplayID { get }
+    var valid: Bool { get }
+    var bounds: CGRect { get }
+    func invalidate()
+}
+
+extension SPOVirtualDisplay: StageDisplayBacking {}
+
 /// Serializes display reconfiguration.
 ///
 /// Attaching and retiring several virtual framebuffers in quick succession can overrun the
@@ -41,18 +50,25 @@ public final class Stage: @unchecked Sendable {
     /// Teardown owns the display reference after `Stage.deinit` begins. The wrapper makes that
     /// one-way transfer explicit: the serial lifecycle queue is its only remaining accessor.
     private final class PendingInvalidation: @unchecked Sendable {
-        let display: SPOVirtualDisplay
+        let display: any StageDisplayBacking
         let displayID: CGDirectDisplayID
+        let onlineDisplayIDs: @Sendable () -> [CGDirectDisplayID]
 
-        init(display: SPOVirtualDisplay, displayID: CGDirectDisplayID) {
+        init(
+            display: any StageDisplayBacking,
+            displayID: CGDirectDisplayID,
+            onlineDisplayIDs: @escaping @Sendable () -> [CGDirectDisplayID]
+        ) {
             self.display = display
             self.displayID = displayID
+            self.onlineDisplayIDs = onlineDisplayIDs
         }
     }
 
     private static let lifecycle = DisplayLifecycleCoordinator()
     private static let ownership = OwnershipState()
-    private let backing: SPOVirtualDisplay
+    private let backing: any StageDisplayBacking
+    private let onlineDisplayIDsProvider: @Sendable () -> [CGDirectDisplayID]
     private let stateLock = NSLock()
     private var didInvalidate = false
     private var invalidatedDisplayID: CGDirectDisplayID = 0
@@ -73,6 +89,12 @@ public final class Stage: @unchecked Sendable {
     public init(name: String, width: UInt32 = 1920, height: UInt32 = 1080, hiDPI: Bool = true) throws {
         guard width > 0, height > 0 else {
             throw SpaceOError.badRequest("display width and height must be positive")
+        }
+        guard SPOCapabilityAvailable(.virtualDisplay) else {
+            throw SpaceOError.stageCreationFailed(
+                SPOCapabilityUnavailableReason(.virtualDisplay)
+                    ?? "virtual-display is unavailable on this host"
+            )
         }
         let display: SPOVirtualDisplay = try Self.lifecycle.perform {
             guard let display = SPOVirtualDisplay(name: name, width: width,
@@ -97,8 +119,21 @@ public final class Stage: @unchecked Sendable {
             return display
         }
         self.backing = display
+        self.onlineDisplayIDsProvider = { Self.onlineDisplayIDs() }
         self.name = name
         self.requestedSize = CGSize(width: Int(width), height: Int(height))
+    }
+
+    init(
+        testingBacking: any StageDisplayBacking,
+        name: String = "test display",
+        onlineDisplayIDs: @escaping @Sendable () -> [CGDirectDisplayID]
+    ) {
+        backing = testingBacking
+        onlineDisplayIDsProvider = onlineDisplayIDs
+        self.name = name
+        requestedSize = testingBacking.bounds.size
+        Self.recordOwned(testingBacking.displayID)
     }
 
     /// Managed Space ids belonging to this display. A healthy stage owns exactly one, and it is
@@ -132,26 +167,38 @@ public final class Stage: @unchecked Sendable {
     public func invalidate(waitingForRemoval timeout: TimeInterval = 10.0) -> Bool {
         let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 10
         return stateLock.withLock {
+            let id: CGDirectDisplayID
             if didInvalidate {
-                return Stage.displayIsRetired(
-                    invalidatedDisplayID, onlineDisplayIDs: Stage.onlineDisplayIDs())
+                id = invalidatedDisplayID
+            } else {
+                didInvalidate = true
+                id = backing.displayID
+                invalidatedDisplayID = id
             }
-            didInvalidate = true
-            let id = backing.displayID
-            invalidatedDisplayID = id
             return Self.lifecycle.perform {
-                defer { Self.recordReleased(id) }
+                // Repeating invalidation is intentional: a retained failed teardown must be able
+                // to ask the backing object to drop its display again on the next cleanup pass.
                 backing.invalidate()
-                guard id != 0 else { return true }
+                guard id != 0 else {
+                    Self.recordReleased(id)
+                    return true
+                }
                 guard safeTimeout > 0 else {
-                    return Self.displayIsRetired(id, onlineDisplayIDs: Self.onlineDisplayIDs())
+                    let retired = Self.displayIsRetired(
+                        id,
+                        onlineDisplayIDs: onlineDisplayIDsProvider())
+                    if retired { Self.recordReleased(id) }
+                    return retired
                 }
 
                 // The display's lifecycle runs on a private queue inside the shim, so a plain
                 // sleep is sufficient here — no main run loop required from the caller.
                 let deadline = Date().addingTimeInterval(safeTimeout)
                 while Date() < deadline {
-                    if Self.displayIsRetired(id, onlineDisplayIDs: Self.onlineDisplayIDs()) {
+                    if Self.displayIsRetired(
+                        id,
+                        onlineDisplayIDs: onlineDisplayIDsProvider()) {
+                        Self.recordReleased(id)
                         return true
                     }
                     usleep(50_000)
@@ -266,7 +313,10 @@ public final class Stage: @unchecked Sendable {
         let pending = stateLock.withLock { () -> PendingInvalidation? in
             guard !didInvalidate else { return nil }
             didInvalidate = true
-            return PendingInvalidation(display: backing, displayID: backing.displayID)
+            return PendingInvalidation(
+                display: backing,
+                displayID: backing.displayID,
+                onlineDisplayIDs: onlineDisplayIDsProvider)
         }
         guard let pending else { return }
         // Do not block deinit, but still serialize the fallback teardown with every other
@@ -277,10 +327,14 @@ public final class Stage: @unchecked Sendable {
             while Date() < deadline,
                   !Stage.displayIsRetired(
                     pending.displayID,
-                    onlineDisplayIDs: Stage.onlineDisplayIDs()) {
+                    onlineDisplayIDs: pending.onlineDisplayIDs()) {
                 usleep(50_000)
             }
-            Stage.recordReleased(pending.displayID)
+            if Stage.displayIsRetired(
+                pending.displayID,
+                onlineDisplayIDs: pending.onlineDisplayIDs()) {
+                Stage.recordReleased(pending.displayID)
+            }
         }
     }
 }

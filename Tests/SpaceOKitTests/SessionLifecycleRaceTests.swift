@@ -108,12 +108,16 @@ final class SessionLifecycleRaceTests: XCTestCase {
     func testManagerGateDoesNotLetDestroyOvertakeLaunch() async {
         let gate = SessionOperationGate()
         let events = EventLog()
-        let launch = await gate.enter()
+        let launch = try! await gate.enter()
 
         let destroy = Task.detached {
-            let lease = await gate.enter()
-            events.append("destroy")
-            lease.finish()
+            do {
+                let lease = try await gate.enter()
+                events.append("destroy")
+                lease.finish()
+            } catch {
+                XCTFail("unexpected gate failure: \(error)")
+            }
         }
 
         while gate.pendingCount == 0 { await Task.yield() }
@@ -124,6 +128,111 @@ final class SessionLifecycleRaceTests: XCTestCase {
         await destroy.value
 
         XCTAssertEqual(events.snapshot, ["launch-finished", "destroy"])
+    }
+
+    func testCancelledWaiterIsRemovedWithoutWaitingForStalledHolder() async throws {
+        let gate = SessionOperationGate()
+        let events = EventLog()
+        let holder = try await gate.enter()
+        let waiter = Task {
+            do {
+                let lease = try await gate.enter()
+                events.append("cancelled waiter mutated state")
+                lease.finish()
+                return false
+            } catch is CancellationError {
+                return true
+            } catch {
+                return false
+            }
+        }
+
+        while gate.pendingCount != 1 { await Task.yield() }
+        waiter.cancel()
+        let observedCancellation = await waiter.value
+
+        XCTAssertTrue(observedCancellation)
+        XCTAssertEqual(gate.pendingCount, 0,
+                       "cancellation must unlink and resume a waiter immediately")
+        XCTAssertTrue(events.snapshot.isEmpty,
+                      "a cancelled queued command must never receive mutation authority")
+
+        // The original holder is deliberately still alive. Cancellation must not depend on it
+        // finishing, and the gate must remain usable once it eventually does.
+        holder.finish()
+        let probe = try await gate.enter()
+        probe.finish()
+    }
+
+    func testCancellationPreservesFIFOAmongRemainingLiveWaiters() async throws {
+        let gate = SessionOperationGate()
+        let events = EventLog()
+        let holder = try await gate.enter()
+
+        let first = Task {
+            let lease = try await gate.enter()
+            events.append("first")
+            lease.finish()
+        }
+        while gate.pendingCount != 1 { await Task.yield() }
+
+        let cancelled = Task {
+            let lease = try await gate.enter()
+            events.append("cancelled")
+            lease.finish()
+        }
+        while gate.pendingCount != 2 { await Task.yield() }
+
+        let third = Task {
+            let lease = try await gate.enter()
+            events.append("third")
+            lease.finish()
+        }
+        while gate.pendingCount != 3 { await Task.yield() }
+
+        cancelled.cancel()
+        do {
+            try await cancelled.value
+            XCTFail("cancelled waiter unexpectedly acquired the gate")
+        } catch is CancellationError {
+            // Expected.
+        }
+        XCTAssertEqual(gate.pendingCount, 2)
+
+        holder.finish()
+        try await first.value
+        try await third.value
+
+        XCTAssertEqual(events.snapshot, ["first", "third"])
+        XCTAssertEqual(gate.pendingCount, 0)
+    }
+
+    func testCancelledManagerCommandCannotMutateAfterGateHandoff() async throws {
+        let gate = SessionOperationGate()
+        let holder = try await gate.enter()
+        let manager = SessionManager(
+            pool: DisplayPool(),
+            runJanitor: false,
+            operationGate: gate,
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+
+        let command = Task {
+            await manager.handle(Request(cmd: "session.create"))
+        }
+        while gate.pendingCount != 1 { await Task.yield() }
+        command.cancel()
+        let response = await command.value
+
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(gate.pendingCount, 0)
+        let sessionCount = await manager.count
+        let displayCount = await manager.displayCount
+        XCTAssertEqual(sessionCount, 0)
+        XCTAssertEqual(displayCount, 0)
+
+        holder.finish()
+        let ping = await manager.handle(Request(cmd: "ping"))
+        XCTAssertTrue(ping.ok)
     }
 
     func testManagerRejectsCommandsAfterShutdownCompletes() async {

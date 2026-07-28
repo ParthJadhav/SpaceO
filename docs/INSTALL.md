@@ -7,8 +7,9 @@ signed executables:
 - `SpaceO Viewer.app`, the optional graphical console
 
 The disk image and Viewer are notarized and stapled. Each release also includes a SHA-256
-sidecar named like the disk image. Do not install an artifact whose checksum, staple, signature,
-or Gatekeeper assessment fails.
+sidecar and a detached Developer ID signature over that sidecar. Official SpaceO releases are
+signed by Team ID `75LRT8TRQY`. Do not install an artifact whose publisher, checksum, staple,
+signature, or Gatekeeper assessment fails.
 
 SpaceO uses private macOS behavior and its deployment target is not a compatibility guarantee.
 Review “Requirements and support status” in the project README and run `spaceo doctor` on every
@@ -16,8 +17,19 @@ intended host before creating a session.
 
 ## Verify and install
 
-Download both files from the same release, then verify the checksum from the directory containing
-them:
+Download the `.dmg`, `.sha256`, and `.sha256.sig` files from the same release. Authenticate the
+checksum as an official SpaceO publisher artifact before using it:
+
+```bash
+codesign --verify \
+  --detached SpaceO-1.0.0-macOS-arm64.sha256.sig \
+  --strict --verbose=2 \
+  -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.release-checksum"' \
+  SpaceO-1.0.0-macOS-arm64.sha256
+```
+
+Only after that command succeeds, verify the disk image from the directory containing all three
+files:
 
 ```bash
 shasum -a 256 -c SpaceO-1.0.0-macOS-arm64.sha256
@@ -36,16 +48,22 @@ Mount it at a private temporary path and verify both payload signatures:
 SPACEO_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-install.XXXXXX")"
 hdiutil attach SpaceO-1.0.0-macOS-arm64.dmg \
   -readonly -nobrowse -mountpoint "$SPACEO_MOUNT"
-codesign --verify --strict --verbose=2 "$SPACEO_MOUNT/spaceo"
-codesign --verify --deep --strict --verbose=2 "$SPACEO_MOUNT/SpaceO Viewer.app"
+codesign --verify --strict --verbose=2 \
+  -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.cli"' \
+  "$SPACEO_MOUNT/spaceo"
+codesign --verify --deep --strict --verbose=2 \
+  -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.viewer"' \
+  "$SPACEO_MOUNT/SpaceO Viewer.app"
 codesign --display --verbose=4 "$SPACEO_MOUNT/spaceo"
 codesign --display --verbose=4 "$SPACEO_MOUNT/SpaceO Viewer.app"
 spctl --assess --type execute --verbose=4 "$SPACEO_MOUNT/spaceo"
 spctl --assess --type execute --verbose=4 "$SPACEO_MOUNT/SpaceO Viewer.app"
 ```
 
-Both `codesign --display` results must name a `Developer ID Application` authority, a Team
-Identifier, and a `Timestamp`. The release pipeline checks these fields automatically.
+Both `codesign --display` results must name a `Developer ID Application` authority, the exact
+`TeamIdentifier=75LRT8TRQY`, and a `Timestamp`. Merely seeing some Developer ID authority is not
+publisher authentication. The release pipeline applies these designated requirements before it
+executes the mounted CLI.
 
 Install without administrator privileges:
 
@@ -67,8 +85,8 @@ Recording to `SpaceO Viewer.app`. SpaceO never requires SIP to be disabled.
 
 ## Upgrade
 
-Keep the previous release disk image and checksum until the new version has passed `spaceo
-doctor` and your normal workflow.
+Keep the previous release disk image, checksum, and detached checksum signature until the new
+version has passed `spaceo doctor` and your normal workflow.
 
 1. Stop the running daemon with the currently installed binary:
 
@@ -138,7 +156,7 @@ A public package requires an explicitly selected `Developer ID Application` iden
 deliberate notarization credentials. Choose either an existing notarytool keychain profile:
 
 ```bash
-SPACEO_CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+SPACEO_CODESIGN_IDENTITY='Developer ID Application: Parth Jadhav (75LRT8TRQY)' \
 SPACEO_NOTARY_PROFILE='your-existing-profile' \
 make release-preflight
 ```
@@ -146,7 +164,7 @@ make release-preflight
 or an App Store Connect API key:
 
 ```bash
-SPACEO_CODESIGN_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
+SPACEO_CODESIGN_IDENTITY='Developer ID Application: Parth Jadhav (75LRT8TRQY)' \
 SPACEO_NOTARY_KEY='/secure/path/AuthKey_KEYID.p8' \
 SPACEO_NOTARY_KEY_ID='KEYID' \
 SPACEO_NOTARY_ISSUER='ISSUER-UUID' \
@@ -154,8 +172,9 @@ make release-preflight
 ```
 
 The release script does not discover, create, or overwrite a notarytool keychain profile. It also
-does not fall back to ad-hoc or Apple Development signing. Missing, partial, mixed, invalid, or
-unreadable credential inputs stop preflight before the build.
+does not fall back to ad-hoc, Apple Development, or a different Developer ID team. Missing,
+partial, mixed, invalid, unreadable, or non-SpaceO credential inputs stop preflight before the
+build.
 
 Run `make release-package` with the same environment. The pipeline:
 
@@ -165,11 +184,13 @@ Run `make release-package` with the same environment. The pipeline:
 4. verifies both with `codesign --verify --strict`;
 5. notarizes and staples the Viewer;
 6. builds, notarizes, and staples the versioned disk image;
-7. verifies the checksum, stapled ticket, signatures, embedded versions, and Gatekeeper
-   assessments from a freshly mounted image.
+7. signs the checksum sidecar with the SpaceO publisher identity;
+8. authenticates that sidecar, then verifies the checksum, stapled ticket, exact publisher
+   signatures, embedded versions, and Gatekeeper assessments from a freshly mounted image.
 
-Artifacts are written under `.release/VERSION/`. `make verify-distribution ARTIFACT=...` repeats
-the final integrity and trust checks without publishing.
+Artifacts are written under `.release/VERSION/` as a DMG, checksum, and detached checksum
+signature. `make verify-distribution ARTIFACT=...` requires all three and repeats the final
+integrity and trust checks without publishing.
 
 The `Signed release` GitHub Actions workflow uses the same script. It requires these repository
 or protected-environment secrets:
@@ -183,5 +204,6 @@ or protected-environment secrets:
 
 The workflow imports credentials into an ephemeral keychain, removes the temporary key and
 certificate files on exit, and reaches the GitHub release publication step only after the full
-package verification succeeds. Tag pushes publish; a manual dispatch checks out and packages the
-explicit tag but only retains the verified workflow artifact.
+package verification succeeds. Tag pushes publish. A manual dispatch fully qualifies its input
+under `refs/tags/`, rejects branches and commits not contained in the default branch, packages the
+explicit tag, and only retains the verified workflow artifacts.

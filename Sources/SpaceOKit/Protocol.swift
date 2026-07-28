@@ -28,6 +28,12 @@ public struct Request: Codable, Sendable {
     public var output: String?
     public var quitApps: Bool?
     public var full: Bool?
+    /// Optional controller metadata for `session.create`.
+    public var controllerOwner: DurableSessionOwner?
+    /// Current lease credential for `session.heartbeat` and owner-scoped mutations.
+    public var controllerLeaseID: UUID?
+    /// Requested create-time lease duration. The daemon bounds client values.
+    public var controllerTTLSeconds: Double?
 
     public init(cmd: String) { self.cmd = cmd }
 }
@@ -80,9 +86,17 @@ public struct SessionInfo: Codable, Sendable {
     public var apps: [AppInfo]
     public var windows: [WindowInfo]
     public var createdAt: Date
+    public var teardownPending: Bool
+    public var controllerOwner: DurableSessionOwner?
+    public var ageSeconds: Double?
+    public var lastActivityAt: Date?
+    public var leaseExpiresAt: Date?
+    public var abandoned: Bool?
+    public var reclaimable: Bool?
 
     public init(_ session: AgentSession) {
         let bounds = session.frame
+        let controller = session.controllerSnapshot()
         self.id = session.id
         self.displayID = session.stage.displayID
         self.x = bounds.origin.x
@@ -97,6 +111,13 @@ public struct SessionInfo: Codable, Sendable {
         self.apps = session.apps.map(AppInfo.init)
         self.windows = session.windows.map { WindowInfo($0, session: session) }
         self.createdAt = session.createdAt
+        self.teardownPending = session.teardownPending
+        self.controllerOwner = controller?.owner
+        self.ageSeconds = controller?.ageSeconds
+        self.lastActivityAt = controller?.lastActivityAt
+        self.leaseExpiresAt = controller?.lease.expiresAt
+        self.abandoned = controller?.abandoned
+        self.reclaimable = controller?.reclaimable
     }
 }
 
@@ -127,6 +148,94 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     }
 }
 
+/// A process that was still alive after every requested graceful and forced quit attempt.
+public struct SurvivingProcessInfo: Codable, Sendable, Equatable {
+    public var identity: ProcessIdentity
+    public var pid: Int32
+    public var name: String
+
+    public init(_ app: LaunchedApp) {
+        identity = app.identity
+        pid = app.pid
+        name = app.name
+    }
+}
+
+/// Structured outcome of a session or daemon teardown.
+///
+/// An incomplete report is deliberately retryable. Pending sessions and displays remain owned
+/// by the daemon until a later cleanup attempt proves their resources are gone.
+public struct TeardownReport: Codable, Sendable, Equatable {
+    public var survivingProcesses: [SurvivingProcessInfo]
+    public var stillAttachedDisplayIDs: [UInt32]
+    public var pendingSessionIDs: [String]
+
+    public init(
+        survivingProcesses: [SurvivingProcessInfo] = [],
+        stillAttachedDisplayIDs: [UInt32] = [],
+        pendingSessionIDs: [String] = []
+    ) {
+        self.survivingProcesses = survivingProcesses
+        self.stillAttachedDisplayIDs = Array(Set(stillAttachedDisplayIDs)).sorted()
+        self.pendingSessionIDs = Array(Set(pendingSessionIDs)).sorted()
+    }
+
+    public var isComplete: Bool {
+        survivingProcesses.isEmpty
+            && stillAttachedDisplayIDs.isEmpty
+            && pendingSessionIDs.isEmpty
+    }
+
+    public mutating func merge(_ other: TeardownReport) {
+        let processes = Dictionary(
+            (survivingProcesses + other.survivingProcesses).map {
+                ($0.identity, $0)
+            },
+            uniquingKeysWith: { current, _ in current })
+        survivingProcesses = processes.values.sorted {
+            ($0.pid, $0.identity.startedAtMicroseconds)
+                < ($1.pid, $1.identity.startedAtMicroseconds)
+        }
+        stillAttachedDisplayIDs = Array(
+            Set(stillAttachedDisplayIDs).union(other.stillAttachedDisplayIDs)
+        ).sorted()
+        pendingSessionIDs = Array(
+            Set(pendingSessionIDs).union(other.pendingSessionIDs)
+        ).sorted()
+    }
+
+    public var recoveryDescription: String {
+        var lines = ["teardown incomplete; SpaceO kept ownership so cleanup can be retried."]
+        if !survivingProcesses.isEmpty {
+            let listed = survivingProcesses.map {
+                "\($0.name) pid \($0.pid) "
+                    + "(started \($0.identity.startedAtMicroseconds))"
+            }.joined(separator: ", ")
+            lines.append("  Processes still alive: \(listed).")
+            lines.append(
+                "  Close any save dialogs or quit those exact processes, then retry cleanup.")
+        }
+        if !stillAttachedDisplayIDs.isEmpty {
+            lines.append(
+                "  Virtual displays still attached: "
+                    + stillAttachedDisplayIDs.map(String.init).joined(separator: ", ")
+                    + ".")
+        }
+        if pendingSessionIDs.isEmpty {
+            lines.append("  Retry with `spaceo session destroy --all` or `spaceo daemon stop`.")
+        } else {
+            lines.append(
+                "  Pending sessions: \(pendingSessionIDs.joined(separator: ", ")). "
+                    + "Retry their destroy command, `spaceo session destroy --all`, "
+                    + "or `spaceo daemon stop`.")
+        }
+        lines.append(
+            "  If a display remains after its processes exit, retry once more; "
+                + "run `spaceo doctor` before restarting the login session.")
+        return lines.joined(separator: "\n")
+    }
+}
+
 public struct Response: Codable, Sendable {
     public var ok: Bool
     public var error: String?
@@ -148,6 +257,10 @@ public struct Response: Codable, Sendable {
     public var usage: ResourceBudget.Usage?
     public var limits: ResourceLimitsReport?
     public var value: String?
+    /// Returned only to the controller by create/heartbeat; never included in SessionInfo lists.
+    public var controllerLeaseID: UUID?
+    /// Present on every incomplete teardown failure, including daemon stop.
+    public var teardown: TeardownReport?
 
     public init(ok: Bool) { self.ok = ok }
 
@@ -157,6 +270,9 @@ public struct Response: Codable, Sendable {
         // their description), so this single call renders deliberate messages for them and
         // still gives Cocoa errors their proper localized text. No per-type casts needed here.
         response.error = error.localizedDescription
+        if case .teardownIncomplete(let report) = error as? SpaceOError {
+            response.teardown = report
+        }
         return response
     }
 

@@ -104,20 +104,90 @@ struct ContentView: View {
             let frame = CGRect(x: session.x, y: session.y,
                                width: session.width, height: session.height)
             if let rect = mapping.viewRect(fromGlobalRect: frame) {
+                let presentation = ViewerSessionPresentation(session: session)
+                let color = sessionColor(for: presentation.badge)
                 ZStack(alignment: .topLeading) {
                     Rectangle()
-                        .strokeBorder(.cyan.opacity(0.6), lineWidth: 1)
-                    Text(session.id)
-                        .font(.caption2.monospaced())
-                        .padding(.horizontal, 4)
-                        .background(.cyan.opacity(0.6), in: RoundedRectangle(cornerRadius: 3))
-                        .foregroundStyle(.black)
-                        .padding(2)
+                        .strokeBorder(color.opacity(0.75), lineWidth: 1)
+                        .accessibilityHidden(true)
+                    sessionLabel(
+                        id: session.id,
+                        presentation: presentation,
+                        color: color
+                    )
+                    .padding(4)
                 }
                 .frame(width: rect.width, height: rect.height)
                 .offset(x: rect.minX, y: rect.minY)
+                .clipped()
                 .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    presentation.accessibilityDescription(sessionID: session.id)
+                )
             }
+        }
+    }
+
+    private func sessionLabel(
+        id: String,
+        presentation: ViewerSessionPresentation,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Text(id)
+                    .font(.caption2.monospaced().weight(.semibold))
+                    .lineLimit(1)
+                if let badge = presentation.badge {
+                    sessionBadge(badge, color: color)
+                }
+            }
+            if let ownerText = presentation.ownerText {
+                Label(ownerText, systemImage: "person.crop.circle")
+                    .lineLimit(1)
+            }
+            if let timingText = presentation.timingText {
+                Text(timingText)
+                    .lineLimit(1)
+            }
+        }
+        .font(.caption2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .foregroundStyle(.primary)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(color.opacity(0.45), lineWidth: 0.5)
+        }
+    }
+
+    private func sessionBadge(_ badge: ViewerSessionBadge, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: badge.systemImage)
+                .foregroundStyle(color)
+            Text(badge.title)
+                .foregroundStyle(.primary)
+        }
+        .font(.caption2.weight(.semibold))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.18), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(color.opacity(0.45), lineWidth: 0.5)
+        }
+        .fixedSize()
+    }
+
+    private func sessionColor(for badge: ViewerSessionBadge?) -> Color {
+        switch badge {
+        case .owned: .blue
+        case .abandoned: .orange
+        case .reclaimable: .green
+        case .cleanupPending: .red
+        case nil: .cyan
         }
     }
 
