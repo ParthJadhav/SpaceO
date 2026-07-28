@@ -923,7 +923,7 @@ final class UnitTests: XCTestCase {
 
         let object = try XCTUnwrap(
             JSONSerialization.jsonObject(with: result.standardOutput) as? [String: Any])
-        XCTAssertEqual(object["version"] as? String, "1.0.0")
+        XCTAssertEqual(object["version"] as? String, SpaceOVersion.current)
         XCTAssertEqual(object.count, 1, "version JSON should stay small and stable")
     }
 

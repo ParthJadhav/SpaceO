@@ -80,69 +80,30 @@ public enum AXTree {
         maxDepth: Int = 22,
         maxNodes: Int = 1500
     ) throws -> AXSnapshot {
-        guard (0...64).contains(maxDepth) else {
-            throw SpaceOError.badRequest("AX tree depth must be from 0 through 64")
-        }
-        guard (1...5_000).contains(maxNodes) else {
-            throw SpaceOError.badRequest("AX tree node limit must be from 1 through 5000")
-        }
+        try snapshot(
+            pid: pid,
+            window: window,
+            limits: AXTraversalLimits(maxDepth: maxDepth, maxNodes: maxNodes))
+    }
+
+    /// Walk with an explicit aggregate safety envelope.
+    public static func snapshot(
+        pid: pid_t,
+        window: WindowRef? = nil,
+        limits: AXTraversalLimits
+    ) throws -> AXSnapshot {
+        try limits.validate()
         guard AX.isTrusted else { throw SpaceOError.accessibilityDenied }
 
-        let app = AX.application(pid)
-        AX.setTimeout(app, seconds: 2.0)
-
-        let root: AXUIElement
-        if let window {
-            guard let element = WindowPlacement.element(for: window) else {
-                throw SpaceOError.windowNotFound("window \(window.windowID)")
-            }
-            root = element
-        } else {
-            root = app
-        }
-
-        var nodes: [AXNode] = []
-        var elements: [Int: AXUIElement] = [:]
-        var nextIndex = 0
-        var visited = 0
-
-        func walk(_ element: AXUIElement, depth: Int) {
-            guard visited < maxNodes, depth <= maxDepth else { return }
-            visited += 1
-
-            let role = AX.role(element)
-            let actions = AX.actions(element)
-            let label = AX.label(element)
-            let enabled = AX.bool(element, kAXEnabledAttribute as String) ?? true
-
-            // A node earns an index if it is a known interactive role, or if it advertises a
-            // press-like action regardless of role (custom controls do this constantly).
-            let pressable = actions.contains(kAXPressAction as String)
-                || actions.contains(kAXConfirmAction as String)
-            let interesting = actionableRoles.contains(role) || pressable
-
-            var assigned: Int?
-            if interesting && (!label.isEmpty || pressable) {
-                assigned = nextIndex
-                elements[nextIndex] = element
-                nextIndex += 1
-            }
-
-            nodes.append(AXNode(index: assigned,
-                                role: role,
-                                label: label,
-                                frame: AX.frame(element),
-                                actions: actions,
-                                depth: depth,
-                                enabled: enabled))
-
-            for child in AX.elements(element, kAXChildrenAttribute as String) {
-                walk(child, depth: depth + 1)
-            }
-        }
-
-        walk(root, depth: 0)
-        return AXSnapshot(pid: pid, nodes: nodes, elements: elements)
+        let provider = SystemAXTraversalProvider()
+        let budget = try AXTraversalBudget(
+            limits: limits,
+            now: { DispatchTime.now().uptimeNanoseconds },
+            isCancelled: { Task.isCancelled })
+        let root = try AXTraversal.root(
+            pid: pid, window: window, provider: provider, budget: budget)
+        let output = try AXTraversal.walk(root: root, provider: provider, budget: budget)
+        return AXSnapshot(pid: pid, nodes: output.nodes, elements: output.elements)
     }
 
     /// The element that currently has keyboard focus inside an app, if any.
@@ -165,25 +126,39 @@ public enum AXTree {
     /// window it currently considers focused. If the user (or another session) already had that
     /// app open, that is not necessarily our window, and a test built on it reports nonsense.
     public static func text(in window: WindowRef, maxDepth: Int = 12) -> String? {
-        guard maxDepth >= 0 else { return nil }
-        let boundedDepth = min(maxDepth, 64)
-        guard let root = WindowPlacement.element(for: window) else { return nil }
-        let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXStaticText", "AXSearchField"]
+        guard (0...64).contains(maxDepth) else { return nil }
+        return try? text(
+            in: window,
+            limits: AXTraversalLimits(
+                maxDepth: maxDepth,
+                maxNodes: 1_500,
+                timeout: 2,
+                maxAXCalls: 8_000,
+                maxAllocatedBytes: 4 * 1_024 * 1_024,
+                childPageSize: 32,
+                maxCallDuration: 0.25))
+    }
 
-        var found: String?
-        func walk(_ element: AXUIElement, depth: Int) {
-            guard found == nil, depth <= boundedDepth else { return }
-            if textRoles.contains(AX.role(element)),
-               let value = AX.string(element, kAXValueAttribute as String), !value.isEmpty {
-                found = value
-                return
-            }
-            for child in AX.elements(element, kAXChildrenAttribute as String) {
-                walk(child, depth: depth + 1)
-                if found != nil { return }
-            }
-        }
-        walk(root, depth: 0)
-        return found
+    /// Throwing text traversal for callers that need to distinguish "no text" from a provider
+    /// that exceeded the safety envelope.
+    public static func text(
+        in window: WindowRef,
+        limits: AXTraversalLimits
+    ) throws -> String? {
+        try limits.validate()
+        guard AX.isTrusted else { throw SpaceOError.accessibilityDenied }
+
+        let provider = SystemAXTraversalProvider()
+        let budget = try AXTraversalBudget(
+            limits: limits,
+            now: { DispatchTime.now().uptimeNanoseconds },
+            isCancelled: { Task.isCancelled })
+        let root = try AXTraversal.root(
+            pid: window.pid, window: window, provider: provider, budget: budget)
+        return try AXTraversal.firstText(
+            root: root,
+            provider: provider,
+            budget: budget,
+            roles: ["AXTextArea", "AXTextField", "AXStaticText", "AXSearchField"])
     }
 }

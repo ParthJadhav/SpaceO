@@ -170,7 +170,7 @@ public enum MirrorInput {
 
     // MARK: - Pointer
 
-    public enum PointerPhase: Equatable {
+    public enum PointerPhase: Equatable, Sendable {
         case move, down, drag, up
     }
 

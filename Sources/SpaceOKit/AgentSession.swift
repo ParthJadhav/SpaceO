@@ -35,6 +35,8 @@ public final class AgentSession {
     /// Watchers that pull late-appearing windows (dialogs, prompts, extra documents) into our
     /// tile. Without these an app's second window lands on the user's screen.
     private var watchers: [pid_t: WindowWatcher] = [:]
+    /// Prevent teardown from overtaking async work that is still registering resources.
+    private let lifecycle = SessionLifecycle()
 
     /// Whatever the user had frontmost when this session began.
     ///
@@ -49,13 +51,28 @@ public final class AgentSession {
         self.ownerAtCreation = NSWorkspace.shared.frontmostApplication
     }
 
+    /// A manager command holds this lease until its response is fully assembled. Direct destroy
+    /// calls then wait too, rather than racing the manager merely because they bypass its actor.
+    func beginOperation() throws -> SessionLifecycle.Lease {
+        guard let lease = lifecycle.beginOperation() else {
+            throw SpaceOError.unknownSession(id)
+        }
+        return lease
+    }
+
     // MARK: - Apps
 
     /// Set when a launched app grabbed focus and we had to hand it back to the user.
     public private(set) var lastLaunchRestoredFocus: String?
 
     @discardableResult
-    public func launch(app appURL: URL, opening files: [URL] = []) async throws -> LaunchedApp {
+    public nonisolated(nonsending) func launch(
+        app appURL: URL,
+        opening files: [URL] = []
+    ) async throws -> LaunchedApp {
+        let lifecycleLease = try beginOperation()
+        defer { lifecycleLease.finish() }
+
         // Some apps activate themselves regardless of `activates = false` — Electron shells are
         // the usual offenders, calling NSApp.activate on startup. We cannot stop them, but we
         // can hand the user's frontmost app straight back, turning a lasting theft into a blip.
@@ -342,6 +359,12 @@ public final class AgentSession {
     /// - Parameter force: after `timeout`, force-terminate apps *we started* that refuse to quit
     ///   (a modal save sheet is the usual reason). Apps we merely adopted are never force-killed.
     public func destroy(quitApps: Bool = true, force: Bool = true, timeout: TimeInterval = 6) {
+        lifecycle.destroy {
+            destroyResources(quitApps: quitApps, force: force, timeout: timeout)
+        }
+    }
+
+    private func destroyResources(quitApps: Bool, force: Bool, timeout: TimeInterval) {
         let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 6
         let ourPIDs = Set(apps.filter(\.startedByUs).map(\.pid))
 

@@ -12,6 +12,12 @@ public actor SessionManager {
     private var sessions: [String: AgentSession] = [:]
     private var counter = 0
     private let pool: DisplayPool
+    /// Actor isolation does not serialize across `await`; this gate deliberately does. It is
+    /// process-wide rather than per-session because display allocation, user input routing, and
+    /// shutdown all mutate shared host resources, so ordering only same-session commands would
+    /// still allow cross-session lifecycle races.
+    private let operationGate = SessionOperationGate()
+    private var isShuttingDown = false
     private var idleDisplayRetirement: Task<Void, Never>?
     private let idleDisplayGraceNanoseconds: UInt64 = 15_000_000_000
     private var displayLifecycleFailures: Set<CGDirectDisplayID> = []
@@ -51,8 +57,19 @@ public actor SessionManager {
     /// One pass over every session. Exposed so a test can drive the janitor deterministically
     /// instead of sleeping on a timer.
     @discardableResult
-    public func runJanitorPass() -> Int {
-        sessions.values.reduce(0) { $0 + $1.runJanitorPass() }
+    public func runJanitorPass() async -> Int {
+        let commandLease = await operationGate.enter()
+        defer { commandLease.finish() }
+        guard !isShuttingDown else { return 0 }
+        return runJanitorPassNow()
+    }
+
+    private func runJanitorPassNow() -> Int {
+        sessions.values.reduce(0) { count, session in
+            guard let lifecycleLease = try? session.beginOperation() else { return count }
+            defer { lifecycleLease.finish() }
+            return count + session.runJanitorPass()
+        }
     }
 
     public func stopJanitor() {
@@ -74,7 +91,16 @@ public actor SessionManager {
     // MARK: - Lifecycle
 
     @discardableResult
-    public func create(name: String?) throws -> AgentSession {
+    public func create(name: String?) async throws -> AgentSession {
+        let commandLease = await operationGate.enter()
+        defer { commandLease.finish() }
+        guard !isShuttingDown else {
+            throw SpaceOError.badRequest("the daemon is shutting down")
+        }
+        return try createNow(name: name)
+    }
+
+    private func createNow(name: String?) throws -> AgentSession {
         let namedID: String?
         if let name {
             let trimmed = try Self.canonicalSessionID(name)
@@ -145,7 +171,13 @@ public actor SessionManager {
         return only
     }
 
-    public func destroy(_ id: String, quitApps: Bool) throws {
+    public func destroy(_ id: String, quitApps: Bool) async throws {
+        let commandLease = await operationGate.enter()
+        defer { commandLease.finish() }
+        try destroyNow(id, quitApps: quitApps)
+    }
+
+    private func destroyNow(_ id: String, quitApps: Bool) throws {
         let canonical = try Self.canonicalSessionID(id)
         guard let session = sessions.removeValue(forKey: canonical) else {
             throw SpaceOError.unknownSession(canonical)
@@ -156,14 +188,21 @@ public actor SessionManager {
     }
 
     @discardableResult
-    public func destroyAll(quitApps: Bool) -> [CGDirectDisplayID] {
+    public func destroyAll(quitApps: Bool) async -> [CGDirectDisplayID] {
+        let commandLease = await operationGate.enter()
+        defer { commandLease.finish() }
+        return destroyAllNow(quitApps: quitApps)
+    }
+
+    private func destroyAllNow(quitApps: Bool) -> [CGDirectDisplayID] {
         idleDisplayRetirement?.cancel()
         idleDisplayRetirement = nil
         stopJanitor()
-        for (_, session) in sessions {
+        let destroying = Array(sessions.values)
+        sessions.removeAll()
+        for session in destroying {
             session.destroy(quitApps: quitApps)
         }
-        sessions.removeAll()
         let failed = pool.releaseAll()
         displayLifecycleFailures.formUnion(failed)
         return failed
@@ -200,10 +239,18 @@ public actor SessionManager {
         return displayLifecycleFailures
     }
 
-    public func infos() -> [SessionInfo] {
+    public func infos() async -> [SessionInfo] {
+        let commandLease = await operationGate.enter()
+        defer { commandLease.finish() }
+        return infosNow()
+    }
+
+    private func infosNow() -> [SessionInfo] {
         sessions.values
             .sorted { $0.createdAt < $1.createdAt }
-            .map { session in
+            .compactMap { session in
+                guard let lifecycleLease = try? session.beginOperation() else { return nil }
+                defer { lifecycleLease.finish() }
                 session.refreshWindows()
                 return SessionInfo(session)
             }
@@ -212,7 +259,12 @@ public actor SessionManager {
     // MARK: - Command dispatch
 
     public func handle(_ request: Request) async -> Response {
+        let commandLease = await operationGate.enter()
+        defer { commandLease.finish() }
         do {
+            if isShuttingDown, request.cmd != "daemon.stop" {
+                throw SpaceOError.badRequest("the daemon is shutting down")
+            }
             return try await execute(request)
         } catch {
             return .failure(error)
@@ -231,14 +283,15 @@ public actor SessionManager {
                 "spaceo daemon alive, \(sessions.count) session(s)\(suffix)")
 
         case "daemon.stop":
-            let failed = destroyAll(quitApps: true)
+            isShuttingDown = true
+            let failed = destroyAllNow(quitApps: true)
             let suffix = failed.isEmpty
                 ? ""
                 : "; display id(s) \(failed.sorted()) are still detaching"
             return .success("stopping SpaceO daemon\(suffix)")
 
         case "session.create":
-            let session = try create(name: request.session)
+            let session = try createNow(name: request.session)
             var response = Response(ok: true)
             response.session = SessionInfo(session)
             response.message = session.hasExclusiveDisplay
@@ -248,12 +301,12 @@ public actor SessionManager {
 
         case "session.list":
             var response = Response(ok: true)
-            response.sessions = infos()
+            response.sessions = infosNow()
             return response
 
         case "session.destroy":
             if request.session == nil && (request.full ?? false) {
-                let failed = destroyAll(quitApps: request.quitApps ?? true)
+                let failed = destroyAllNow(quitApps: request.quitApps ?? true)
                 let suffix = failed.isEmpty
                     ? ""
                     : "; display id(s) \(failed.sorted()) are still detaching"
@@ -261,7 +314,7 @@ public actor SessionManager {
             }
             let session = try resolve(request.session)
             let id = session.id
-            try destroy(id, quitApps: request.quitApps ?? true)
+            try destroyNow(id, quitApps: request.quitApps ?? true)
             return .success("destroyed '\(id)'")
 
         case "run":
@@ -283,6 +336,8 @@ public actor SessionManager {
                     "every file path must be at most 4096 characters and 16384 UTF-8 bytes")
             }
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             guard let appURL = AppLauncher.resolve(trimmedAppName) else {
                 throw SpaceOError.launchFailed(
                     "could not find an application named '\(trimmedAppName)'")
@@ -312,6 +367,8 @@ public actor SessionManager {
                 throw SpaceOError.badRequest("adopt needs a positive --pid")
             }
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             let app = try session.adopt(pid: pid)
             var response = Response(ok: true)
             response.session = SessionInfo(session)
@@ -320,6 +377,8 @@ public actor SessionManager {
 
         case "windows":
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             session.sweepStrayWindows()
             session.refreshWindows()
             var response = Response(ok: true)
@@ -353,6 +412,8 @@ public actor SessionManager {
 
         case "ax":
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             let window = try session.resolveWindow(request.window)
             let snapshot = try session.snapshotAX(window: window)
             var outline = snapshot.outline(includeNonActionable: request.full ?? false)
@@ -396,6 +457,8 @@ public actor SessionManager {
                     "element reference must be at most 32 characters and 128 UTF-8 bytes")
             }
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             let before = IsolationSnapshot.capture()
             let window = try session.resolveWindow(request.window)
             let button: MouseButton = (request.button == "right") ? .right : .left
@@ -459,6 +522,8 @@ public actor SessionManager {
             }
             if request.web != true { try InputRouter.validateTyping(text) }
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             let window = try session.resolveWindow(request.window)
             let before = IsolationSnapshot.capture()
             if request.web == true {
@@ -488,6 +553,8 @@ public actor SessionManager {
                     "key combo must be 1 through 64 characters and at most 256 UTF-8 bytes")
             }
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             let window = try session.resolveWindow(request.window)
             // Parse once before choosing native versus DevTools delivery. In particular this
             // keeps Command-C/X recognition identical on both guarded production routes.
@@ -520,6 +587,8 @@ public actor SessionManager {
                     + "and 16384 UTF-8 bytes")
             }
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             try Capabilities().requireCapture()
             let image: CGImage
             let label: String
@@ -550,6 +619,8 @@ public actor SessionManager {
 
         case "verify":
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             session.sweepStrayWindows()
             let snapshot = IsolationSnapshot.capture()
             var response = Response(ok: true)
@@ -577,6 +648,8 @@ public actor SessionManager {
 
         case "repark":
             let session = try resolve(request.session)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
             let moved = session.reparkEscapedWindows()
             return .success("re-parked \(moved) window(s)")
 

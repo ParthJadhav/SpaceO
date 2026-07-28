@@ -81,18 +81,24 @@ public struct ProcessIdentity: Hashable, Sendable, CustomStringConvertible {
 /// fails without having moved a window.
 public enum ProcessOwnership {
 
-    private static let lock = NSLock()
-    private static var owners: [ProcessIdentity: String] = [:]
+    /// The dictionary never escapes this holder and every access is serialized by `lock`.
+    /// Keeping one immutable holder makes the synchronization boundary visible to Swift 6.
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var owners: [ProcessIdentity: String] = [:]
+    }
+
+    private static let state = State()
 
     /// Take exclusive ownership of `identity` for `owner`.
     ///
     /// - Throws: `SpaceOError.badRequest` when another session already owns the process.
     public static func claim(_ identity: ProcessIdentity, owner: String) throws {
-        try lock.withLock {
+        try state.lock.withLock {
             pruneLocked()
             // A different identity with the same PID is a dead process whose number was reused;
             // it holds no claim on the live one.
-            if let existing = owners[identity] {
+            if let existing = state.owners[identity] {
                 guard existing == owner else {
                     throw SpaceOError.badRequest(
                         "process \(identity.pid) is already owned by session '\(existing)'; "
@@ -100,44 +106,46 @@ public enum ProcessOwnership {
                 }
                 return
             }
-            owners[identity] = owner
+            state.owners[identity] = owner
         }
     }
 
     public static func release(_ identity: ProcessIdentity) {
-        lock.withLock { _ = owners.removeValue(forKey: identity) }
+        state.lock.withLock { _ = state.owners.removeValue(forKey: identity) }
     }
 
     /// Drop every claim held by one session. Used on teardown so a failed or partial destroy
     /// cannot strand ownership and lock the process out of every future session.
     public static func releaseAll(owner: String) {
-        lock.withLock { owners = owners.filter { $0.value != owner } }
+        state.lock.withLock {
+            state.owners = state.owners.filter { $0.value != owner }
+        }
     }
 
     public static func owner(of identity: ProcessIdentity) -> String? {
-        lock.withLock {
+        state.lock.withLock {
             pruneLocked()
-            return owners[identity]
+            return state.owners[identity]
         }
     }
 
     /// Any live owner of this PID, whatever its start time. Used to answer "is this number
     /// spoken for?" before an identity has been established.
     public static func ownerOfPID(_ pid: pid_t) -> String? {
-        lock.withLock {
+        state.lock.withLock {
             pruneLocked()
-            return owners.first { $0.key.pid == pid }?.value
+            return state.owners.first { $0.key.pid == pid }?.value
         }
     }
 
     /// Forget claims whose process has exited. Without this, a long-lived daemon accumulates
     /// dead identities and eventually refuses adoption of a recycled PID for no reason.
     private static func pruneLocked() {
-        owners = owners.filter { $0.key.isAlive }
+        state.owners = state.owners.filter { $0.key.isAlive }
     }
 
     /// Test seam.
     static func reset() {
-        lock.withLock { owners.removeAll() }
+        state.lock.withLock { state.owners.removeAll() }
     }
 }

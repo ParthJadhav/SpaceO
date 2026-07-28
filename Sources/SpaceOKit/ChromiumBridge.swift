@@ -374,8 +374,12 @@ public actor ChromiumBridge {
     }
 
     public func key(_ combo: KeyCombo) async throws {
-        try await Self.deliverKey(combo, pasteboard: .general) { params in
-            try await self.send("Input.dispatchKeyEvent", params)
+        // Keep the actor-isolated send on this actor. Passing a closure that captures `self`
+        // through the nonisolated test helper would transfer actor state across isolation.
+        _ = NSPasteboard.general
+        try combo.requireClipboardSafeRoute()
+        for params in try Self.keyEvents(for: combo) {
+            try await send("Input.dispatchKeyEvent", params)
         }
     }
 
@@ -397,29 +401,25 @@ public actor ChromiumBridge {
         // rawKeyDown, including modified Command-C/X variants that an application may bind.
         _ = pasteboard
         try combo.requireClipboardSafeRoute()
-        let key = try devToolsKey(for: combo)
-
-        func sendEvents() async throws {
-            let down: [String: Any] = [
-                "type": "rawKeyDown",
-                "windowsVirtualKeyCode": key.windowsVirtualKeyCode,
-                "nativeVirtualKeyCode": Int(combo.keyCode),
-                "key": key.key,
-                "code": key.code,
-                "modifiers": key.modifiers,
-            ]
-            try await dispatch(down)
-            try await dispatch([
-                "type": "keyUp",
-                "windowsVirtualKeyCode": key.windowsVirtualKeyCode,
-                "nativeVirtualKeyCode": Int(combo.keyCode),
-                "key": key.key,
-                "code": key.code,
-                "modifiers": key.modifiers,
-            ])
+        for params in try keyEvents(for: combo) {
+            try await dispatch(params)
         }
+    }
 
-        try await sendEvents()
+    private static func keyEvents(for combo: KeyCombo) throws -> [[String: Any]] {
+        let key = try devToolsKey(for: combo)
+        let common: [String: Any] = [
+            "windowsVirtualKeyCode": key.windowsVirtualKeyCode,
+            "nativeVirtualKeyCode": Int(combo.keyCode),
+            "key": key.key,
+            "code": key.code,
+            "modifiers": key.modifiers,
+        ]
+        var down = common
+        down["type"] = "rawKeyDown"
+        var up = common
+        up["type"] = "keyUp"
+        return [down, up]
     }
 
     static func devToolsKey(for combo: KeyCombo) throws -> DevToolsKey {

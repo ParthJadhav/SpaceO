@@ -8,17 +8,34 @@ import Foundation
 /// worse than no alarm.
 public enum AgentActivity {
 
-    private static let lock = NSLock()
-    private static var focusFlips = 0
-    private static var focusRestores = 0
+    /// The single instance is immutable global state; every mutable field inside it is accessed
+    /// under `lock`. The unchecked conformance describes that lock invariant, rather than
+    /// declaring each mutable static independently concurrency-safe.
+    private final class State: @unchecked Sendable {
+        let lock = NSLock()
+        var focusFlips = 0
+        var focusRestores = 0
+        var agentPIDs: Set<pid_t> = []
+        var agentSpaces: Set<UInt64> = []
+    }
+
+    private static let state = State()
 
     /// How many times SpaceO has flipped input routing to a background app.
-    public static var focusFlipCount: Int { lock.withLock { focusFlips } }
+    public static var focusFlipCount: Int {
+        state.lock.withLock { state.focusFlips }
+    }
     /// How many times SpaceO explicitly handed input routing back to the user's app.
-    public static var focusRestoreCount: Int { lock.withLock { focusRestores } }
+    public static var focusRestoreCount: Int {
+        state.lock.withLock { state.focusRestores }
+    }
 
-    public static func recordFocusFlip() { lock.withLock { focusFlips += 1 } }
-    public static func recordFocusRestore() { lock.withLock { focusRestores += 1 } }
+    public static func recordFocusFlip() {
+        state.lock.withLock { state.focusFlips += 1 }
+    }
+    public static func recordFocusRestore() {
+        state.lock.withLock { state.focusRestores += 1 }
+    }
 
     // MARK: - What belongs to an agent
     //
@@ -26,24 +43,33 @@ public enum AgentActivity {
     // apps*. A user switching between their own windows while a command runs is not a breach,
     // and reporting it as one is how a safety check turns into noise everyone learns to ignore.
 
-    private static var agentPIDs: Set<pid_t> = []
-    private static var agentSpaces: Set<UInt64> = []
+    public static var ownedPIDs: Set<pid_t> {
+        state.lock.withLock { state.agentPIDs }
+    }
+    public static var ownedSpaces: Set<UInt64> {
+        state.lock.withLock { state.agentSpaces }
+    }
 
-    public static var ownedPIDs: Set<pid_t> { lock.withLock { agentPIDs } }
-    public static var ownedSpaces: Set<UInt64> { lock.withLock { agentSpaces } }
-
-    public static func claim(pid: pid_t) { lock.withLock { _ = agentPIDs.insert(pid) } }
-    public static func release(pid: pid_t) { lock.withLock { _ = agentPIDs.remove(pid) } }
-    public static func claim(spaces: [UInt64]) { lock.withLock { agentSpaces.formUnion(spaces) } }
-    public static func release(spaces: [UInt64]) { lock.withLock { agentSpaces.subtract(spaces) } }
+    public static func claim(pid: pid_t) {
+        state.lock.withLock { _ = state.agentPIDs.insert(pid) }
+    }
+    public static func release(pid: pid_t) {
+        state.lock.withLock { _ = state.agentPIDs.remove(pid) }
+    }
+    public static func claim(spaces: [UInt64]) {
+        state.lock.withLock { state.agentSpaces.formUnion(spaces) }
+    }
+    public static func release(spaces: [UInt64]) {
+        state.lock.withLock { state.agentSpaces.subtract(spaces) }
+    }
 
     /// Test seam.
     static func reset() {
-        lock.withLock {
-            focusFlips = 0
-            focusRestores = 0
-            agentPIDs = []
-            agentSpaces = []
+        state.lock.withLock {
+            state.focusFlips = 0
+            state.focusRestores = 0
+            state.agentPIDs = []
+            state.agentSpaces = []
         }
     }
 }

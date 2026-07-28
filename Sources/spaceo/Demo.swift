@@ -10,43 +10,6 @@ import SpaceOKit
 /// it prints as FAIL is a detected defect; PARTIAL means required coverage was unavailable.
 enum Demo {
 
-    private static var passed = 0
-    private static var failed = 0
-    private static var partial = 0
-
-    private static func check(_ label: String, _ condition: Bool, _ detail: String = "") {
-        if condition {
-            passed += 1
-            print("  PASS  \(label)\(detail.isEmpty ? "" : "  — \(detail)")")
-        } else {
-            failed += 1
-            print("  FAIL  \(label)\(detail.isEmpty ? "" : "  — \(detail)")")
-        }
-    }
-
-    private static func checkIsolation(_ label: String,
-                                       _ after: IsolationSnapshot,
-                                       comparedTo before: IsolationSnapshot) {
-        let report = after.report(comparedTo: before)
-        switch report.verdict {
-        case .intact:
-            check("\(label): intact", true)
-        case .breached:
-            check(
-                "\(label): breached",
-                false,
-                report.failures.joined(separator: "; ")
-            )
-        case .partial:
-            partial += 1
-            let unknown = report.checks
-                .filter { $0.required && $0.status == .unknown }
-                .map(\.dimension.rawValue)
-                .joined(separator: ", ")
-            print("  PARTIAL  \(label) — no covered breach; unknown required checks: \(unknown)")
-        }
-    }
-
     static func run(appName: String, keep: Bool, capture: Bool = true, perDisplay: Int = 1) -> Never {
         Task {
             let code = await body(appName: appName, keep: keep, capture: capture, perDisplay: perDisplay)
@@ -58,6 +21,49 @@ enum Demo {
     }
 
     private static func body(appName: String, keep: Bool, capture: Bool, perDisplay: Int) async -> Int32 {
+        // Results belong to this one demo invocation. Keeping them local prevents a second
+        // invocation or task from sharing mutable process-wide counters.
+        var passed = 0
+        var failed = 0
+        var partial = 0
+
+        func check(_ label: String, _ condition: Bool, _ detail: String = "") {
+            if condition {
+                passed += 1
+                print("  PASS  \(label)\(detail.isEmpty ? "" : "  — \(detail)")")
+            } else {
+                failed += 1
+                print("  FAIL  \(label)\(detail.isEmpty ? "" : "  — \(detail)")")
+            }
+        }
+
+        func checkIsolation(
+            _ label: String,
+            _ after: IsolationSnapshot,
+            comparedTo before: IsolationSnapshot
+        ) {
+            let report = after.report(comparedTo: before)
+            switch report.verdict {
+            case .intact:
+                check("\(label): intact", true)
+            case .breached:
+                check(
+                    "\(label): breached",
+                    false,
+                    report.failures.joined(separator: "; ")
+                )
+            case .partial:
+                partial += 1
+                let unknown = report.checks
+                    .filter { $0.required && $0.status == .unknown }
+                    .map(\.dimension.rawValue)
+                    .joined(separator: ", ")
+                print(
+                    "  PARTIAL  \(label) — no covered breach; "
+                    + "unknown required checks: \(unknown)")
+            }
+        }
+
         print("SpaceO end-to-end demo\n")
 
         // ---- 0. capabilities -------------------------------------------------------------

@@ -77,13 +77,35 @@ NSArray *_Nullable SPOManagedDisplaySpaces(void);
 
 #pragma mark - Focus routing
 
+/// Result of the three-record private focus transaction.
+///
+/// A private record can mutate WindowServer state even when it returns an error, so every
+/// result after a record was attempted is explicitly mutation-possible.
+typedef NS_ENUM(NSInteger, SPOFocusResult) {
+    /// No private record was posted (symbol/process lookup failed).
+    SPOFocusResultNotAttempted = 0,
+    /// The activation record was attempted and may have mutated the global input route.
+    SPOFocusResultFailedAfterActivationRecord,
+    /// The key-window-down record was attempted after activation and may have partially applied.
+    SPOFocusResultFailedAfterKeyDownRecord,
+    /// The key-window-up record was attempted and may have partially applied.
+    SPOFocusResultFailedAfterKeyUpRecord,
+    /// All three records were accepted.
+    SPOFocusResultSucceeded,
+};
+
 /// Flip `pid`'s AppKit-active state so it receives input, WITHOUT raising the window and
 /// WITHOUT switching the user's Space.
 ///
 /// This deliberately does not call SLPSSetFrontProcessWithOptions — that is the single API
 /// that would raise the window and drag the user to the app's Space.
 ///
-/// Returns NO when the underlying symbol is unavailable.
+/// Reports whether no record was attempted, all records succeeded, or which attempted record
+/// failed after the transaction had become mutation-possible.
+SPOFocusResult SPOFocusWithoutRaiseResult(pid_t pid, uint32_t windowID);
+
+/// Compatibility wrapper. Prefer `SPOFocusWithoutRaiseResult` so failure is not mistaken for
+/// proof that the input route was unchanged.
 BOOL SPOFocusWithoutRaise(pid_t pid, uint32_t windowID);
 
 /// Legacy ABI-compatible stub. Always returns 0.

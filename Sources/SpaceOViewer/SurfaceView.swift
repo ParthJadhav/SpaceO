@@ -232,7 +232,7 @@ struct StreamSurface: NSViewRepresentable {
         view.onExitControl = { [weak model] in
             model?.setInteractionEnabled(false)
         }
-        model.stream.onFrame = { [weak view] sample in
+        model.onFrame = { [weak view] sample in
             DispatchQueue.main.async { view?.present(sample) }
         }
         return view
@@ -248,7 +248,7 @@ struct StreamSurface: NSViewRepresentable {
         if interactive, view.window?.firstResponder !== view {
             view.window?.makeFirstResponder(view)
         }
-        if model.selected == nil {
+        if model.selected == nil || !model.streamState.isLive {
             view.clearFrame()
         }
     }

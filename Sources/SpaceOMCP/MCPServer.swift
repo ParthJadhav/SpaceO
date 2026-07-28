@@ -191,7 +191,7 @@ public enum MCPServer {
             respond(result: [
                 "protocolVersion": version,
                 "capabilities": ["tools": [:] as [String: Any]],
-                "serverInfo": ["name": "spaceo", "version": "1.0.0"],
+                "serverInfo": ["name": "spaceo", "version": SpaceOVersion.current],
                 "instructions": """
                 SpaceO gives each agent a virtual display and routes input without activating or \
                 raising the agent's applications. Create a session before launching or driving \
@@ -237,11 +237,13 @@ public enum MCPServer {
         ["type": "string", "description": description]
     }
 
-    private static let sessionArg: [String: Any] = [
-        "type": "string",
-        "description": "Session id with no control characters or path separators. "
-            + "Omit when only one session exists.",
-    ]
+    private static var sessionArg: [String: Any] {
+        [
+            "type": "string",
+            "description": "Session id with no control characters or path separators. "
+                + "Omit when only one session exists.",
+        ]
+    }
 
     private static var toolSchemas: [[String: Any]] {
         let windowArg: [String: Any] = [

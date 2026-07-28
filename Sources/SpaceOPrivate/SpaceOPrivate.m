@@ -274,15 +274,16 @@ uint64_t SPOActiveSpace(void) {
 
 #pragma mark - Focus routing
 
-BOOL SPOFocusWithoutRaise(pid_t pid, uint32_t windowID) {
+SPOFocusResult SPOFocusWithoutRaiseResult(pid_t pid, uint32_t windowID) {
     SPOLoad();
     // Do not rely on Swift callers having checked the capability. This C function is public to
     // the package and validates the runtime symbol at the mutation boundary itself.
-    if (!SPOCapabilityAvailable(SPOCapabilityFocusWithoutRaise)) return NO;
-    if (!p_SLPSPostEventRecordTo) return NO;
+    if (!SPOCapabilityAvailable(SPOCapabilityFocusWithoutRaise))
+        return SPOFocusResultNotAttempted;
+    if (!p_SLPSPostEventRecordTo) return SPOFocusResultNotAttempted;
 
     ProcessSerialNumber psn = {0, kNoProcess};
-    if (GetProcessForPID(pid, &psn) != noErr) return NO;
+    if (GetProcessForPID(pid, &psn) != noErr) return SPOFocusResultNotAttempted;
 
     // Record 1: "you are now the active app for input routing".
     // Crucially this is NOT SLPSSetFrontProcessWithOptions, so nothing is raised and the
@@ -293,7 +294,8 @@ BOOL SPOFocusWithoutRaise(pid_t pid, uint32_t windowID) {
     memcpy(activate + 0x3c, &windowID, sizeof windowID);
     memset(activate + 0x20, 0xff, 0x10);
     activate[0x8a] = 0x01;
-    if (p_SLPSPostEventRecordTo(&psn, activate) != noErr) return NO;
+    if (p_SLPSPostEventRecordTo(&psn, activate) != noErr)
+        return SPOFocusResultFailedAfterActivationRecord;
 
     // Record 2 & 3: make that specific window the key window within the app.
     uint8_t key[0xf8] = {0};
@@ -302,11 +304,17 @@ BOOL SPOFocusWithoutRaise(pid_t pid, uint32_t windowID) {
     memcpy(key + 0x3c, &windowID, sizeof windowID);
     memset(key + 0x20, 0xff, 0x10);
     key[0x08] = 0x01;
-    if (p_SLPSPostEventRecordTo(&psn, key) != noErr) return NO;
+    if (p_SLPSPostEventRecordTo(&psn, key) != noErr)
+        return SPOFocusResultFailedAfterKeyDownRecord;
     key[0x08] = 0x02;
-    if (p_SLPSPostEventRecordTo(&psn, key) != noErr) return NO;
+    if (p_SLPSPostEventRecordTo(&psn, key) != noErr)
+        return SPOFocusResultFailedAfterKeyUpRecord;
 
-    return YES;
+    return SPOFocusResultSucceeded;
+}
+
+BOOL SPOFocusWithoutRaise(pid_t pid, uint32_t windowID) {
+    return SPOFocusWithoutRaiseResult(pid, windowID) == SPOFocusResultSucceeded;
 }
 
 pid_t SPOFrontProcessPID(void) {

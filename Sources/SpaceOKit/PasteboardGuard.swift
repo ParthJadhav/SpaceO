@@ -131,6 +131,23 @@ public enum PasteboardGuard {
         }
     }
 
+    /// AppKit does not declare `NSPasteboardItem` Sendable. Capture transfers this wrapper to
+    /// exactly one diagnostic worker, and the caller never accesses the item again until that
+    /// worker signals completion (or returns permanently after a timeout).
+    private final class ProviderValueRead: @unchecked Sendable {
+        private let item: NSPasteboardItem
+        private let type: NSPasteboard.PasteboardType
+
+        init(item: NSPasteboardItem, type: NSPasteboard.PasteboardType) {
+            self.item = item
+            self.type = type
+        }
+
+        func load() -> Data? {
+            autoreleasepool { item.data(forType: type) }
+        }
+    }
+
     /// A provider that never returns consumes at most one diagnostic worker. Further snapshots
     /// fail fast. This trade-off is another reason this utility is not a production guard.
     private final class ProviderReadGate: @unchecked Sendable {
@@ -191,12 +208,12 @@ public enum PasteboardGuard {
                 }
                 let box = DataBox()
                 let completed = DispatchSemaphore(value: 0)
+                let read = ProviderValueRead(item: item, type: type)
                 // Off-main execution makes the diagnostic deadline enforceable. An in-process
                 // test NSPasteboardItemDataProvider makes AppKit log a synchronous-promise
                 // warning here; production SpaceO registers no such provider.
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let data = autoreleasepool { item.data(forType: type) }
-                    box.store(data)
+                    box.store(read.load())
                     providerReadGate.release()
                     completed.signal()
                 }

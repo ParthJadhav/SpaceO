@@ -105,16 +105,99 @@ public enum InputRouter {
 
     // MARK: - Focus
 
+    enum FocusRecord: Int, CaseIterable, Sendable {
+        case activation = 1
+        case keyDown = 2
+        case keyUp = 3
+
+        var description: String {
+            switch self {
+            case .activation: return "activation"
+            case .keyDown: return "key-window down"
+            case .keyUp: return "key-window up"
+            }
+        }
+    }
+
+    /// A failed private record is not evidence of no mutation. Once a record was attempted the
+    /// only safe response is to restore and verify the route captured before the transaction.
+    enum FocusAttempt: Equatable, Sendable {
+        case notAttempted
+        case failed(after: FocusRecord)
+        case succeeded
+    }
+
+    typealias FocusPrimitive = (pid_t, CGWindowID) -> FocusAttempt
+    typealias RouteRestorer = (UserInputRoute) -> Bool
+
+    static func privateFocusAttempt(pid: pid_t, windowID: CGWindowID) -> FocusAttempt {
+        switch SPOFocusWithoutRaiseResult(pid, windowID) {
+        case .notAttempted:
+            return .notAttempted
+        case .failedAfterActivationRecord:
+            return .failed(after: .activation)
+        case .failedAfterKeyDownRecord:
+            return .failed(after: .keyDown)
+        case .failedAfterKeyUpRecord:
+            return .failed(after: .keyUp)
+        case .succeeded:
+            return .succeeded
+        @unknown default:
+            // An unknown result came back from a private mutation boundary. Treat it as
+            // mutation-possible rather than inventing a safe "not attempted" state.
+            return .failed(after: .activation)
+        }
+    }
+
+    private static func unverifiedRecoveryError(_ context: String) -> SpaceOError {
+        .unsupportedTarget(
+            "\(context) may have changed the system input route, and SpaceO could not verify "
+            + "restoration. Input was not sent. Click or activate the app you were using to "
+            + "recover keyboard input, then retry after running `spaceo doctor`.")
+    }
+
+    /// Execute the three-record private transaction. Every mutation-possible failure restores
+    /// the exact route captured before record one; an unverifiable restore is a hard input error.
+    @discardableResult
+    static func applyFocus(
+        _ window: WindowRef,
+        recoveringTo originalRoute: UserInputRoute,
+        attempt: FocusPrimitive = privateFocusAttempt,
+        restore: RouteRestorer = restoreUserInputRoute,
+        settle: () -> Void = { usleep(120_000) }
+    ) throws -> Bool {
+        switch attempt(window.pid, window.windowID) {
+        case .notAttempted:
+            // No private record was posted, so there is no partial mutation to repair. Optional
+            // input priming may safely fall back to direct per-PID delivery.
+            return false
+        case .failed(let record):
+            guard restore(originalRoute) else {
+                throw unverifiedRecoveryError(
+                    "focus failed at the \(record.description) record for pid \(window.pid)")
+            }
+            throw SpaceOError.unsupportedTarget(
+                "pid \(window.pid) refused the \(record.description) focus record; "
+                + "the original user input route was restored and input was not sent")
+        case .succeeded:
+            AgentActivity.recordFocusFlip()
+            settle()
+            return true
+        }
+    }
+
     /// Make `window` the input target of its app without raising it or switching Space.
+    ///
+    /// The original route is captured first so a partial private failure can always be repaired.
     public static func focus(_ window: WindowRef) throws {
         guard SPOCapabilityAvailable(.focusWithoutRaise) else {
             throw SpaceOError.unavailable(capability: "focus-without-raise")
         }
-        guard SPOFocusWithoutRaise(window.pid, window.windowID) else {
-            throw SpaceOError.unsupportedTarget("pid \(window.pid) refused the focus record")
+        let originalRoute = try captureUserInputRoute(excluding: [window.pid])
+        guard try applyFocus(window, recoveringTo: originalRoute) else {
+            throw SpaceOError.unsupportedTarget(
+                "pid \(window.pid) could not begin the focus transaction; input was not sent")
         }
-        AgentActivity.recordFocusFlip()
-        usleep(120_000)   // let AppKit process the activation record before events arrive
     }
 
     /// Prime an agent window for per-PID input, then immediately give the global input route
@@ -126,38 +209,73 @@ public enum InputRouter {
     /// are otherwise alive. Per-PID events only need the agent window to have been made key
     /// *within its own app*; they do not need the agent to remain the global input route.
     public static func prepareForInput(_ window: WindowRef) throws {
-        // Priming improves compatibility but never gates direct per-PID delivery. If the focus
-        // primitive or a restorable user route is unavailable, callers still post the event.
+        // Priming improves compatibility but never justifies an un-restorable mutation. If no
+        // route can be captured, skip priming and retain direct per-PID delivery.
         guard SPOCapabilityAvailable(.focusWithoutRaise) else { return }
-        let userRoute = try? captureUserInputRoute(excluding: [window.pid])
-        try? focus(window)
-        if let userRoute {
-            _ = restoreUserInputRoute(userRoute)
+        try prepareForInput(
+            window,
+            capturedRoute: { try? captureUserInputRoute(excluding: [window.pid]) },
+            attempt: privateFocusAttempt,
+            restore: restoreUserInputRoute,
+            settle: { usleep(120_000) })
+    }
+
+    /// Injectable transaction used by focused recovery tests. A throwing result guarantees the
+    /// caller will not proceed to its per-PID key, text, or pointer delivery.
+    static func prepareForInput(
+        _ window: WindowRef,
+        capturedRoute: () -> UserInputRoute?,
+        attempt: FocusPrimitive,
+        restore: RouteRestorer,
+        settle: () -> Void = {}
+    ) throws {
+        guard let userRoute = capturedRoute() else { return }
+        guard try applyFocus(
+            window,
+            recoveringTo: userRoute,
+            attempt: attempt,
+            restore: restore,
+            settle: settle)
+        else {
+            return
+        }
+        guard restore(userRoute) else {
+            throw unverifiedRecoveryError(
+                "focus priming for pid \(window.pid) succeeded, but route recovery")
         }
     }
 
     /// Hold the target's WindowServer input route for a pointer transaction.
     ///
     /// Some AppKit controls discard per-PID mouse events unless their window remains the
-    /// process's input target through mouse-down and mouse-up. Capture the user's route first,
-    /// then focus the target without raising it. Failure to capture or focus never blocks direct
-    /// event delivery; callers receive `nil` and continue posting.
+    /// process's input target through mouse-down and mouse-up. This compatibility wrapper is
+    /// retained for interactive viewer input. Agent input uses `beginPointerInputChecked(_:)`,
+    /// which fails closed when focus recovery cannot be verified.
     public static func beginPointerInput(_ window: WindowRef) -> UserInputRoute? {
+        try? beginPointerInputChecked(window)
+    }
+
+    /// Agent-input form of `beginPointerInput`: partial failures are restored, and unverifiable
+    /// restoration is surfaced so the caller cannot continue posting pointer events.
+    public static func beginPointerInputChecked(_ window: WindowRef) throws -> UserInputRoute? {
         guard SPOCapabilityAvailable(.focusWithoutRaise),
               let route = try? captureUserInputRoute(excluding: [window.pid])
         else { return nil }
-        do {
-            try focus(window)
-            return route
-        } catch {
-            return nil
-        }
+        guard try applyFocus(window, recoveringTo: route) else { return nil }
+        return route
     }
 
     /// Restore a route returned by `beginPointerInput`.
     public static func endPointerInput(_ route: UserInputRoute?) {
         guard let route else { return }
         _ = restoreUserInputRoute(route)
+    }
+
+    public static func endPointerInputChecked(_ route: UserInputRoute?) throws {
+        guard let route else { return }
+        guard restoreUserInputRoute(route) else {
+            throw unverifiedRecoveryError("pointer transaction route recovery")
+        }
     }
 
     static func captureUserInputRoute(
@@ -194,7 +312,9 @@ public enum InputRouter {
         var posted = false
         if SPOCapabilityAvailable(.focusWithoutRaise),
            route.windowID != 0,
-           SPOFocusWithoutRaise(route.app.processIdentifier, route.windowID) {
+           privateFocusAttempt(
+               pid: route.app.processIdentifier,
+               windowID: route.windowID) == .succeeded {
             posted = true
         }
         if !posted {
@@ -378,8 +498,15 @@ public enum InputRouter {
         }
 
         let source = CGEventSource(stateID: .hidSystemState)
-        let userRoute = beginPointerInput(window)
-        defer { endPointerInput(userRoute) }
+        let userRoute = try beginPointerInputChecked(window)
+        var routeRecoveryVerified = false
+        defer {
+            if !routeRecoveryVerified {
+                // Best effort after an event-construction error or a failed verification. The
+                // throwing checked restore below remains the caller-visible source of truth.
+                endPointerInput(userRoute)
+            }
+        }
 
         // Posting straight to a pid bypasses the WindowServer, which is normally the thing that
         // stamps "this event happened over window N" onto a mouse event. Without that stamp an
@@ -414,6 +541,8 @@ public enum InputRouter {
             up.postToPid(window.pid)
             usleep(40_000)
         }
+        try endPointerInputChecked(userRoute)
+        routeRecoveryVerified = true
     }
 
     /// `kCGMouseEventWindowUnderMousePointer`. Not exposed in the Swift overlay.

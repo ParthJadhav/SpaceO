@@ -285,7 +285,10 @@ switch command {
 
 case "version", "--version":
     validateFlags(["json"])
-    print(args.hasJSON ? #"{"version":"1.0.0"}"# : "spaceo 1.0.0")
+    print(
+        args.hasJSON
+            ? #"{"version":"\#(SpaceOVersion.current)"}"#
+            : "spaceo \(SpaceOVersion.current)")
     exit(0)
 
 case "doctor":

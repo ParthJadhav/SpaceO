@@ -6,7 +6,7 @@ import SpaceOKit
 /// means SpaceOKit's window reference.
 typealias WindowRef = SpaceOKit.WindowRef
 
-struct InputNote: Equatable {
+struct InputNote: Equatable, Sendable {
     let text: String
     let isWarning: Bool
 }
@@ -118,7 +118,9 @@ enum ViewerAccessibility {
 /// VM semantics live here: a drag keeps going to the window it started on even when the pointer
 /// crosses another window, and the keyboard follows the last window the user clicked. Nothing
 /// in this path activates an app, raises a window, or moves the real cursor.
-final class ViewerInputController {
+/// Mutable delivery state is either queue-confined or protected by `stateLock`/`routeLock`.
+/// UI callbacks are always invoked on the main queue.
+final class ViewerInputController: @unchecked Sendable {
 
     typealias KeyPoster = (_ code: CGKeyCode, _ flags: CGEventFlags, _ down: Bool,
                            _ characters: String?, _ pid: pid_t) throws -> Void
@@ -142,6 +144,7 @@ final class ViewerInputController {
     private var dragTarget: WindowRef?
     private var keyTarget: WindowRef?
     private var accessibilityPressHandled = false
+    private var pointerTransactionBlocked = false
     private var lastMoveUptime: UInt64 = 0
     private var candidateCache: (uptime: UInt64, list: [MirrorInput.WindowCandidate])?
     private var lastNote: InputNote?
@@ -158,6 +161,12 @@ final class ViewerInputController {
     /// of cleanup that cannot be allowed to wait behind a backlog of events it is cancelling.
     private let routeLock = NSLock()
     private var pointerRoute: InputRouter.UserInputRoute?
+
+    /// `CGEvent` is an immutable copy by the time it crosses onto the delivery queue, but the
+    /// CoreGraphics SDK does not annotate the reference type as Sendable.
+    private struct EventTemplate: @unchecked Sendable {
+        let value: CGEvent?
+    }
 
     init(
         keyPoster: @escaping KeyPoster = { code, flags, down, characters, pid in
@@ -189,6 +198,7 @@ final class ViewerInputController {
                 dragTarget = nil
                 keyTarget = nil
                 accessibilityPressHandled = false
+                pointerTransactionBlocked = false
                 candidateCache = nil
             }
             stateLock.withLock { _interactionEnabled = false }
@@ -215,6 +225,7 @@ final class ViewerInputController {
                 dragTarget = nil
                 keyTarget = nil
                 accessibilityPressHandled = false
+                pointerTransactionBlocked = false
                 lastNote = nil
             }
             stateLock.withLock { _interactionEnabled = false }
@@ -233,11 +244,12 @@ final class ViewerInputController {
                  clickCount: Int,
                  template: CGEvent?) {
         guard let display = permittedDisplay(), let ticket = gate.admit() else { return }
+        let eventTemplate = EventTemplate(value: template)
         queue.async { [weak self] in
             guard let self, self.gate.isCurrent(ticket) else { return }
             self.deliverPointer(phase, button: button, on: display,
                                 viewPoint: viewPoint, viewSize: viewSize,
-                                clickCount: clickCount, template: template)
+                                clickCount: clickCount, template: eventTemplate.value)
         }
     }
 
@@ -273,6 +285,14 @@ final class ViewerInputController {
                 restorePointerRoute()
             }
         }
+        if pointerTransactionBlocked {
+            if phase == .down {
+                pointerTransactionBlocked = false
+            } else {
+                if phase == .up { pointerTransactionBlocked = false }
+                return
+            }
+        }
         let mapping = MirrorInput.ViewportMapping(displayBounds: display.bounds,
                                                   viewSize: viewSize)
         guard let global = mapping.globalPoint(fromViewPoint: viewPoint) else { return }
@@ -290,7 +310,6 @@ final class ViewerInputController {
             accessibilityPressHandled = false
             target = hitTest(at: global)
             dragTarget = target
-            keyTarget = target ?? keyTarget
         case .drag:
             target = dragTarget ?? hitTest(at: global)
         case .up:
@@ -313,13 +332,15 @@ final class ViewerInputController {
             if phase == .down {
                 if button == .left, InputRouter.press(at: global, in: target.pid) {
                     accessibilityPressHandled = true
+                    keyTarget = target
                     describeTarget(target)
                     return
                 }
                 // Keep the target's input route through mouse-up. AppKit controls can discard
                 // per-PID pointer events if the route is restored between down and up.
-                // Route capture/focus is best-effort and never gates direct delivery.
-                let captured = InputRouter.beginPointerInput(target)
+                // A mutation-possible focus failure must restore successfully; otherwise checked
+                // preparation throws here before any pointer event is delivered.
+                let captured = try InputRouter.beginPointerInputChecked(target)
                 routeLock.withLock { pointerRoute = captured }
                 try MirrorInput.postPointer(.move, button: button, at: global, to: target,
                                             clickCount: 1, template: template)
@@ -329,12 +350,20 @@ final class ViewerInputController {
                                         clickCount: max(1, min(3, clickCount)),
                                         template: template)
             if phase == .down {
+                keyTarget = target
                 usleep(25_000)
             } else if phase == .up {
                 usleep(40_000)
             }
             if phase == .down { describeTarget(target) }
         } catch {
+            if phase == .down {
+                // Do not let drag/up events continue a pointer transaction whose checked route
+                // preparation or initial delivery failed.
+                pointerTransactionBlocked = true
+                dragTarget = nil
+                restorePointerRoute()
+            }
             note(error.localizedDescription, warning: true)
         }
     }
@@ -350,10 +379,17 @@ final class ViewerInputController {
         let dx = Int32(max(-500, min(500, deltaX.rounded())))
         let dy = Int32(max(-500, min(500, deltaY.rounded())))
         guard dx != 0 || dy != 0 else { return }
-        let userRoute = InputRouter.beginPointerInput(target)
-        defer { InputRouter.endPointerInput(userRoute) }
         do {
+            let userRoute = try InputRouter.beginPointerInputChecked(target)
+            var recoveryVerified = false
+            defer {
+                if !recoveryVerified {
+                    InputRouter.endPointerInput(userRoute)
+                }
+            }
             try MirrorInput.postScroll(dx: dx, dy: dy, at: global, to: target)
+            try InputRouter.endPointerInputChecked(userRoute)
+            recoveryVerified = true
         } catch {
             note(error.localizedDescription, warning: true)
         }
@@ -448,7 +484,19 @@ final class ViewerInputController {
             return pointerRoute
         }
         guard let route else { return }
-        InputRouter.endPointerInput(route)
+        do {
+            try InputRouter.endPointerInputChecked(route)
+        } catch {
+            // One best-effort retry can still recover the user's route, but the failed verified
+            // recovery remains a visible warning rather than being silently swallowed.
+            InputRouter.endPointerInput(route)
+            let warning = InputNote(
+                text: "Pointer input stopped because the local input route could not be "
+                    + "verified as restored: \(error.localizedDescription)",
+                isWarning: true
+            )
+            DispatchQueue.main.async { [weak self] in self?.onNote?(warning) }
+        }
     }
 
     private func describeTarget(_ target: WindowRef) {

@@ -159,6 +159,15 @@ change between macOS releases, so inspect `spaceo doctor` on each host before se
 the deployment target is not itself a compatibility guarantee. Its display-graph findings are
 diagnostic and do not block creation.
 
+## Install a release
+
+Public releases use a versioned, Developer-ID signed, notarized, and stapled disk image containing
+both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar. Verify the checksum,
+signatures, stapled ticket, and Gatekeeper assessment before installation.
+
+See [Installing a SpaceO release](docs/INSTALL.md) for exact installation, upgrade, rollback,
+uninstall, artifact-verification, and maintainer publication procedures.
+
 ## Local development build
 
 Build locally without installing an MCP:
@@ -196,7 +205,9 @@ The viewer uses the same delivery path as the rest of SpaceO:
 - Control is available for both SpaceO virtual displays and physical displays; display provenance
   is not an input allowlist. The toggle becomes available only after the selected display has a
   live stream; if capture stops or fails, the viewer turns Control off, releases held remote keys,
-  and reports the failure in text and through VoiceOver.
+  and reports the failure in text and through VoiceOver. The status bar distinguishes idle,
+  starting, live, and failed streams. **Retry** starts a failed selection again, while **Refresh**
+  re-scans display geometry and restarts the selected stream.
 - While Control is on, keyboard shortcuts are forwarded to the selected display except
   **Control-Command-Escape**, which always exits Control locally and is never sent remotely.
   Reserving that uncommon chord keeps ordinary Escape available to remote apps and avoids
@@ -214,9 +225,11 @@ links to the right System Settings panes. `make viewer` wraps the binary in a bu
 automatically uses an available Developer ID or Apple Development certificate so its identity
 and privacy grants survive rebuilds. Set `SPACEO_CODESIGN_IDENTITY` to choose a certificate
 explicitly, or to `-` to force ad-hoc signing. When no certificate is available, the build falls
-back to ad-hoc signing and macOS may require the grants to be refreshed after a rebuild. The
-viewer creates no displays itself; agent displays appear when the daemon owns one or more
-sessions.
+back to ad-hoc signing and macOS may require the grants to be refreshed after a rebuild.
+Certificate-backed local builds request a secure timestamp. Public distribution never permits
+ad-hoc or Apple Development signing; the release pipeline requires an explicit Developer ID
+identity, notarizes and staples the artifacts, and fails closed if any trust check fails. The
+viewer creates no displays itself; agent displays appear when the daemon owns one or more sessions.
 
 ## Use
 

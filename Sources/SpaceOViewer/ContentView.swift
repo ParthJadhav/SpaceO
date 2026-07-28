@@ -64,7 +64,9 @@ struct ContentView: View {
             if !model.permissions.screenRecording || !model.permissions.accessibility {
                 permissionBanner
             }
-            if let error = model.streamError {
+            if case let .failed(error) = model.streamState {
+                streamFailureBanner(error)
+            } else if let error = model.streamError {
                 banner(text: error, color: .red)
             }
             if let selected = model.selected {
@@ -82,6 +84,13 @@ struct ContentView: View {
             ZStack(alignment: .topLeading) {
                 StreamSurface()
                 sessionOverlay(for: entry, in: geometry.size)
+                if model.streamState == .starting {
+                    ProgressView("Starting display stream…")
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityLabel("Starting display stream")
+                }
             }
         }
     }
@@ -135,10 +144,9 @@ struct ContentView: View {
 
     private func statusBar(for entry: DisplayEntry) -> some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(model.streamRunning ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text(model.streamRunning ? "live" : "no stream")
+            Image(systemName: streamStatusSymbol)
+                .foregroundStyle(streamStatusColor)
+            Text(model.streamState.statusText)
                 .foregroundStyle(.secondary)
             if let note = model.note {
                 Text(note.text)
@@ -149,8 +157,8 @@ struct ContentView: View {
             if model.interactionEnabled {
                 Text("control enabled — \(ViewerControlPolicy.localExitDescription) exits")
                     .foregroundStyle(.secondary)
-            } else if !model.streamRunning {
-                Text("control unavailable — waiting for live stream")
+            } else if !model.streamState.isLive {
+                Text(controlUnavailableStatus)
                     .foregroundStyle(.secondary)
             } else {
                 Text("viewing only — turn on Control to drive")
@@ -166,12 +174,40 @@ struct ContentView: View {
         .accessibilityValue(statusAccessibilityValue(for: entry))
     }
 
+    private var streamStatusSymbol: String {
+        switch model.streamState {
+        case .idle: "pause.circle"
+        case .starting: "clock.arrow.circlepath"
+        case .live: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var streamStatusColor: Color {
+        switch model.streamState {
+        case .idle: .secondary
+        case .starting: .blue
+        case .live: .green
+        case .failed: .red
+        }
+    }
+
+    private var controlUnavailableStatus: String {
+        switch model.streamState {
+        case .idle: "control unavailable — no stream selected"
+        case .starting: "control unavailable — stream starting"
+        case .failed: "control unavailable — stream failed"
+        case .live: "viewing only — turn on Control to drive"
+        }
+    }
+
     private func statusAccessibilityValue(for entry: DisplayEntry) -> String {
         var parts = [
             ViewerAccessibility.surfaceValue(
                 streamRunning: model.streamRunning,
                 controlEnabled: model.interactionEnabled
             ),
+            "Stream status: \(model.streamState.statusText).",
             "Selected display: \(entry.name)."
         ]
         if model.interactionEnabled {
@@ -192,7 +228,7 @@ struct ContentView: View {
             if !model.permissions.screenRecording {
                 HStack {
                     Label("Screen Recording permission is needed to view displays. "
-                          + "Relaunch the viewer after granting.",
+                          + "The viewer retries automatically after granting.",
                           systemImage: "exclamationmark.triangle.fill")
                     Spacer()
                     Button("Open Settings") {
@@ -230,6 +266,21 @@ struct ContentView: View {
         .background(color.opacity(0.15))
     }
 
+    private func streamFailureBanner(_ text: String) -> some View {
+        HStack {
+            Label(text, systemImage: "xmark.octagon.fill")
+                .lineLimit(3)
+            Spacer()
+            Button("Retry") { model.retryStream() }
+                .disabled(model.selected == nil || !model.permissions.screenRecording)
+        }
+        .font(.callout)
+        .padding(10)
+        .background(.red.opacity(0.15))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Display stream failed")
+    }
+
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
@@ -242,7 +293,12 @@ struct ContentView: View {
                 Label("Control", systemImage: "keyboard")
             }
             .toggleStyle(.button)
-            .disabled(model.selected == nil || !model.streamRunning)
+            .disabled(
+                model.selected == nil
+                    || !model.streamState.isLive
+                    || !model.permissions.screenRecording
+                    || !model.permissions.accessibility
+            )
             .help(controlHelp)
 
             Button {
@@ -258,7 +314,7 @@ struct ContentView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .help("Re-scan displays and sessions")
+            .help("Re-scan displays and restart the selected display stream")
         }
     }
 
@@ -266,8 +322,15 @@ struct ContentView: View {
         guard model.selected != nil else {
             return "Select a display before turning on Control."
         }
-        guard model.streamRunning else {
-            return "Control is unavailable until the selected display has a live stream."
+        guard model.streamState.isLive else {
+            return "Control is unavailable while the selected display stream is "
+                + "\(model.streamState.statusText)."
+        }
+        guard model.permissions.screenRecording else {
+            return "Grant Screen Recording permission before turning on Control."
+        }
+        guard model.permissions.accessibility else {
+            return "Grant Accessibility permission before turning on Control."
         }
         return "Forward your mouse and keyboard to this display. "
             + "\(ViewerControlPolicy.localExitDescription) always exits locally."

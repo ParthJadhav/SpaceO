@@ -149,7 +149,8 @@ public enum AX {
     }
 
     /// Set the per-application timeout so a wedged app cannot stall the agent.
-    public static func setTimeout(_ element: AXUIElement, seconds: Float) {
-        AXUIElementSetMessagingTimeout(element, seconds)
+    @discardableResult
+    public static func setTimeout(_ element: AXUIElement, seconds: Float) -> Bool {
+        AXUIElementSetMessagingTimeout(element, seconds) == .success
     }
 }
