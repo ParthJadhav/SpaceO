@@ -126,6 +126,16 @@ public enum DurableSessionOperationState: String, Codable, Sendable, Equatable {
     case cleanupComplete
 }
 
+/// What restart recovery may do with application processes while finishing teardown.
+///
+/// This intent is persisted before teardown starts. In particular, `releaseApps` makes
+/// `session destroy --keep-apps` crash-safe: a replacement daemon may forget those apps, but it
+/// must never reinterpret them as processes it is allowed to terminate.
+public enum DurableSessionCleanupDisposition: String, Codable, Sendable, Equatable {
+    case terminateLaunchedApps
+    case releaseApps
+}
+
 /// Whether an abandoned record can currently be reclaimed.
 ///
 /// This is stored as the last assessment. The runtime must derive it again from current process,
@@ -196,12 +206,18 @@ public struct DurableSessionRecord: Codable, Sendable, Equatable {
     public var abandonedAt: Date?
     /// Earliest time at which explicit reclaim or destructive cleanup may proceed.
     public var reclaimableAfter: Date?
+    /// Most recent successful controller heartbeat or owner-scoped mutation.
+    ///
+    /// Kept independently because a daemon restart fences and clears the old lease credential.
+    public var lastActivityAt: Date?
     /// Retained when a session becomes abandoned so recovery UIs can describe the prior owner.
     public var owner: DurableSessionOwner?
     /// The last lease. A new daemon must invalidate it using its daemon instance id.
     public var lease: DurableSessionLease?
     public var lastKnownPlacement: DurableSessionPlacement?
     public var apps: [DurableSessionApp]
+    /// Nil is the backwards-compatible spelling of `terminateLaunchedApps`.
+    public var cleanupDisposition: DurableSessionCleanupDisposition?
 
     public init(
         id: String,
@@ -215,10 +231,12 @@ public struct DurableSessionRecord: Codable, Sendable, Equatable {
         recoveryBlockers: [DurableRecoveryBlocker] = [],
         abandonedAt: Date? = nil,
         reclaimableAfter: Date? = nil,
+        lastActivityAt: Date? = nil,
         owner: DurableSessionOwner? = nil,
         lease: DurableSessionLease? = nil,
         lastKnownPlacement: DurableSessionPlacement? = nil,
-        apps: [DurableSessionApp] = []
+        apps: [DurableSessionApp] = [],
+        cleanupDisposition: DurableSessionCleanupDisposition? = nil
     ) {
         self.id = id
         self.revision = revision
@@ -231,10 +249,12 @@ public struct DurableSessionRecord: Codable, Sendable, Equatable {
         self.recoveryBlockers = recoveryBlockers
         self.abandonedAt = abandonedAt
         self.reclaimableAfter = reclaimableAfter
+        self.lastActivityAt = lastActivityAt
         self.owner = owner
         self.lease = lease
         self.lastKnownPlacement = lastKnownPlacement
         self.apps = apps
+        self.cleanupDisposition = cleanupDisposition
     }
 }
 
@@ -313,13 +333,15 @@ public final class SessionStore: @unchecked Sendable {
 
     private let lock = NSLock()
     private let beforeReplace: @Sendable (_ temporaryURL: URL, _ destinationURL: URL) throws -> Void
+    private let afterReplace: @Sendable (_ destinationURL: URL) throws -> Void
 
     /// Use an explicitly named namespace. Names are restricted to safe filename characters.
     public convenience init(rootDirectory: URL, namespace: String) throws {
         try self.init(
             rootDirectory: rootDirectory,
             namespace: namespace,
-            beforeReplace: { _, _ in })
+            beforeReplace: { _, _ in },
+            afterReplace: { _ in })
     }
 
     /// Derive a stable namespace from the daemon socket path.
@@ -331,14 +353,16 @@ public final class SessionStore: @unchecked Sendable {
         try self.init(
             rootDirectory: root,
             namespace: Self.namespace(forSocketPath: socketPath),
-            beforeReplace: { _, _ in })
+            beforeReplace: { _, _ in },
+            afterReplace: { _ in })
     }
 
     /// Failure-injection seam for deterministic atomic-replacement tests.
     init(
         rootDirectory: URL,
         namespace: String,
-        beforeReplace: @escaping @Sendable (URL, URL) throws -> Void
+        beforeReplace: @escaping @Sendable (URL, URL) throws -> Void,
+        afterReplace: @escaping @Sendable (URL) throws -> Void = { _ in }
     ) throws {
         guard rootDirectory.isFileURL else {
             throw SessionStoreError.unsafePath("the root directory must be a file URL")
@@ -361,6 +385,7 @@ public final class SessionStore: @unchecked Sendable {
             "sessions-\(namespace).json",
             isDirectory: false)
         self.beforeReplace = beforeReplace
+        self.afterReplace = afterReplace
     }
 
     public static func defaultRootDirectory() throws -> URL {
@@ -448,12 +473,17 @@ public final class SessionStore: @unchecked Sendable {
                 throw SessionStoreError.writeFailed(
                     "encode failed: \(error.localizedDescription)")
             }
-            guard data.count <= Self.maximumLedgerBytes else {
+            guard Self.encodedLedgerFits(byteCount: data.count) else {
                 throw SessionStoreError.invalidLedger(
-                    "encoded ledger exceeds \(Self.maximumLedgerBytes) bytes")
+                    "encoded ledger plus its newline exceeds "
+                        + "\(Self.maximumLedgerBytes) bytes")
             }
             try writeAtomically(data)
         }
+    }
+
+    static func encodedLedgerFits(byteCount: Int) -> Bool {
+        byteCount >= 0 && byteCount < maximumLedgerBytes
     }
 
     private struct SchemaProbe: Decodable {
@@ -791,6 +821,7 @@ public final class SessionStore: @unchecked Sendable {
                     "atomically replace ledger: errno \(errno)")
             }
             renamed = true
+            try afterReplace(ledgerURL)
 
             let directoryFD = open(rootDirectory.path, O_RDONLY | O_CLOEXEC | O_DIRECTORY)
             guard directoryFD >= 0 else {

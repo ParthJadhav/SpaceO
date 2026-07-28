@@ -71,6 +71,13 @@ public struct AppInfo: Codable, Sendable {
         self.bundleID = app.bundleIdentifier
         self.startedByUs = app.startedByUs
     }
+
+    public init(_ app: DurableSessionApp) {
+        self.pid = app.identity.pid
+        self.name = app.name
+        self.bundleID = app.bundleIdentifier
+        self.startedByUs = app.provenance == .launched
+    }
 }
 
 public struct SessionInfo: Codable, Sendable {
@@ -87,12 +94,19 @@ public struct SessionInfo: Codable, Sendable {
     public var windows: [WindowInfo]
     public var createdAt: Date
     public var teardownPending: Bool
+    /// `false` for diagnostic records recovered from a prior daemon. Their persisted display
+    /// and tile coordinates are never authority to target a current WindowServer object.
+    ///
+    /// Optional for wire compatibility with older daemons, whose session lists contained only
+    /// attached runtime sessions.
+    public var runtimeAttached: Bool?
     public var controllerOwner: DurableSessionOwner?
     public var ageSeconds: Double?
     public var lastActivityAt: Date?
     public var leaseExpiresAt: Date?
     public var abandoned: Bool?
     public var reclaimable: Bool?
+    public var recoveryBlockers: [DurableRecoveryBlocker]?
 
     public init(_ session: AgentSession) {
         let bounds = session.frame
@@ -112,12 +126,47 @@ public struct SessionInfo: Codable, Sendable {
         self.windows = session.windows.map { WindowInfo($0, session: session) }
         self.createdAt = session.createdAt
         self.teardownPending = session.teardownPending
+        self.runtimeAttached = true
         self.controllerOwner = controller?.owner
         self.ageSeconds = controller?.ageSeconds
         self.lastActivityAt = controller?.lastActivityAt
         self.leaseExpiresAt = controller?.lease.expiresAt
         self.abandoned = controller?.abandoned
         self.reclaimable = controller?.reclaimable
+        self.recoveryBlockers = nil
+    }
+
+    /// Observer-only representation of a session recovered from a prior daemon.
+    ///
+    /// Placement is included so operators can diagnose what the old daemon owned, but
+    /// `runtimeAttached == false` is the load-bearing instruction that no current display,
+    /// window, Space, or input route may be inferred from those numbers.
+    public init(_ record: DurableSessionRecord, now: Date = Date()) {
+        let placement = record.lastKnownPlacement
+        self.id = record.id
+        self.displayID = placement?.displayID ?? 0
+        self.x = placement?.x ?? 0
+        self.y = placement?.y ?? 0
+        self.width = placement?.width ?? 0
+        self.height = placement?.height ?? 0
+        self.tileIndex = placement?.tileIndex ?? 0
+        self.tileCapacity = placement?.tileCapacity ?? 0
+        self.exclusiveDisplay = placement?.exclusiveDisplay ?? false
+        self.spaces = []
+        self.hasOwnSpace = false
+        self.apps = record.apps.map(AppInfo.init)
+        self.windows = []
+        self.createdAt = record.createdAt
+        self.teardownPending = record.operationState != .ready
+        self.runtimeAttached = false
+        self.controllerOwner = record.owner
+        self.ageSeconds = max(0, now.timeIntervalSince(record.createdAt))
+        self.lastActivityAt = record.lastActivityAt
+        self.leaseExpiresAt = nil
+        self.abandoned = record.ownershipState == .abandoned
+        self.reclaimable = record.recoveryState == .reclaimable
+        self.recoveryBlockers =
+            record.recoveryBlockers.isEmpty ? nil : record.recoveryBlockers
     }
 }
 

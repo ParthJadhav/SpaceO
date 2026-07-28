@@ -113,8 +113,12 @@ restarting clients:
 "$HOME/.local/bin/spaceo" doctor
 ```
 
-SpaceO currently has no persistent database or migration step. Its daemon sessions are
-process-local, so stopping the daemon tears them down before rollback.
+SpaceO has no general-purpose database or user-content migration, but it does keep a versioned,
+per-socket session-recovery ledger under the user's Application Support directory. A clean
+`daemon stop` tears down attached sessions and prunes their completed records. Interrupted or
+blocked cleanup remains durable for the next daemon to fence and resolve; do not delete that
+ledger to force a rollback. Review [Session ownership and recovery](SESSION_RECOVERY.md) before
+switching versions while detached recovery records remain.
 
 ## Uninstall
 

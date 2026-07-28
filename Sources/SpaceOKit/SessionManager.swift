@@ -11,14 +11,24 @@ public actor SessionManager {
 
     typealias SessionFactory =
         @Sendable (_ id: String, _ slot: DisplayPool.Slot) throws -> AgentSession
+    typealias MaterializedAppHandler = (_ app: LaunchedApp) throws -> Void
+    typealias SessionLaunchOperation = (
+        _ session: AgentSession,
+        _ appURL: URL,
+        _ files: [URL],
+        _ onMaterialized: MaterializedAppHandler
+    ) async throws -> LaunchedApp
 
     private var sessions: [String: AgentSession] = [:]
     private var counter = 0
     private let pool: DisplayPool
     private let sessionFactory: SessionFactory
+    private let launchOperation: SessionLaunchOperation
     private let daemonInstanceID: UUID
     private let reclamationPolicy: SessionReclamationPolicy
     private let successfulMutationHook: @Sendable () -> Void
+    private let livePersistence: LiveSessionPersistence?
+    private let recoveryCoordinator: SessionRecoveryCoordinator?
     /// Actor isolation does not serialize across `await`; this gate deliberately does. It is
     /// process-wide rather than per-session because display allocation, user input routing, and
     /// shutdown all mutate shared host resources, so ordering only same-session commands would
@@ -34,10 +44,44 @@ public actor SessionManager {
     public init(pool: DisplayPool = DisplayPool(), runJanitor: Bool = true) {
         self.pool = pool
         self.sessionFactory = { AgentSession(id: $0, slot: $1) }
+        self.launchOperation = Self.liveLaunch
         self.operationGate = SessionOperationGate()
         self.daemonInstanceID = UUID()
         self.reclamationPolicy = SessionReclamationPolicy()
         self.successfulMutationHook = {}
+        self.livePersistence = nil
+        self.recoveryCoordinator = nil
+        guard runJanitor else { return }
+        Task { [weak self] in await self?.startJanitor() }
+    }
+
+    /// Build a manager whose successful live-session mutations are backed by durable state.
+    ///
+    /// The store is loaded before the manager begins accepting work. The required coordinator
+    /// must have completed `startup()` first, so every prior-daemon record is already fenced.
+    /// Corrupt or unreadable state fails construction instead of being treated as empty.
+    public init(
+        pool: DisplayPool = DisplayPool(),
+        runJanitor: Bool = true,
+        sessionStore: SessionStore,
+        recoveryCoordinator: SessionRecoveryCoordinator,
+        daemonInstanceID: UUID = UUID()
+    ) throws {
+        try recoveryCoordinator.assertReady(
+            for: daemonInstanceID,
+            store: sessionStore)
+        let persistence = LiveSessionPersistence(store: sessionStore)
+        let ledger = try persistence.load()
+        self.pool = pool
+        self.sessionFactory = { AgentSession(id: $0, slot: $1) }
+        self.launchOperation = Self.liveLaunch
+        self.operationGate = SessionOperationGate()
+        self.daemonInstanceID = daemonInstanceID
+        self.reclamationPolicy = SessionReclamationPolicy()
+        self.successfulMutationHook = {}
+        self.livePersistence = persistence
+        self.recoveryCoordinator = recoveryCoordinator
+        self.counter = max(0, (ledger?.nextAutomaticSessionNumber ?? 1) - 1)
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
@@ -49,19 +93,64 @@ public actor SessionManager {
         daemonInstanceID: UUID = UUID(),
         reclamationPolicy: SessionReclamationPolicy = SessionReclamationPolicy(),
         successfulMutationHook: @escaping @Sendable () -> Void = {},
+        launchOperation: @escaping SessionLaunchOperation = SessionManager.liveLaunch,
         sessionFactory: @escaping SessionFactory
     ) {
         self.pool = pool
         self.sessionFactory = sessionFactory
+        self.launchOperation = launchOperation
         self.operationGate = operationGate
         self.daemonInstanceID = daemonInstanceID
         self.reclamationPolicy = reclamationPolicy
         self.successfulMutationHook = successfulMutationHook
+        self.livePersistence = nil
+        self.recoveryCoordinator = nil
+        guard runJanitor else { return }
+        Task { [weak self] in await self?.startJanitor() }
+    }
+
+    /// Persistence-enabled test construction with the same injectable runtime seams as the
+    /// in-memory manager.
+    init(
+        pool: DisplayPool,
+        runJanitor: Bool,
+        operationGate: SessionOperationGate = SessionOperationGate(),
+        daemonInstanceID: UUID = UUID(),
+        reclamationPolicy: SessionReclamationPolicy = SessionReclamationPolicy(),
+        successfulMutationHook: @escaping @Sendable () -> Void = {},
+        livePersistence: LiveSessionPersistence,
+        recoveryCoordinator: SessionRecoveryCoordinator? = nil,
+        launchOperation: @escaping SessionLaunchOperation = SessionManager.liveLaunch,
+        sessionFactory: @escaping SessionFactory
+    ) throws {
+        let ledger = try livePersistence.load()
+        self.pool = pool
+        self.sessionFactory = sessionFactory
+        self.launchOperation = launchOperation
+        self.operationGate = operationGate
+        self.daemonInstanceID = daemonInstanceID
+        self.reclamationPolicy = reclamationPolicy
+        self.successfulMutationHook = successfulMutationHook
+        self.livePersistence = livePersistence
+        self.recoveryCoordinator = recoveryCoordinator
+        self.counter = max(0, (ledger?.nextAutomaticSessionNumber ?? 1) - 1)
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
 
     // MARK: - Janitor
+
+    private static func liveLaunch(
+        session: AgentSession,
+        appURL: URL,
+        files: [URL],
+        onMaterialized: MaterializedAppHandler
+    ) async throws -> LaunchedApp {
+        try await session.launch(
+            app: appURL,
+            opening: files,
+            onMaterialized: onMaterialized)
+    }
 
     /// The runtime janitor the architecture always promised.
     ///
@@ -92,25 +181,39 @@ public actor SessionManager {
         let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
         guard !isShuttingDown else { return 0 }
-        return runJanitorPassNow()
+        return try runJanitorPassNow()
     }
 
-    private func runJanitorPassNow() -> Int {
+    private func runJanitorPassNow() throws -> Int {
         var reapedApps = 0
+        // Detached records have no WindowServer authority. Their separate recovery engine only
+        // reasons about exact process identities and is serialized with every live ledger write.
+        _ = try recoveryCoordinator?.runRecoveryPass()
         for id in sessions.keys.sorted() {
             guard let session = sessions[id] else { continue }
+            try persistSession(
+                session,
+                operationState: session.teardownPending ? .cleanupPending : .ready)
             if session.controllerSnapshot()?.reclaimable == true {
                 // This is resource reclamation, not controller takeover. The existing teardown
                 // path quits only SpaceO-launched apps and evacuates/releases adopted apps.
-                _ = try? destroyNow(id, quitApps: true)
+                _ = try destroyNow(id, quitApps: true)
                 continue
             }
             do {
                 let lifecycleLease = try session.beginOperation()
                 defer { lifecycleLease.finish() }
-                reapedApps += session.runJanitorPass()
+                let reaped = session.runJanitorPass()
+                reapedApps += reaped
+                if reaped > 0 {
+                    try persistSession(session, operationState: .ready)
+                }
             } catch {
-                continue
+                if session.teardownPending {
+                    try persistSession(session, operationState: .cleanupPending)
+                    continue
+                }
+                throw error
             }
         }
         return reapedApps
@@ -120,6 +223,8 @@ public actor SessionManager {
         janitor?.cancel()
         janitor = nil
     }
+
+    var janitorIsRunning: Bool { janitor != nil }
 
     public var isEmpty: Bool { sessions.isEmpty }
     public var count: Int { sessions.count }
@@ -154,10 +259,12 @@ public actor SessionManager {
         controllerLeaseID: UUID?,
         controllerTTLSeconds: TimeInterval?
     ) throws -> AgentSession {
+        let latestLedger = try livePersistence?.load()
+        let durableSessionIDs = Set(latestLedger?.sessions.map(\.id) ?? [])
         let namedID: String?
         if let name {
             let trimmed = try Self.canonicalSessionID(name)
-            guard sessions[trimmed] == nil else {
+            guard sessions[trimmed] == nil, !durableSessionIDs.contains(trimmed) else {
                 throw SpaceOError.badRequest("session '\(trimmed)' already exists")
             }
             namedID = trimmed
@@ -169,7 +276,9 @@ public actor SessionManager {
         if let namedID {
             id = namedID
         } else {
-            var candidateNumber = counter
+            var candidateNumber = max(
+                counter,
+                (latestLedger?.nextAutomaticSessionNumber ?? 1) - 1)
             var candidateID: String
             repeat {
                 guard candidateNumber < Int.max else {
@@ -178,9 +287,14 @@ public actor SessionManager {
                 candidateNumber += 1
                 candidateID = "agent-\(candidateNumber)"
             } while sessions[candidateID] != nil
+                || durableSessionIDs.contains(candidateID)
+            guard candidateNumber < Int.max else {
+                throw SpaceOError.badRequest("automatic session id space is exhausted")
+            }
             id = candidateID
             nextCounter = candidateNumber
         }
+        let allowsLeaseOmission = controllerOwner == nil
         let owner = try validatedControllerOwner(controllerOwner, sessionID: id)
         let duration = try reclamationPolicy.duration(requested: controllerTTLSeconds)
         // The pool reuses a display that still has a free tile, and only builds a new one
@@ -198,8 +312,26 @@ public actor SessionManager {
             daemonInstanceID: daemonInstanceID,
             leaseID: controllerLeaseID ?? UUID(),
             duration: duration,
-            policy: reclamationPolicy)
+            policy: reclamationPolicy,
+            allowsLeaseOmission: allowsLeaseOmission)
         sessions[id] = session
+        do {
+            try persistSession(
+                session,
+                operationState: .ready,
+                nextAutomaticSessionNumberAtLeast: (nextCounter ?? counter) + 1,
+                requireNewRecord: true)
+        } catch {
+            // The new session was never reported as durable. Reclaim everything that can be
+            // reclaimed locally, but retain an incomplete teardown in memory for retry.
+            let report = session.destroy(quitApps: true)
+            if report.isComplete {
+                _ = pool.release(session.slot, retainEmpty: true)
+                sessions.removeValue(forKey: id)
+                scheduleIdleDisplayRetirement()
+            }
+            throw error
+        }
         if let nextCounter { counter = nextCounter }
         return session
     }
@@ -270,7 +402,16 @@ public actor SessionManager {
         leaseID: UUID?
     ) throws -> AgentSession {
         let session = try resolve(id)
-        try session.authorizeControllerMutation(leaseID: leaseID)
+        do {
+            try session.authorizeControllerMutation(leaseID: leaseID)
+        } catch {
+            // Authorization refreshes expiry/liveness state. If that abandoned the session, the
+            // rejection itself must not leave the durable record claiming it is still owned.
+            try persistSession(
+                session,
+                operationState: session.teardownPending ? .cleanupPending : .ready)
+            throw error
+        }
         return session
     }
 
@@ -280,6 +421,229 @@ public actor SessionManager {
     ) throws {
         successfulMutationHook()
         try session.recordSuccessfulControllerMutation(leaseID: leaseID)
+        try persistSession(
+            session,
+            operationState: session.teardownPending ? .cleanupPending : .ready)
+    }
+
+    // MARK: - Durable live-session state
+
+    private func persistSession(
+        _ session: AgentSession,
+        operationState: DurableSessionOperationState,
+        cleanupComplete: Bool = false,
+        cleanupDisposition: DurableSessionCleanupDisposition = .terminateLaunchedApps,
+        nextAutomaticSessionNumberAtLeast requestedNextNumber: Int? = nil,
+        requireNewRecord: Bool = false
+    ) throws {
+        guard let livePersistence else { return }
+        let timestamp = max(reclamationPolicy.now(), session.createdAt)
+        let minimumNextNumber = requestedNextNumber ?? max(1, counter + 1)
+        try livePersistence.update(
+            writerDaemonInstanceID: daemonInstanceID,
+            at: timestamp,
+            nextAutomaticSessionNumberAtLeast: minimumNextNumber
+        ) { ledger in
+            let index = ledger.sessions.firstIndex(where: { $0.id == session.id })
+            let existing = index.map { ledger.sessions[$0] }
+            if requireNewRecord, existing != nil {
+                throw SpaceOError.badRequest(
+                    "session '\(session.id)' already exists in durable state")
+            }
+            let record = try self.durableRecord(
+                for: session,
+                replacing: existing,
+                operationState: operationState,
+                cleanupComplete: cleanupComplete,
+                cleanupDisposition: cleanupDisposition,
+                at: timestamp)
+            if let index {
+                ledger.sessions[index] = record
+            } else {
+                ledger.sessions.append(record)
+            }
+            ledger.sessions.sort { $0.id < $1.id }
+        }
+    }
+
+    private func durableRecord(
+        for session: AgentSession,
+        replacing existing: DurableSessionRecord?,
+        operationState: DurableSessionOperationState,
+        cleanupComplete: Bool,
+        cleanupDisposition: DurableSessionCleanupDisposition,
+        at timestamp: Date
+    ) throws -> DurableSessionRecord {
+        guard let controller = session.controllerSnapshot() else {
+            throw SessionStoreError.invalidLedger(
+                "live session '\(session.id)' has no controller lease")
+        }
+        let revision: UInt64
+        if let existing {
+            guard existing.revision < UInt64.max else {
+                throw LiveSessionPersistenceError.recordRevisionExhausted(session.id)
+            }
+            revision = existing.revision + 1
+        } else {
+            revision = 1
+        }
+
+        let abandonedAt: Date?
+        let reclaimableAfter: Date?
+        if cleanupComplete {
+            let boundary = existing?.abandonedAt ?? controller.abandonedAt ?? timestamp
+            abandonedAt = boundary
+            reclaimableAfter = existing?.reclaimableAfter
+                ?? boundary.addingTimeInterval(reclamationPolicy.gracePeriod)
+        } else {
+            abandonedAt = controller.abandonedAt
+            reclaimableAfter = controller.abandonedAt.map {
+                $0.addingTimeInterval(reclamationPolicy.gracePeriod)
+            }
+        }
+
+        let durableApps: [DurableSessionApp]
+        if cleanupComplete {
+            durableApps = []
+        } else {
+            durableApps = session.apps
+                .map { app in
+                    DurableSessionApp(
+                        identity: app.identity,
+                        provenance: app.startedByUs ? .launched : .adopted,
+                        bundleIdentifier: app.bundleIdentifier,
+                        name: app.name,
+                        url: app.url,
+                        devToolsPort: app.devToolsPort,
+                        temporaryProfile: app.temporaryProfile)
+                }
+                .sorted {
+                    if $0.identity.pid != $1.identity.pid {
+                        return $0.identity.pid < $1.identity.pid
+                    }
+                    return $0.name < $1.name
+                }
+        }
+
+        let placement = DurableSessionPlacement(
+            displayID: session.stage.displayID,
+            x: Double(session.frame.origin.x),
+            y: Double(session.frame.origin.y),
+            width: Double(session.frame.width),
+            height: Double(session.frame.height),
+            tileIndex: session.slot.index,
+            tileCapacity: session.slot.capacity,
+            exclusiveDisplay: session.hasExclusiveDisplay)
+        return DurableSessionRecord(
+            id: session.id,
+            revision: revision,
+            createdAt: existing?.createdAt ?? session.createdAt,
+            updatedAt: max(
+                timestamp,
+                existing?.updatedAt ?? existing?.createdAt ?? session.createdAt),
+            ownershipState: abandonedAt == nil ? .owned : .abandoned,
+            runtimeState: cleanupComplete ? .detached : .attached,
+            operationState: operationState,
+            recoveryState: cleanupComplete
+                ? .notNeeded
+                : (controller.reclaimable ? .reclaimable : .notNeeded),
+            recoveryBlockers: [],
+            abandonedAt: abandonedAt,
+            reclaimableAfter: reclaimableAfter,
+            lastActivityAt: controller.lastActivityAt,
+            owner: controller.owner,
+            lease: controller.lease,
+            lastKnownPlacement: placement,
+            apps: durableApps,
+            cleanupDisposition: cleanupDisposition)
+    }
+
+    private func pruneDurableSession(_ id: String) throws {
+        guard let livePersistence else { return }
+        try livePersistence.update(
+            writerDaemonInstanceID: daemonInstanceID,
+            at: reclamationPolicy.now(),
+            nextAutomaticSessionNumberAtLeast: max(1, counter + 1)
+        ) { ledger in
+            guard let index = ledger.sessions.firstIndex(where: { $0.id == id }) else {
+                return
+            }
+            guard ledger.sessions[index].operationState == .cleanupComplete else {
+                throw SessionStoreError.invalidLedger(
+                    "session '\(id)' cannot be pruned before cleanup completes")
+            }
+            ledger.sessions.remove(at: index)
+        }
+    }
+
+    /// Record a newly materialized process identity before any later response work. If that first
+    /// post-effect write fails, undo the registration where possible; otherwise retain in-memory
+    /// ownership and retry the pending record once so restart cleanup has the exact identity.
+    private func recordPostEffectOrRollback(
+        session: AgentSession,
+        app: LaunchedApp
+    ) throws {
+        try DurablePostEffectReconciliation.run(
+            commitPendingIdentity: {
+                try self.persistSession(session, operationState: .mutationPending)
+            },
+            rollbackEffect: {
+                session.rollbackUndurableApp(app)
+            },
+            clearPreparedMarker: {
+                try self.persistSession(session, operationState: .ready)
+            })
+    }
+
+    /// A prior daemon's exact process ledger remains exclusive during restart grace. Otherwise a
+    /// new session could adopt that process and the detached janitor would later terminate it
+    /// under its original launched provenance.
+    private func ensureNotReservedForDetachedRecovery(pid: pid_t) throws {
+        guard let recoveryCoordinator,
+              let current = ProcessIdentity.current(of: pid) else {
+            return
+        }
+        for record in try recoveryCoordinator.detachedRecords() {
+            guard let reserved = record.apps.first(where: {
+                $0.identity.pid == pid
+                    && (!$0.identity.isPrecise
+                        || !current.isPrecise
+                        || $0.identity == current)
+            }) else {
+                continue
+            }
+            let ownership = reserved.provenance == .launched
+                ? "launched"
+                : "adopted"
+            throw SpaceOError.badRequest(
+                "process \(current) remains reserved by detached session "
+                    + "'\(record.id)' as a \(ownership) app; wait for its recovery grace "
+                    + "or retry `spaceo session destroy --session \(record.id)`")
+        }
+    }
+
+    private static func detachedRecoveryGuidance(
+        records: [DurableSessionRecord]
+    ) -> String {
+        var lines = [
+            "detached session cleanup is not complete; no persisted display or window handle "
+                + "was reused."
+        ]
+        for record in records.sorted(by: { $0.id < $1.id }) {
+            var detail = "  \(record.id): \(record.recoveryState.rawValue)"
+            if let boundary = record.reclaimableAfter {
+                detail += ", grace ends \(boundary.ISO8601Format())"
+            }
+            lines.append(detail)
+            for blocker in record.recoveryBlockers {
+                lines.append("    - \(blocker.code): \(blocker.message)")
+            }
+        }
+        lines.append(
+            "Wait for the recorded grace boundary, then retry the named destroy command. "
+                + "SpaceO will terminate only exact launched process identities; adopted apps "
+                + "are released without termination.")
+        return lines.joined(separator: "\n")
     }
 
     public func destroy(_ id: String, quitApps: Bool) async throws -> TeardownReport {
@@ -297,17 +661,39 @@ public actor SessionManager {
         guard let session = sessions[canonical] else {
             throw SpaceOError.unknownSession(canonical)
         }
+        // Persist intent before signalling or evacuating any process. A crash after this point is
+        // recoverable as cleanup work, never mistaken for a ready attached session.
+        let cleanupDisposition: DurableSessionCleanupDisposition = quitApps
+            ? .terminateLaunchedApps
+            : .releaseApps
+        try persistSession(
+            session,
+            operationState: .cleanupPending,
+            cleanupDisposition: cleanupDisposition)
         var report = session.destroy(quitApps: quitApps)
         guard report.isComplete else {
             report.stillAttachedDisplayIDs = Array(
                 Set(report.stillAttachedDisplayIDs + [session.stage.displayID])
             ).sorted()
+            try persistSession(
+                session,
+                operationState: .cleanupPending,
+                cleanupDisposition: cleanupDisposition)
             return report
         }
 
+        // Commit proof of an empty app ledger before releasing the manager's live ownership.
+        // Pruning is a distinct later atomic replacement so a failed prune leaves a safe
+        // cleanup-complete tombstone for restart.
+        try persistSession(
+            session,
+            operationState: .cleanupComplete,
+            cleanupComplete: true,
+            cleanupDisposition: cleanupDisposition)
         _ = pool.release(session.slot, retainEmpty: true)
         sessions.removeValue(forKey: canonical)
         scheduleIdleDisplayRetirement()
+        try pruneDurableSession(canonical)
         return report
     }
 
@@ -315,25 +701,16 @@ public actor SessionManager {
     public func destroyAll(quitApps: Bool) async throws -> TeardownReport {
         let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
-        return destroyAllNow(quitApps: quitApps)
+        return try destroyAllNow(quitApps: quitApps)
     }
 
-    private func destroyAllNow(quitApps: Bool) -> TeardownReport {
+    private func destroyAllNow(quitApps: Bool) throws -> TeardownReport {
         idleDisplayRetirement?.cancel()
         idleDisplayRetirement = nil
-        stopJanitor()
         var report = TeardownReport()
         for id in sessions.keys.sorted() {
-            guard let session = sessions[id] else { continue }
-            var sessionReport = session.destroy(quitApps: quitApps)
-            if sessionReport.isComplete {
-                _ = pool.release(session.slot, retainEmpty: true)
-                sessions.removeValue(forKey: id)
-            } else {
-                sessionReport.stillAttachedDisplayIDs = Array(
-                    Set(sessionReport.stillAttachedDisplayIDs + [session.stage.displayID])
-                ).sorted()
-            }
+            guard sessions[id] != nil else { continue }
+            let sessionReport = try destroyNow(id, quitApps: quitApps)
             report.merge(sessionReport)
         }
         // Sessions with surviving processes still own their slots. Only empty displays may be
@@ -381,20 +758,31 @@ public actor SessionManager {
     public func infos() async throws -> [SessionInfo] {
         let commandLease = try await operationGate.enter()
         defer { commandLease.finish() }
-        return infosNow()
+        return try infosNow()
     }
 
-    private func infosNow() -> [SessionInfo] {
-        sessions.values
-            .sorted { $0.createdAt < $1.createdAt }
-            .map { session in
-                guard let lifecycleLease = try? session.beginOperation() else {
-                    return SessionInfo(session)
-                }
+    private func infosNow() throws -> [SessionInfo] {
+        var infos: [SessionInfo] = []
+        for session in sessions.values.sorted(by: { $0.createdAt < $1.createdAt }) {
+            if let lifecycleLease = try? session.beginOperation() {
                 defer { lifecycleLease.finish() }
                 session.refreshWindows()
-                return SessionInfo(session)
             }
+            let info = SessionInfo(session)
+            try persistSession(
+                session,
+                operationState: session.teardownPending ? .cleanupPending : .ready)
+            infos.append(info)
+        }
+        if let recoveryCoordinator {
+            infos.append(contentsOf: try recoveryCoordinator.detachedRecords().map {
+                SessionInfo($0)
+            })
+        }
+        return infos.sorted {
+            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+            return $0.id < $1.id
+        }
     }
 
     // MARK: - Command dispatch
@@ -417,15 +805,28 @@ public actor SessionManager {
 
         case "ping":
             let failures = liveDisplayLifecycleFailures()
+            let detachedCount = try recoveryCoordinator?.detachedRecords().count ?? 0
             let suffix = failures.isEmpty
                 ? ""
                 : ", failed display teardown: \(failures.sorted())"
             return .success(
-                "spaceo daemon alive, \(sessions.count) session(s)\(suffix)")
+                "spaceo daemon alive, \(sessions.count) live session(s), "
+                    + "\(detachedCount) detached recovery record(s)\(suffix)")
 
         case "daemon.stop":
+            if let recoveryCoordinator {
+                let recovery = try recoveryCoordinator.runRecoveryPass()
+                let detached = recovery.ledger.sessions.filter {
+                    $0.runtimeState == .detached
+                }
+                guard detached.isEmpty else {
+                    throw SpaceOError.badRequest(
+                        Self.detachedRecoveryGuidance(records: detached))
+                }
+            }
             isShuttingDown = true
-            let report = destroyAllNow(quitApps: true)
+            stopJanitor()
+            let report = try destroyAllNow(quitApps: true)
             guard report.isComplete else {
                 throw SpaceOError.teardownIncomplete(report)
             }
@@ -447,7 +848,7 @@ public actor SessionManager {
 
         case "session.list":
             var response = Response(ok: true)
-            response.sessions = infosNow()
+            response.sessions = try infosNow()
             return response
 
         case "session.heartbeat":
@@ -459,6 +860,7 @@ public actor SessionManager {
                 request.session,
                 leaseID: request.controllerLeaseID)
             _ = try session.heartbeatController(leaseID: leaseID)
+            try persistSession(session, operationState: .ready)
             var response = Response(ok: true)
             response.session = SessionInfo(session)
             response.controllerLeaseID = leaseID
@@ -467,19 +869,60 @@ public actor SessionManager {
 
         case "session.destroy":
             if request.session == nil && (request.full ?? false) {
-                let report = destroyAllNow(quitApps: request.quitApps ?? true)
+                let quitApps = request.quitApps ?? true
+                if !quitApps, let recoveryCoordinator {
+                    let detached = try recoveryCoordinator.detachedRecords()
+                    guard detached.isEmpty else {
+                        throw SpaceOError.badRequest(
+                            "`--keep-apps` cannot be applied to detached recovery records; "
+                                + "no prior-daemon window authority remains. Retry named "
+                                + "cleanup without `--keep-apps`, or wait for automatic recovery.")
+                    }
+                }
+                let report = try destroyAllNow(quitApps: quitApps)
                 guard report.isComplete else {
                     throw SpaceOError.teardownIncomplete(report)
                 }
+                if let recoveryCoordinator {
+                    let recovery = try recoveryCoordinator.runRecoveryPass()
+                    guard recovery.ledger.sessions.allSatisfy({
+                        $0.runtimeState != .detached
+                    }) else {
+                        throw SpaceOError.badRequest(
+                            Self.detachedRecoveryGuidance(
+                                records: recovery.ledger.sessions.filter {
+                                    $0.runtimeState == .detached
+                                }))
+                    }
+                }
                 return .success("destroyed all sessions")
             }
-            let session = try resolve(request.session)
-            let id = session.id
-            let report = try destroyNow(id, quitApps: request.quitApps ?? true)
-            guard report.isComplete else {
-                throw SpaceOError.teardownIncomplete(report)
+            if let requestedID = request.session,
+               let canonicalID = Optional(try Self.canonicalSessionID(requestedID)),
+               sessions[canonicalID] == nil,
+               let recoveryCoordinator {
+                guard request.quitApps ?? true else {
+                    throw SpaceOError.badRequest(
+                        "`--keep-apps` cannot be applied to detached session "
+                            + "'\(canonicalID)'; no prior-daemon window authority remains")
+                }
+                let result = try recoveryCoordinator.retryCleanup(sessionID: canonicalID)
+                guard result.record == nil else {
+                    throw SpaceOError.badRequest(
+                        Self.detachedRecoveryGuidance(records: [result.record!]))
+                }
+                return .success("cleaned detached session '\(canonicalID)'")
+            } else {
+                let session = try resolveForMutation(
+                    request.session,
+                    leaseID: request.controllerLeaseID)
+                let id = session.id
+                let report = try destroyNow(id, quitApps: request.quitApps ?? true)
+                guard report.isComplete else {
+                    throw SpaceOError.teardownIncomplete(report)
+                }
+                return .success("destroyed '\(id)'")
             }
-            return .success("destroyed '\(id)'")
 
         case "run":
             guard let appName = request.app else { throw SpaceOError.badRequest("run needs an app") }
@@ -511,8 +954,37 @@ public actor SessionManager {
             let files = filePaths.map {
                 URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath)
             }
+            // Durable prepare precedes process launch. The materialization callback below then
+            // commits the exact identity before DevTools discovery or window placement waits.
+            try persistSession(session, operationState: .mutationPending)
             let before = IsolationSnapshot.capture()
-            let app = try await session.launch(app: appURL, opening: files)
+            let appsBeforeLaunch = Set(session.apps.map(\.identity))
+            let app: LaunchedApp
+            do {
+                app = try await launchOperation(
+                    session,
+                    appURL,
+                    files,
+                    { materialized in
+                        try self.recordPostEffectOrRollback(
+                            session: session,
+                            app: materialized)
+                    })
+            } catch {
+                let mutationError = error
+                _ = session.reapExitedApps()
+                let hasMaterializedSurvivor = session.apps.contains {
+                    !appsBeforeLaunch.contains($0.identity)
+                }
+                // A pre-materialization failure has no effect and may clear the prepare. Once an
+                // identity was registered, keep cleanup-only state until the survivor is gone.
+                try persistSession(
+                    session,
+                    operationState: hasMaterializedSurvivor
+                        ? .mutationPending
+                        : .ready)
+                throw mutationError
+            }
             let after = IsolationSnapshot.capture()
 
             var response = Response(ok: true)
@@ -530,6 +1002,10 @@ public actor SessionManager {
                     session,
                     leaseID: request.controllerLeaseID)
                 response.session = SessionInfo(session)
+            } else {
+                // Isolation failure changes the command result, not the fact that an app was
+                // launched and is now owned by this session.
+                try persistSession(session, operationState: .ready)
             }
             return response
 
@@ -540,9 +1016,19 @@ public actor SessionManager {
             let session = try resolveForMutation(
                 request.session,
                 leaseID: request.controllerLeaseID)
+            try ensureNotReservedForDetachedRecovery(pid: pid)
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
-            let app = try session.adopt(pid: pid)
+            try persistSession(session, operationState: .mutationPending)
+            let app: LaunchedApp
+            do {
+                app = try session.adopt(pid: pid)
+            } catch {
+                let mutationError = error
+                try persistSession(session, operationState: .ready)
+                throw mutationError
+            }
+            try recordPostEffectOrRollback(session: session, app: app)
             try renewAfterSuccessfulMutation(
                 session,
                 leaseID: request.controllerLeaseID)

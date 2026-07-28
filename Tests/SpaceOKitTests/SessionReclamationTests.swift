@@ -178,6 +178,32 @@ final class SessionReclamationTests: XCTestCase {
         XCTAssertEqual(displayCount, 0)
     }
 
+    func testDestroyAllKeepsJanitorRunningForFutureSessions() async {
+        let clock = Clock()
+        let manager = SessionManager(
+            pool: makePool(displayID: 91_020),
+            runJanitor: true,
+            reclamationPolicy: policy(clock: clock),
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        for _ in 0..<20 {
+            if await manager.janitorIsRunning { break }
+            await Task.yield()
+        }
+        let started = await manager.janitorIsRunning
+        XCTAssertTrue(started)
+
+        var destroyAll = Request(cmd: "session.destroy")
+        destroyAll.full = true
+        let response = await manager.handle(destroyAll)
+
+        XCTAssertTrue(response.ok, response.error ?? "")
+        let remainedRunning = await manager.janitorIsRunning
+        XCTAssertTrue(
+            remainedRunning,
+            "destroying all current sessions must not disable future reclamation")
+        await manager.stopJanitor()
+    }
+
     func testReadOnlyCommandsDoNotRenewButHeartbeatDoes() async throws {
         let clock = Clock()
         let leaseID = UUID()
@@ -206,6 +232,88 @@ final class SessionReclamationTests: XCTestCase {
             renewed.session?.leaseExpiresAt,
             clock.now().addingTimeInterval(10))
         XCTAssertEqual(renewed.session?.lastActivityAt, clock.now())
+    }
+
+    func testExplicitControllerRequiresItsLeaseForEveryMutation() async throws {
+        let clock = Clock()
+        let leaseID = UUID()
+        let manager = SessionManager(
+            pool: makePool(displayID: 91_021),
+            runJanitor: false,
+            reclamationPolicy: policy(clock: clock),
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        var create = Request(cmd: "session.create")
+        create.controllerOwner = owner("explicit-controller")
+        create.controllerLeaseID = leaseID
+        let created = await manager.handle(create)
+        XCTAssertTrue(created.ok, created.error ?? "")
+
+        var missing = Request(cmd: "repark")
+        missing.session = try XCTUnwrap(created.session?.id)
+        let refusedMissing = await manager.handle(missing)
+        XCTAssertFalse(refusedMissing.ok)
+        XCTAssertTrue(refusedMissing.error?.contains("lease is required") == true)
+
+        var incorrect = missing
+        incorrect.controllerLeaseID = UUID()
+        let refusedIncorrect = await manager.handle(incorrect)
+        XCTAssertFalse(refusedIncorrect.ok)
+        XCTAssertTrue(refusedIncorrect.error?.contains("does not match") == true)
+
+        var authorized = missing
+        authorized.controllerLeaseID = leaseID
+        let accepted = await manager.handle(authorized)
+        XCTAssertTrue(accepted.ok, accepted.error ?? "")
+
+        var missingDestroy = Request(cmd: "session.destroy")
+        missingDestroy.session = try XCTUnwrap(created.session?.id)
+        let refusedDestroy = await manager.handle(missingDestroy)
+        XCTAssertFalse(refusedDestroy.ok)
+        XCTAssertTrue(refusedDestroy.error?.contains("lease is required") == true)
+
+        var authorizedDestroy = missingDestroy
+        authorizedDestroy.controllerLeaseID = leaseID
+        let destroyed = await manager.handle(authorizedDestroy)
+        XCTAssertTrue(destroyed.ok, destroyed.error ?? "")
+    }
+
+    func testClockRollbackCannotRegressLeaseOrLastActivity() async throws {
+        let clock = Clock()
+        let leaseID = UUID()
+        let manager = SessionManager(
+            pool: makePool(displayID: 91_022),
+            runJanitor: false,
+            reclamationPolicy: policy(clock: clock),
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        var create = Request(cmd: "session.create")
+        create.controllerOwner = owner("clock-controller")
+        create.controllerLeaseID = leaseID
+        let created = await manager.handle(create)
+        XCTAssertTrue(created.ok, created.error ?? "")
+
+        clock.advance(5)
+        var heartbeat = Request(cmd: "session.heartbeat")
+        heartbeat.session = created.session?.id
+        heartbeat.controllerLeaseID = leaseID
+        let forward = await manager.handle(heartbeat)
+        let forwardActivity = try XCTUnwrap(forward.session?.lastActivityAt)
+        let forwardExpiry = try XCTUnwrap(forward.session?.leaseExpiresAt)
+
+        clock.advance(-20)
+        let rolledBack = await manager.handle(heartbeat)
+
+        XCTAssertTrue(rolledBack.ok, rolledBack.error ?? "")
+        XCTAssertEqual(rolledBack.session?.lastActivityAt, forwardActivity)
+        XCTAssertEqual(rolledBack.session?.leaseExpiresAt, forwardExpiry)
+
+        var mutation = Request(cmd: "repark")
+        mutation.session = created.session?.id
+        mutation.controllerLeaseID = leaseID
+        let mutationResponse = await manager.handle(mutation)
+        XCTAssertTrue(mutationResponse.ok, mutationResponse.error ?? "")
+        let afterMutation = await manager.handle(Request(cmd: "session.list"))
+        XCTAssertEqual(afterMutation.sessions?.first?.lastActivityAt, forwardActivity)
+        XCTAssertEqual(afterMutation.sessions?.first?.leaseExpiresAt, forwardExpiry)
     }
 
     func testExpiryBecomesAbandonedThenJanitorReclaimsAfterGrace() async throws {

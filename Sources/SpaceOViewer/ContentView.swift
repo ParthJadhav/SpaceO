@@ -30,6 +30,13 @@ struct ContentView: View {
             Section("Physical displays") {
                 ForEach(model.physicalDisplays, content: displayRow)
             }
+            if !model.detachedSessions.isEmpty {
+                Section("Recovery") {
+                    ForEach(model.detachedSessions, id: \.id) { session in
+                        detachedSessionRow(session)
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
     }
@@ -54,6 +61,47 @@ struct ContentView: View {
         }
         .padding(.vertical, 2)
         .tag(entry.id)
+    }
+
+    private func detachedSessionRow(_ session: SessionInfo) -> some View {
+        let presentation = ViewerSessionPresentation(session: session)
+        let color = sessionColor(for: presentation.badge)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Text(session.id)
+                    .font(.caption.monospaced().weight(.semibold))
+                    .lineLimit(1)
+                if let badge = presentation.badge {
+                    sessionBadge(badge, color: color)
+                }
+            }
+            if let ownerText = presentation.ownerText {
+                Text(ownerText)
+                    .lineLimit(1)
+            }
+            if let timingText = presentation.timingText {
+                Text(timingText)
+                    .lineLimit(1)
+            }
+            Text("Detached from a prior daemon · no display target")
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            ForEach(
+                Array((session.recoveryBlockers ?? []).enumerated()),
+                id: \.offset
+            ) { entry in
+                Text(entry.element.message)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .font(.caption)
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            presentation.accessibilityDescription(sessionID: session.id)
+                + " Detached from a prior daemon and not targetable."
+        )
     }
 
     // MARK: - Detail

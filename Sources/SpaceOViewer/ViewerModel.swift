@@ -156,15 +156,20 @@ struct ViewerSessionPresentation: Equatable, Sendable {
         return parts.joined(separator: " ")
     }
 
-    /// Only live SpaceO geometry is eligible for an overlay. `session.list` currently contains
-    /// attached runtime sessions; if durable detached records are later added to the wire, their
-    /// attachment state must be rejected before calling this geometry gate.
+    /// Only live SpaceO geometry is eligible for an overlay. An omitted attachment flag is
+    /// accepted for compatibility with older daemons, whose lists contained only live sessions.
     static func overlayFrame(
         displayID: UInt32,
         frame: CGRect,
+        runtimeAttached: Bool? = nil,
         on display: DisplayEntry
     ) -> CGRect? {
-        guard display.isSpaceO, display.isActive, display.id == displayID else { return nil }
+        guard runtimeAttached != false,
+              display.isSpaceO,
+              display.isActive,
+              display.id == displayID else {
+            return nil
+        }
         let values = [
             display.bounds.minX, display.bounds.minY,
             display.bounds.width, display.bounds.height,
@@ -275,9 +280,24 @@ final class ViewerModel: ObservableObject {
     var selected: DisplayEntry? { displays.first { $0.id == selectedID } }
     var stages: [DisplayEntry] { displays.filter(\.isSpaceO) }
     var physicalDisplays: [DisplayEntry] { displays.filter { !$0.isSpaceO } }
+    var detachedSessions: [SessionInfo] {
+        Self.detachedSessions(from: sessions)
+    }
+
+    static func detachedSessions(from sessions: [SessionInfo]) -> [SessionInfo] {
+        sessions
+            .filter { $0.runtimeAttached == false }
+            .sorted {
+                if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
+                return $0.id < $1.id
+            }
+    }
     var sessionsOnSelectedDisplay: [SessionInfo] {
         guard let selected else { return [] }
         return sessions.filter { session in
+            // A daemon-restart record keeps its last placement only for diagnosis. Display ids
+            // are recyclable, so even an apparently matching live display must not turn that
+            // stale record into an input or rendering overlay.
             let frame = CGRect(
                 x: session.x,
                 y: session.y,
@@ -287,6 +307,7 @@ final class ViewerModel: ObservableObject {
             return ViewerSessionPresentation.overlayFrame(
                 displayID: session.displayID,
                 frame: frame,
+                runtimeAttached: session.runtimeAttached,
                 on: selected
             ) != nil
         }

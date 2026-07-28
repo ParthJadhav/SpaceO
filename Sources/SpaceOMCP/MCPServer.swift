@@ -2,6 +2,107 @@ import Foundation
 import Darwin
 import SpaceOKit
 
+enum MCPControllerError: Error, CustomStringConvertible, LocalizedError {
+    case missingLease(String)
+
+    var description: String {
+        switch self {
+        case .missingLease(let session):
+            let target = session.isEmpty ? "the requested session" : "session '\(session)'"
+            return "No controller lease is available for \(target). Create the session with "
+                + "this MCP connection and keep using the same connection; lease credentials "
+                + "are intentionally not recoverable from session.list."
+        }
+    }
+
+    var errorDescription: String? { description }
+}
+
+/// Controller credentials belong to one MCP stdio connection. They are never placed in tool
+/// output or recovered from observer-facing session metadata.
+final class MCPControllerContext {
+    let owner: DurableSessionOwner
+    private var leases: [String: UUID] = [:]
+
+    init(owner: DurableSessionOwner = MCPControllerContext.defaultOwner()) {
+        self.owner = owner
+    }
+
+    static func defaultOwner() -> DurableSessionOwner {
+        let pid = getpid()
+        let identity = ProcessIdentity.current(of: pid)
+        let start = identity?.startedAtMicroseconds ?? 0
+        return DurableSessionOwner(
+            id: "mcp-\(pid)-\(start)",
+            kind: .mcp,
+            label: "SpaceO MCP",
+            processIdentity: identity
+        )
+    }
+
+    func prepare(_ supplied: Request) throws -> Request {
+        var request = supplied
+        switch request.cmd {
+        case "session.create":
+            if request.controllerOwner == nil {
+                request.controllerOwner = owner
+            }
+            if request.controllerLeaseID == nil {
+                request.controllerLeaseID = UUID()
+            }
+        case "session.heartbeat", "run", "adopt", "click", "type", "key", "repark":
+            guard let lease = lease(for: request.session) else {
+                throw MCPControllerError.missingLease(request.session ?? "")
+            }
+            request.controllerLeaseID = lease
+        case "session.destroy":
+            // A lease is required for a live explicitly owned session, but named detached
+            // recovery records intentionally have no renewable credential. Forward a stored
+            // connection-local lease when one exists and let the daemon distinguish those cases.
+            if request.full != true {
+                request.controllerLeaseID = lease(for: request.session)
+            }
+        default:
+            break
+        }
+        return request
+    }
+
+    func record(_ response: Response, for request: Request) {
+        guard response.ok else { return }
+        switch request.cmd {
+        case "session.create", "session.heartbeat":
+            guard let sessionID = response.session?.id,
+                  let lease = response.controllerLeaseID else {
+                return
+            }
+            leases[sessionID] = lease
+        case "session.destroy":
+            if request.full == true {
+                leases.removeAll()
+            } else if let sessionID = request.session {
+                leases.removeValue(forKey: sessionID)
+            } else if leases.count == 1, let sessionID = leases.keys.first {
+                leases.removeValue(forKey: sessionID)
+            }
+        default:
+            break
+        }
+    }
+
+    func storedLease(for sessionID: String) -> UUID? {
+        leases[sessionID]
+    }
+
+    private func lease(for sessionID: String?) -> UUID? {
+        if let sessionID {
+            return leases[sessionID]
+        }
+        guard leases.count == 1 else { return nil }
+        return leases.values.first
+    }
+}
+
 /// Model Context Protocol server over stdio, so Claude Code, Codex, Cursor and anything else
 /// that speaks MCP can drive SpaceO.
 ///
@@ -23,6 +124,7 @@ public enum MCPServer {
     public static func run(socketPath: String) -> Never {
         ensureDaemon(socketPath: socketPath)
         let input = BoundedLineReader(handle: .standardInput)
+        let controller = MCPControllerContext()
 
         while true {
             let line: String
@@ -50,7 +152,7 @@ public enum MCPServer {
                 respond(error: -32600, message: "invalid request", id: nil)
                 continue
             }
-            handle(message, socketPath: socketPath)
+            handle(message, socketPath: socketPath, controller: controller)
         }
         exit(0)
     }
@@ -89,7 +191,13 @@ public enum MCPServer {
                 note("started SpaceO daemon on \(socketPath)")
                 return
             }
-            if !process.isRunning { break }
+            if !process.isRunning,
+               !FileManager.default.fileExists(atPath: socketPath) {
+                break
+            }
+            // A concurrently spawned daemon may have won the socket and still be fencing its
+            // ledger. In that case this child exits, but the live socket remains; keep polling
+            // the winner instead of returning a not-yet-ready MCP connection.
             usleep(200_000)
         }
 
@@ -147,7 +255,11 @@ public enum MCPServer {
 
     // MARK: - Dispatch
 
-    private static func handle(_ message: [String: Any], socketPath: String) {
+    private static func handle(
+        _ message: [String: Any],
+        socketPath: String,
+        controller: MCPControllerContext
+    ) {
         let hasID = message.keys.contains("id")
         let id = validID(message["id"])
 
@@ -224,7 +336,13 @@ public enum MCPServer {
             } else {
                 arguments = [:]
             }
-            callTool(name: name, arguments: arguments, socketPath: socketPath, id: id)
+            callTool(
+                name: name,
+                arguments: arguments,
+                socketPath: socketPath,
+                controller: controller,
+                id: id
+            )
 
         default:
             respond(error: -32601, message: "unknown method '\(method)'", id: id)
@@ -245,7 +363,7 @@ public enum MCPServer {
         ]
     }
 
-    private static var toolSchemas: [[String: Any]] {
+    static var toolSchemas: [[String: Any]] {
         let windowArg: [String: Any] = [
             "type": "integer",
             "minimum": 1,
@@ -268,14 +386,43 @@ public enum MCPServer {
             tool("spaceo_session_create", """
                 Create an agent session: a tile on a SpaceO virtual display that can be viewed \
                 and controlled through the session tools or SpaceO Viewer. Do this once before \
-                opening any app.
-                """, ["name": [
-                    "type": "string",
-                    "description": "Optional session id. Auto-generated when omitted.",
-                ]]),
+                opening any app. The MCP connection keeps the returned controller lease secret \
+                and automatically supplies it to later mutations.
+                """, [
+                    "name": [
+                        "type": "string",
+                        "description": "Optional session id. Auto-generated when omitted.",
+                    ],
+                    "controller_id": [
+                        "type": "string",
+                        "maxLength": 256,
+                        "description": "Stable diagnostic controller id. Defaults to this MCP process.",
+                    ],
+                    "controller_label": [
+                        "type": "string",
+                        "maxLength": 256,
+                        "description": "Human-readable owner label. Defaults to SpaceO MCP.",
+                    ],
+                    "controller_kind": [
+                        "type": "string",
+                        "enum": ["cli", "mcp", "viewer", "other"],
+                        "description": "Controller kind. Defaults to mcp.",
+                    ],
+                    "ttl_seconds": [
+                        "type": "number",
+                        "minimum": 30,
+                        "maximum": 3_600,
+                        "description": "Lease lifetime; successful mutations renew it.",
+                    ],
+                ]),
 
             tool("spaceo_session_list",
                  "List agent sessions with their displays, tiles, apps and windows."),
+
+            tool("spaceo_session_heartbeat", """
+                Renew this MCP connection's controller lease without mutating the session. Use \
+                this while reasoning or waiting longer than the lease TTL.
+                """, ["session": sessionArg]),
 
             tool("spaceo_session_destroy", """
                 End a session: quit the apps it started and free its tile. Always do this when \
@@ -373,11 +520,21 @@ public enum MCPServer {
         ]
     }
 
-    private static func callTool(name: String, arguments: [String: Any],
-                                 socketPath: String, id: Any?) {
+    private static func callTool(
+        name: String,
+        arguments: [String: Any],
+        socketPath: String,
+        controller: MCPControllerContext,
+        id: Any?
+    ) {
         let request: Request
         do {
-            request = try toolRequest(name: name, arguments: arguments)
+            let translated = try toolRequest(
+                name: name,
+                arguments: arguments,
+                defaultControllerOwner: controller.owner
+            )
+            request = try controller.prepare(translated)
         } catch {
             respond(result: toolError((error as? MCPInputError)?.description
                                       ?? error.localizedDescription), id: id)
@@ -396,6 +553,7 @@ public enum MCPServer {
             respond(result: toolError(renderFailure(response)), id: id)
             return
         }
+        controller.record(response, for: request)
 
         // Screenshots come back as an image the model can actually look at. Only read the
         // exact UUID-named file this MCP process requested; a daemon response must never turn
@@ -532,14 +690,50 @@ public enum MCPServer {
         let tile = session.exclusiveDisplay
             ? "whole display \(session.displayID)"
             : "tile \(session.tileIndex + 1)/\(session.tileCapacity) of display \(session.displayID)"
-        var text = "session '\(session.id)' on \(tile), "
-                 + "\(whole(session.width))x\(whole(session.height)) "
-                 + "at (\(whole(session.x)),\(whole(session.y)))"
+        var text: String
+        if session.runtimeAttached == false {
+            text = "session '\(session.id)' [detached recovery record; no live display target]"
+            if session.displayID != 0, session.width > 0, session.height > 0 {
+                text += "\n  last-known placement only: \(tile), "
+                    + "\(whole(session.width))x\(whole(session.height)) "
+                    + "at (\(whole(session.x)),\(whole(session.y)))"
+            }
+        } else {
+            text = "session '\(session.id)' on \(tile), "
+                + "\(whole(session.width))x\(whole(session.height)) "
+                + "at (\(whole(session.x)),\(whole(session.y)))"
+        }
+        let lifecycleStatus: String?
         if session.teardownPending {
-            text += " [cleanup pending — retry destroy]"
+            lifecycleStatus = "cleanup pending"
+        } else if session.reclaimable == true {
+            lifecycleStatus = "reclaimable"
+        } else if session.abandoned == true {
+            lifecycleStatus = "abandoned"
+        } else if session.controllerOwner != nil {
+            lifecycleStatus = "owned"
+        } else {
+            lifecycleStatus = nil
+        }
+        if let lifecycleStatus {
+            text += "\n  lifecycle: \(lifecycleStatus)"
+        }
+        if let owner = session.controllerOwner {
+            text += "\n  owner: \(owner.label) (\(owner.kind.rawValue), id \(owner.id))"
+        }
+        if let lastActivityAt = session.lastActivityAt {
+            text += "\n  last activity: \(lastActivityAt.ISO8601Format())"
+        }
+        if let age = session.ageSeconds, age.isFinite {
+            text += "\n  age: \(Int(max(0, age).rounded(.down)))s"
+        }
+        for blocker in session.recoveryBlockers ?? [] {
+            text += "\n  recovery blocker \(blocker.code): \(blocker.message)"
         }
         for app in session.apps {
-            text += "\n  app \(app.name) (pid \(app.pid))\(app.startedByUs ? "" : " [adopted]")"
+            let prefix = session.runtimeAttached == false ? "recorded app" : "app"
+            text += "\n  \(prefix) \(app.name) (pid \(app.pid))"
+                + "\(app.startedByUs ? "" : " [adopted]")"
         }
         for window in session.windows { text += "\n  " + describe(window) }
         return text
@@ -609,10 +803,18 @@ public enum MCPServer {
 
     /// Translate and validate model-supplied tool arguments without any trapping numeric casts.
     /// Internal so the package tests can fuzz this boundary directly.
-    static func toolRequest(name: String, arguments: [String: Any]) throws -> Request {
+    static func toolRequest(
+        name: String,
+        arguments: [String: Any],
+        defaultControllerOwner: DurableSessionOwner? = nil
+    ) throws -> Request {
         let allowed: Set<String>
         switch name {
-        case "spaceo_session_create": allowed = ["name"]
+        case "spaceo_session_create":
+            allowed = [
+                "name", "controller_id", "controller_label", "controller_kind", "ttl_seconds",
+            ]
+        case "spaceo_session_heartbeat": allowed = ["session"]
         case "spaceo_session_list", "spaceo_pool_status": allowed = []
         case "spaceo_session_destroy": allowed = ["session", "all"]
         case "spaceo_open_app": allowed = ["session", "app", "files"]
@@ -718,6 +920,29 @@ public enum MCPServer {
                 return path
             }
         }
+        func controllerText(_ key: String, fallback: String) throws -> String {
+            let value = try str(key, max: 256, maxBytes: 256) ?? fallback
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard value == trimmed, !trimmed.isEmpty,
+                  value.unicodeScalars.allSatisfy({
+                      !CharacterSet.controlCharacters.contains($0)
+                  }) else {
+                throw MCPInputError.invalid(
+                    "'\(key)' must be trimmed, non-empty, and contain no control characters")
+            }
+            return value
+        }
+        func controllerKind(
+            _ key: String,
+            fallback: DurableSessionOwnerKind
+        ) throws -> DurableSessionOwnerKind {
+            guard let raw = try str(key, max: 16, maxBytes: 16) else { return fallback }
+            guard let kind = DurableSessionOwnerKind(rawValue: raw) else {
+                throw MCPInputError.invalid(
+                    "'\(key)' must be one of cli, mcp, viewer, or other")
+            }
+            return kind
+        }
 
         var request = Request(cmd: "")
         request.session = try sessionID("session")
@@ -727,8 +952,37 @@ public enum MCPServer {
         case "spaceo_session_create":
             request.cmd = "session.create"
             request.session = try sessionID("name")
+            if let defaultControllerOwner {
+                request.controllerOwner = DurableSessionOwner(
+                    id: try controllerText(
+                        "controller_id",
+                        fallback: defaultControllerOwner.id
+                    ),
+                    kind: try controllerKind(
+                        "controller_kind",
+                        fallback: defaultControllerOwner.kind
+                    ),
+                    label: try controllerText(
+                        "controller_label",
+                        fallback: defaultControllerOwner.label
+                    ),
+                    processIdentity: defaultControllerOwner.processIdentity
+                )
+            } else if supplied("controller_id") != nil
+                        || supplied("controller_label") != nil
+                        || supplied("controller_kind") != nil {
+                throw MCPInputError.invalid(
+                    "controller identity overrides require an MCP controller context")
+            }
+            request.controllerTTLSeconds = try dbl("ttl_seconds")
+            if let ttl = request.controllerTTLSeconds, !(30...3_600).contains(ttl) {
+                throw MCPInputError.invalid(
+                    "'ttl_seconds' must be from 30 through 3600")
+            }
         case "spaceo_session_list":
             request.cmd = "session.list"
+        case "spaceo_session_heartbeat":
+            request.cmd = "session.heartbeat"
         case "spaceo_session_destroy":
             request.cmd = "session.destroy"
             request.full = try flag("all")

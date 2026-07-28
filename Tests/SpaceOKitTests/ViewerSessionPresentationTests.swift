@@ -136,6 +136,15 @@ final class ViewerSessionPresentationTests: XCTestCase {
             ViewerSessionPresentation.overlayFrame(
                 displayID: 7,
                 frame: tile,
+                runtimeAttached: false,
+                on: display
+            ),
+            "a detached durable record must never overlay recyclable display geometry"
+        )
+        XCTAssertNil(
+            ViewerSessionPresentation.overlayFrame(
+                displayID: 7,
+                frame: tile,
                 on: inactiveDisplay
             )
         )
@@ -164,6 +173,41 @@ final class ViewerSessionPresentationTests: XCTestCase {
                 on: display
             )
         )
+    }
+
+    @MainActor
+    func testDetachedSessionWireStateIsExplicitlyNonTargetable() throws {
+        let liveJSON = """
+        {
+          "id":"live","displayID":7,"x":0,"y":0,"width":100,"height":100,
+          "tileIndex":0,"tileCapacity":1,"exclusiveDisplay":true,
+          "spaces":[],"hasOwnSpace":false,"apps":[],"windows":[],
+          "createdAt":"2026-07-28T00:00:00Z","teardownPending":false,
+          "runtimeAttached":true
+        }
+        """
+        let detachedJSON = liveJSON.replacingOccurrences(
+            of: #""runtimeAttached":true"#,
+            with: #""runtimeAttached":false"#)
+            .replacingOccurrences(of: #""id":"live""#, with: #""id":"detached""#)
+        let legacyJSON = liveJSON.replacingOccurrences(
+            of: #""runtimeAttached":true"#,
+            with: #""legacyDaemonOmittedAttachmentState":true"#)
+
+        let live = try Wire.decoder.decode(
+            SessionInfo.self, from: Data(liveJSON.utf8))
+        let detached = try Wire.decoder.decode(
+            SessionInfo.self, from: Data(detachedJSON.utf8))
+        let legacy = try Wire.decoder.decode(
+            SessionInfo.self, from: Data(legacyJSON.utf8))
+
+        XCTAssertEqual(live.runtimeAttached, true)
+        XCTAssertEqual(detached.runtimeAttached, false)
+        XCTAssertNil(legacy.runtimeAttached)
+        XCTAssertEqual(
+            ViewerModel.detachedSessions(from: [live, detached, legacy]).map(\.id),
+            ["detached"],
+            "only the explicitly detached record belongs in the recovery section")
     }
 
     private func presentation(

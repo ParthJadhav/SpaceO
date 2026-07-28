@@ -115,6 +115,7 @@ public struct DetachedSessionRecovery: Sendable {
     public typealias Quit = @Sendable (_ app: DurableSessionApp, _ force: Bool) -> Void
     public typealias WaitForExit =
         @Sendable (_ apps: [DurableSessionApp], _ timeout: TimeInterval) -> [ProcessIdentity]
+    public typealias CleanupTemporaryProfile = @Sendable (_ app: DurableSessionApp) -> Void
 
     public let daemonInstanceID: UUID
     public let policy: DetachedSessionRecoveryPolicy
@@ -122,6 +123,7 @@ public struct DetachedSessionRecovery: Sendable {
     private let currentIdentity: CurrentIdentity
     private let quit: Quit
     private let waitForExit: WaitForExit
+    private let cleanupTemporaryProfile: CleanupTemporaryProfile
 
     public init(
         daemonInstanceID: UUID,
@@ -129,7 +131,8 @@ public struct DetachedSessionRecovery: Sendable {
         now: @escaping Clock,
         currentIdentity: @escaping CurrentIdentity,
         quit: @escaping Quit,
-        waitForExit: @escaping WaitForExit
+        waitForExit: @escaping WaitForExit,
+        cleanupTemporaryProfile: @escaping CleanupTemporaryProfile = { _ in }
     ) {
         self.daemonInstanceID = daemonInstanceID
         self.policy = policy
@@ -137,6 +140,52 @@ public struct DetachedSessionRecovery: Sendable {
         self.currentIdentity = currentIdentity
         self.quit = quit
         self.waitForExit = waitForExit
+        self.cleanupTemporaryProfile = cleanupTemporaryProfile
+    }
+
+    /// Production adapter with exact process-identity rechecks immediately before every signal.
+    ///
+    /// Persisted display, Space, window, and DevTools values are intentionally absent from this
+    /// adapter. A prior daemon's numeric handles are diagnostic data, never live authority.
+    public static func live(
+        daemonInstanceID: UUID,
+        policy: DetachedSessionRecoveryPolicy? = nil,
+        now: @escaping Clock = { Date() }
+    ) throws -> DetachedSessionRecovery {
+        let resolvedPolicy = try policy ?? DetachedSessionRecoveryPolicy()
+        return DetachedSessionRecovery(
+            daemonInstanceID: daemonInstanceID,
+            policy: resolvedPolicy,
+            now: now,
+            currentIdentity: { ProcessIdentity.current(of: $0) },
+            quit: { app, force in
+                guard app.provenance == .launched,
+                      app.identity.isPrecise,
+                      ProcessIdentity.current(of: app.identity.pid) == app.identity else {
+                    return
+                }
+                AppLauncher.quit(Self.runtimeApp(from: app), force: force)
+            },
+            waitForExit: { apps, timeout in
+                let boundedTimeout =
+                    timeout.isFinite ? min(max(timeout, 0), 30) : 0
+                let deadline = Date().addingTimeInterval(boundedTimeout)
+                var pending = apps.filter {
+                    ProcessIdentity.current(of: $0.identity.pid) == $0.identity
+                }
+                while !pending.isEmpty, Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.12)
+                    pending = pending.filter {
+                        ProcessIdentity.current(of: $0.identity.pid) == $0.identity
+                    }
+                }
+                return pending.map(\.identity)
+            },
+            cleanupTemporaryProfile: { app in
+                guard app.provenance == .launched else { return }
+                AppLauncher.cleanupTemporaryProfileEventually(
+                    for: Self.runtimeApp(from: app))
+            })
     }
 
     /// Fence a record loaded by a new daemon. The old lease is cleared, while its ids are returned
@@ -147,6 +196,9 @@ public struct DetachedSessionRecovery: Sendable {
         let timestamp = now()
         var record = original
         let oldLease = record.lease
+        if record.lastActivityAt == nil {
+            record.lastActivityAt = oldLease?.lastHeartbeatAt ?? record.updatedAt
+        }
         let boundary: Date
         if let abandonedAt = record.abandonedAt,
            let reclaimableAfter = record.reclaimableAfter {
@@ -239,14 +291,6 @@ public struct DetachedSessionRecovery: Sendable {
         let timestamp = now()
         let boundary = graceBoundary(for: original, at: timestamp)
         let initialGate = gateState(for: original, at: timestamp, boundary: boundary)
-        if timestamp < boundary {
-            var record = original
-            apply(initialGate, to: &record)
-            record = try finalized(record, from: original, at: timestamp)
-            return DetachedSessionRecoveryResult(
-                record: record,
-                outcome: outcome(for: initialGate, boundary: boundary))
-        }
         if original.operationState == .cleanupComplete {
             let gate = Gate(status: .cleanupComplete, blockers: [cleanupCompleteBlocker()])
             var record = original
@@ -256,12 +300,22 @@ public struct DetachedSessionRecovery: Sendable {
             complete.recordMayBeRemoved = true
             return DetachedSessionRecoveryResult(record: record, outcome: complete)
         }
+        if timestamp < boundary {
+            var record = original
+            apply(initialGate, to: &record)
+            record = try finalized(record, from: original, at: timestamp)
+            return DetachedSessionRecoveryResult(
+                record: record,
+                outcome: outcome(for: initialGate, boundary: boundary))
+        }
 
         var droppedDead: [ProcessIdentity] = []
         var droppedRecycled: [ProcessIdentity] = []
         var preservedAdopted: [ProcessIdentity] = []
         var impreciseLaunched: [DurableSessionApp] = []
         var launched: [DurableSessionApp] = []
+        let releaseApps =
+            original.cleanupDisposition == .releaseApps
 
         for app in original.apps {
             switch processState(for: app.identity) {
@@ -270,13 +324,13 @@ public struct DetachedSessionRecovery: Sendable {
             case .recycled:
                 droppedRecycled.append(app.identity)
             case .imprecise:
-                if app.provenance == .launched {
+                if app.provenance == .launched, !releaseApps {
                     impreciseLaunched.append(app)
                 } else {
                     preservedAdopted.append(app.identity)
                 }
             case .live:
-                if app.provenance == .launched {
+                if app.provenance == .launched, !releaseApps {
                     launched.append(app)
                 } else {
                     preservedAdopted.append(app.identity)
@@ -299,7 +353,14 @@ public struct DetachedSessionRecovery: Sendable {
         }
         let terminated = launched.filter {
             !forceSurvivorIDs.contains($0.identity)
-        }.map(\.identity)
+        }
+        let cleanupCandidates = original.apps.filter { app in
+            app.provenance == .launched
+                && (droppedDead.contains(app.identity)
+                    || droppedRecycled.contains(app.identity)
+                    || terminated.contains(where: { $0.identity == app.identity }))
+        }
+        cleanupCandidates.forEach(cleanupTemporaryProfile)
 
         var record = original
         record.apps = impreciseLaunched + finalSurvivors
@@ -324,7 +385,7 @@ public struct DetachedSessionRecovery: Sendable {
         resultOutcome.preservedAdopted = sorted(preservedAdopted)
         resultOutcome.gracefulQuitRequested = sorted(launched.map(\.identity))
         resultOutcome.forceQuitRequested = sorted(gracefulSurvivors.map(\.identity))
-        resultOutcome.terminatedLaunched = sorted(terminated)
+        resultOutcome.terminatedLaunched = sorted(terminated.map(\.identity))
         resultOutcome.survivingLaunched = sorted(record.apps.map(\.identity))
         resultOutcome.recordMayBeRemoved = record.operationState == .cleanupComplete
         return DetachedSessionRecoveryResult(record: record, outcome: resultOutcome)
@@ -466,5 +527,17 @@ public struct DetachedSessionRecovery: Sendable {
         identities.sorted {
             ($0.pid, $0.startedAtMicroseconds) < ($1.pid, $1.startedAtMicroseconds)
         }
+    }
+
+    private static func runtimeApp(from durable: DurableSessionApp) -> LaunchedApp {
+        LaunchedApp(
+            pid: durable.identity.pid,
+            identity: durable.identity,
+            bundleIdentifier: durable.bundleIdentifier,
+            name: durable.name,
+            url: durable.url,
+            startedByUs: durable.provenance == .launched,
+            devToolsPort: durable.devToolsPort,
+            temporaryProfile: durable.temporaryProfile)
     }
 }

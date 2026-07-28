@@ -131,6 +131,7 @@ public final class AgentSession {
         var lastActivityAt: Date
         var abandonedAt: Date?
         var policy: SessionReclamationPolicy
+        var allowsLeaseOmission: Bool
     }
 
     /// Whatever the user had frontmost when this session began.
@@ -193,7 +194,8 @@ public final class AgentSession {
         daemonInstanceID: UUID,
         leaseID: UUID,
         duration: TimeInterval,
-        policy: SessionReclamationPolicy
+        policy: SessionReclamationPolicy,
+        allowsLeaseOmission: Bool
     ) {
         let now = policy.now()
         controllerLock.withLock {
@@ -209,7 +211,8 @@ public final class AgentSession {
                 duration: duration,
                 lastActivityAt: now,
                 abandonedAt: nil,
-                policy: policy)
+                policy: policy,
+                allowsLeaseOmission: allowsLeaseOmission)
         }
     }
 
@@ -223,8 +226,8 @@ public final class AgentSession {
         }
     }
 
-    /// Validate that an owner-scoped mutation may start. Omitting a lease id preserves existing
-    /// local CLI/MCP behavior; when a caller supplies one it must identify the current lease.
+    /// Validate that an owner-scoped mutation may start. Explicit controllers must supply the
+    /// current lease; omission remains available only to the legacy in-process API.
     func authorizeControllerMutation(leaseID: UUID?) throws {
         try controllerLock.withLock {
             guard var runtime = controllerRuntime else { return }
@@ -234,6 +237,10 @@ public final class AgentSession {
             guard runtime.abandonedAt == nil else {
                 throw SpaceOError.badRequest(
                     "session '\(id)' is abandoned and awaiting reclamation")
+            }
+            if leaseID == nil, !runtime.allowsLeaseOmission {
+                throw SpaceOError.badRequest(
+                    "controller lease is required for session '\(id)'")
             }
             if let leaseID, leaseID != runtime.lease.leaseID {
                 throw SpaceOError.badRequest(
@@ -254,13 +261,23 @@ public final class AgentSession {
                 throw SpaceOError.badRequest(
                     "session '\(id)' became abandoned before its lease could renew")
             }
+            if leaseID == nil, !runtime.allowsLeaseOmission {
+                throw SpaceOError.badRequest(
+                    "controller lease is required for session '\(id)'")
+            }
             if let leaseID, leaseID != runtime.lease.leaseID {
                 throw SpaceOError.badRequest(
                     "controller lease does not match session '\(id)'")
             }
-            runtime.lastActivityAt = now
-            runtime.lease.lastHeartbeatAt = now
-            runtime.lease.expiresAt = now.addingTimeInterval(runtime.duration)
+            let heartbeatAt = max(
+                now,
+                runtime.lastActivityAt,
+                runtime.lease.acquiredAt,
+                runtime.lease.lastHeartbeatAt)
+            runtime.lastActivityAt = heartbeatAt
+            runtime.lease.lastHeartbeatAt = heartbeatAt
+            runtime.lease.expiresAt =
+                heartbeatAt.addingTimeInterval(runtime.duration)
             controllerRuntime = runtime
         }
     }
@@ -283,11 +300,17 @@ public final class AgentSession {
                 throw SpaceOError.badRequest(
                     "controller lease does not match session '\(id)'")
             }
-            runtime.lastActivityAt = now
-            runtime.lease.lastHeartbeatAt = now
-            runtime.lease.expiresAt = now.addingTimeInterval(runtime.duration)
+            let heartbeatAt = max(
+                now,
+                runtime.lastActivityAt,
+                runtime.lease.acquiredAt,
+                runtime.lease.lastHeartbeatAt)
+            runtime.lastActivityAt = heartbeatAt
+            runtime.lease.lastHeartbeatAt = heartbeatAt
+            runtime.lease.expiresAt =
+                heartbeatAt.addingTimeInterval(runtime.duration)
             controllerRuntime = runtime
-            return Self.snapshot(runtime, at: now)
+            return Self.snapshot(runtime, at: max(now, heartbeatAt))
         }
     }
 
@@ -303,7 +326,10 @@ public final class AgentSession {
         } else if !runtime.policy.ownerIsAlive(runtime.owner) {
             // Process death has no timestamp in the kernel API used here. The first exact-
             // identity observation is the earliest honest abandonment time.
-            runtime.abandonedAt = now
+            runtime.abandonedAt = max(
+                now,
+                runtime.lastActivityAt,
+                runtime.lease.acquiredAt)
         }
     }
 
@@ -333,7 +359,8 @@ public final class AgentSession {
     @discardableResult
     public nonisolated(nonsending) func launch(
         app appURL: URL,
-        opening files: [URL] = []
+        opening files: [URL] = [],
+        onMaterialized: (LaunchedApp) throws -> Void = { _ in }
     ) async throws -> LaunchedApp {
         let lifecycleLease = try beginOperation()
         defer { lifecycleLease.finish() }
@@ -344,16 +371,23 @@ public final class AgentSession {
         let userRoute = try? InputRouter.captureUserInputRoute()
         lastLaunchRestoredFocus = nil
 
-        let (app, placed) = try await AppLauncher.launch(appURL: appURL, opening: files, into: frame)
-        do {
-            try ProcessOwnership.claim(app.identity, owner: id)
-        } catch {
-            // We started this process, so a claim conflict means its PID was recycled onto a
-            // stale record. Do not leave an unowned invisible app behind.
-            AppLauncher.quit(app, force: true)
-            AppLauncher.cleanupTemporaryProfileEventually(for: app)
-            throw error
-        }
+        let (app, placed) = try await AppLauncher.launch(
+            appURL: appURL,
+            opening: files,
+            into: frame,
+            onMaterialized: { materialized in
+                do {
+                    try self.registerMaterializedApp(materialized)
+                } catch {
+                    // We started this process, so a claim conflict means another live session
+                    // already accounts for the exact identity. Ask it to exit rather than leave
+                    // a newly spawned, unowned invisible process behind.
+                    AppLauncher.quit(materialized, force: true)
+                    AppLauncher.cleanupTemporaryProfileEventually(for: materialized)
+                    throw error
+                }
+                try onMaterialized(materialized)
+            })
 
         if let userRoute, userRoute.app.processIdentifier != app.pid {
             // Both notions of "frontmost" matter. AppKit's view and the WindowServer's can
@@ -388,6 +422,22 @@ public final class AgentSession {
             }
         }
         return app
+    }
+
+    /// Claim and register the exact process at the durable materialization boundary, before
+    /// launch waits or placement. Internal for deterministic crash-boundary tests.
+    func registerMaterializedApp(_ app: LaunchedApp) throws {
+        try ProcessOwnership.claim(app.identity, owner: id)
+        removeStaleRegistrationSharingPID(with: app)
+        invalidateAXSnapshot()
+        if let index = apps.firstIndex(where: { $0.identity == app.identity }) {
+            apps[index] = app
+        } else {
+            apps.append(app)
+        }
+        // Keep this boundary deliberately minimal. Stage Space discovery, watcher creation, and
+        // AX/window enumeration can block; the daemon must persist the exact process first.
+        AgentActivity.claim(pid: app.pid)
     }
 
     // MARK: - Web content
@@ -428,7 +478,12 @@ public final class AgentSession {
 
     private func register(app: LaunchedApp, windows placed: [WindowRef]) {
         invalidateAXSnapshot()
-        if !apps.contains(where: { $0.pid == app.pid }) { apps.append(app) }
+        removeStaleRegistrationSharingPID(with: app)
+        if let index = apps.firstIndex(where: { $0.identity == app.identity }) {
+            apps[index] = app
+        } else {
+            apps.append(app)
+        }
         // Registering what belongs to the agent is what lets IsolationSnapshot tell a breach
         // ("an agent app grabbed focus") from the user simply switching windows.
         AgentActivity.claim(pid: app.pid)
@@ -444,6 +499,29 @@ public final class AgentSession {
         refreshWindows()
     }
 
+    /// Replace dead/recycled bookkeeping before a newly materialized exact identity reuses its
+    /// PID. A PID-only duplicate check would silently retain and persist the old process instead.
+    private func removeStaleRegistrationSharingPID(with app: LaunchedApp) {
+        let stale = apps.filter {
+            $0.pid == app.pid && $0.identity != app.identity
+        }
+        guard !stale.isEmpty else { return }
+
+        watchers.removeValue(forKey: app.pid)?.stop()
+        if let bridge = bridges.removeValue(forKey: app.pid) {
+            Task { await bridge.detach() }
+        }
+        for old in stale {
+            ProcessOwnership.release(old.identity)
+            AppLauncher.cleanupTemporaryProfileEventually(for: old)
+        }
+        apps.removeAll {
+            $0.pid == app.pid && $0.identity != app.identity
+        }
+        windows.removeAll { $0.pid == app.pid }
+        AgentActivity.release(pid: app.pid)
+    }
+
     private func unregister(pid: pid_t) {
         watchers.removeValue(forKey: pid)?.stop()
         if let bridge = bridges.removeValue(forKey: pid) {
@@ -454,6 +532,49 @@ public final class AgentSession {
         windows.removeAll { $0.pid == pid }
         AgentActivity.release(pid: pid)
         invalidateAXSnapshot()
+    }
+
+    /// Undo a resource registration whose first durable post-effect save failed.
+    ///
+    /// Launched apps are terminated by exact identity; adopted apps are evacuated and released
+    /// without termination. A false result keeps the app in this session's in-memory ledger so a
+    /// later persistence or teardown retry still owns it.
+    func rollbackUndurableApp(_ app: LaunchedApp) -> Bool {
+        guard apps.contains(where: { $0.identity == app.identity }) else { return true }
+
+        if app.startedByUs {
+            if teardownDriver.isAlive(app.identity) {
+                teardownDriver.quit(app, false)
+            }
+            var pending = teardownDriver.waitForExit([app], 2)
+            if !pending.isEmpty {
+                pending.forEach { teardownDriver.quit($0, true) }
+                pending = teardownDriver.waitForExit(pending, 1)
+            }
+            guard !teardownDriver.isAlive(app.identity), pending.isEmpty else {
+                return false
+            }
+            teardownDriver.cleanupTemporaryProfile(app)
+            unregister(pid: app.pid)
+            return true
+        }
+
+        refreshWindows()
+        let adoptedWindows = windows.filter { $0.pid == app.pid }
+        if !adoptedWindows.isEmpty {
+            guard let userDisplay = Stage.preferredActiveUserDisplayBounds() else {
+                return false
+            }
+            for (index, window) in adoptedWindows.enumerated() {
+                let target = WindowPlacement.defaultFrame(in: userDisplay)
+                    .offsetBy(dx: CGFloat(index) * 28, dy: CGFloat(index) * 28)
+                guard (try? WindowPlacement.move(window, to: target)) != nil else {
+                    return false
+                }
+            }
+        }
+        unregister(pid: app.pid)
+        return true
     }
 
     /// Drop apps whose process has exited, releasing their PID, ownership claim, and watcher.
@@ -760,7 +881,13 @@ public final class AgentSession {
         for app in completedApps {
             AgentActivity.release(pid: app.pid)
             ProcessOwnership.release(app.identity)
-            teardownDriver.cleanupTemporaryProfile(app)
+            // `--keep-apps` releases a live launched process. Its temporary browser profile is
+            // still in use and belongs with that surviving process, not with session cleanup.
+            if !app.startedByUs
+                || quitApps
+                || !teardownDriver.isAlive(app.identity) {
+                teardownDriver.cleanupTemporaryProfile(app)
+            }
             watchers.removeValue(forKey: app.pid)?.stop()
             if let bridge = bridges.removeValue(forKey: app.pid) {
                 Task { await bridge.detach() }

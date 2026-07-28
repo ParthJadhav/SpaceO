@@ -38,7 +38,8 @@ public enum AppLauncher {
         appURL: URL,
         opening files: [URL] = [],
         into region: CGRect,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        onMaterialized: (LaunchedApp) throws -> Void = { _ in }
     ) async throws -> (app: LaunchedApp, windows: [WindowRef]) {
 
         guard timeout.isFinite, (0.5...120).contains(timeout) else {
@@ -145,20 +146,29 @@ public enum AppLauncher {
                 + "windows — quit it first, or adopt it deliberately with `spaceo adopt --pid \(pid)`")
         }
 
-        if let profile = temporaryProfile {
-            devToolsPort = await waitForDevToolsPort(in: profile, timeout: min(timeout, 10))
-        }
-
-        let app = LaunchedApp(pid: pid,
-                              identity: identity,
-                              bundleIdentifier: runningApp.bundleIdentifier,
-                              name: runningApp.localizedName ?? appURL.deletingPathExtension().lastPathComponent,
-                              url: appURL,
-                              startedByUs: true,
-                              devToolsPort: devToolsPort,
-                              temporaryProfile: temporaryProfile)
+        var app = LaunchedApp(
+            pid: pid,
+            identity: identity,
+            bundleIdentifier: runningApp.bundleIdentifier,
+            name: runningApp.localizedName
+                ?? appURL.deletingPathExtension().lastPathComponent,
+            url: appURL,
+            startedByUs: true,
+            devToolsPort: nil,
+            temporaryProfile: temporaryProfile)
 
         do {
+            // This callback is the WAL commit boundary. It runs immediately after SpaceO has an
+            // exact process identity, before DevTools discovery, window waits, placement, or any
+            // other potentially long operation. The session claims/registers the process and
+            // the daemon persists that identity before launch work may continue.
+            try onMaterialized(app)
+            if let profile = temporaryProfile {
+                devToolsPort = await waitForDevToolsPort(
+                    in: profile,
+                    timeout: min(timeout, 10))
+                app.devToolsPort = devToolsPort
+            }
             _ = try await WindowPlacement.waitForWindow(of: app.pid, timeout: timeout)
             // Settle: some apps resize themselves right after the first window appears.
             try? await Task.sleep(nanoseconds: 300_000_000)

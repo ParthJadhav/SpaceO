@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import Darwin
 import SpaceOKit
 import SpaceOMCP
 
@@ -80,16 +81,58 @@ func printSession(_ session: SessionInfo) {
     let tile = session.exclusiveDisplay
         ? "whole display"
         : "tile \(session.tileIndex + 1)/\(session.tileCapacity)"
-    print(String(format: "session %@  display %u (%@)  %.0fx%.0f at (%.0f,%.0f)  spaces=%@ ownSpace=%@",
-                 session.id, session.displayID, tile,
-                 session.width, session.height, session.x, session.y,
-                 session.spaces.map(String.init).joined(separator: ","),
-                 session.hasOwnSpace ? "yes" : "no"))
+    if session.runtimeAttached == false {
+        print("session \(session.id)  DETACHED RECOVERY RECORD")
+        if session.displayID != 0, session.width > 0, session.height > 0 {
+            print(String(
+                format: "   last-known placement only: display %u (%@) %.0fx%.0f "
+                    + "at (%.0f,%.0f); not a live target",
+                session.displayID, tile,
+                session.width, session.height, session.x, session.y))
+        }
+    } else {
+        print(String(
+            format: "session %@  display %u (%@)  %.0fx%.0f at (%.0f,%.0f)  "
+                + "spaces=%@ ownSpace=%@",
+            session.id, session.displayID, tile,
+            session.width, session.height, session.x, session.y,
+            session.spaces.map(String.init).joined(separator: ","),
+            session.hasOwnSpace ? "yes" : "no"))
+    }
+    let lifecycleStatus: String?
+    if session.teardownPending {
+        lifecycleStatus = "cleanup pending"
+    } else if session.reclaimable == true {
+        lifecycleStatus = "reclaimable"
+    } else if session.abandoned == true {
+        lifecycleStatus = "abandoned"
+    } else if session.controllerOwner != nil {
+        lifecycleStatus = "owned"
+    } else {
+        lifecycleStatus = nil
+    }
+    if let lifecycleStatus {
+        print("   lifecycle: \(lifecycleStatus)")
+    }
+    if let owner = session.controllerOwner {
+        print("   owner: \(owner.label) (\(owner.kind.rawValue), id \(owner.id))")
+    }
+    if let lastActivityAt = session.lastActivityAt {
+        print("   last activity: \(lastActivityAt.ISO8601Format())")
+    }
+    if let age = session.ageSeconds, age.isFinite {
+        print("   age: \(Int(max(0, age).rounded(.down)))s")
+    }
     if session.teardownPending {
         print("   ! cleanup pending; retry session destroy after resolving surviving resources")
     }
+    for blocker in session.recoveryBlockers ?? [] {
+        print("   ! \(blocker.code): \(blocker.message)")
+    }
     for app in session.apps {
-        print("   app  pid \(app.pid)  \(app.name)\(app.startedByUs ? "" : "  (adopted)")")
+        let prefix = session.runtimeAttached == false ? "recorded app" : "app"
+        print("   \(prefix)  pid \(app.pid)  \(app.name)"
+            + "\(app.startedByUs ? "" : "  (adopted)")")
     }
     printWindows(session.windows, indent: "   ")
 }
@@ -137,7 +180,12 @@ func emit(_ response: Response, json: Bool) -> Never {
         } else if let drift = response.drift {
             printLegacyIsolation(drift)
         }
-        fail(response.error ?? "unknown failure")
+        let error = response.error ?? "unknown failure"
+        if error.localizedCaseInsensitiveContains("controller lease") {
+            fail(error + "\nPass the session's current credential with --lease <UUID>. "
+                + "Lease credentials are returned only by create and heartbeat, never by list.")
+        }
+        fail(error)
     }
 
     if let message = response.message { print(message) }
@@ -173,6 +221,11 @@ func emit(_ response: Response, json: Bool) -> Never {
     if let ambient = response.ambient, !ambient.isEmpty {
         for item in ambient { print("  note: \(item)") }
     }
+    if let lease = response.controllerLeaseID {
+        print("controller lease: \(lease.uuidString.lowercased())")
+        print("  Keep this credential secret. Pass it as --lease <UUID> to heartbeat "
+            + "and session mutations; it cannot be recovered from `session list`.")
+    }
     exit(0)
 }
 
@@ -186,8 +239,10 @@ spaceo — give each agent its own screen, and leave the user's alone.
                                          run the session host (keep this alive)
   spaceo daemon stop                     stop the shared daemon and clean up its sessions
 
-  spaceo session create [--session ID]    take a tile on a shared agent display
+  spaceo session create [--session ID] [--controller-ttl SECONDS]
+                                         take a tile and receive its controller lease
   spaceo session list
+  spaceo session heartbeat [--session ID] --lease UUID
   spaceo session destroy [--session ID] [--all] [--keep-apps]
 
   spaceo pool                            displays, capacity and occupancy
@@ -208,6 +263,9 @@ spaceo — give each agent its own screen, and leave the user's alone.
   spaceo demo [--app TextEdit] [--keep] [--sessions N]
                                          self-contained end-to-end proof, no daemon needed
 
+Controller create: --controller-id ID   --controller-label LABEL
+                   --controller-kind cli|mcp|viewer|other   --controller-ttl 30...3600
+Session mutations: --lease UUID
 Global: --session ID   --socket PATH   --json
 Env:    SPACEO_SOCKET   SPACEO_SESSIONS_PER_DISPLAY   SPACEO_DISPLAY_SIZE (WxH)
         SPACEO_UNSAFE_RESOURCE_LIMITS=1  raise the display/session budgets (see `doctor`)
@@ -220,6 +278,26 @@ var daemonServer: Transport.Server?
 /// Signal sources must remain strongly retained for the daemon's whole optimized lifetime.
 /// A local whose last use precedes `RunLoop.run()` is released by production builds.
 var daemonShutdownSources: [DispatchSourceSignal] = []
+
+/// Bind the daemon socket before touching durable state, then install the manager. This preserves
+/// the socket's single-writer contract when two MCP clients race to auto-start a daemon.
+final class DaemonManagerHolder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var manager: SessionManager?
+
+    func install(_ manager: SessionManager) {
+        lock.withLock { self.manager = manager }
+    }
+
+    func handle(_ request: Request) async -> Response {
+        guard let manager = lock.withLock({ manager }) else {
+            return .failure(
+                Transport.TransportError.socketFailed(
+                    "the daemon is still fencing durable session state"))
+        }
+        return await manager.handle(request)
+    }
+}
 
 let argv = Array(CommandLine.arguments.dropFirst())
 guard let command = argv.first else { print(usage); exit(0) }
@@ -282,6 +360,59 @@ func pidArgument() -> Int32? {
         fail("--pid must be an integer from 1 through \(Int32.max)")
     }
     return value
+}
+
+func leaseArgument(required: Bool = false) -> UUID? {
+    guard let raw = stringArgument("lease") else {
+        if required {
+            fail("--lease UUID is required. Use the credential returned by session create "
+                + "or the most recent session heartbeat.")
+        }
+        return nil
+    }
+    guard let lease = UUID(uuidString: raw) else {
+        fail("--lease must be a UUID returned by session create or session heartbeat")
+    }
+    return lease
+}
+
+func controllerOwnerArgument() -> DurableSessionOwner {
+    let id = stringArgument("controller-id")
+        ?? "cli-\(getpid())-\(UUID().uuidString.lowercased())"
+    let label = stringArgument("controller-label") ?? "spaceo CLI"
+    let kind: DurableSessionOwnerKind
+    if let rawKind = stringArgument("controller-kind") {
+        guard let parsed = DurableSessionOwnerKind(rawValue: rawKind) else {
+            fail("--controller-kind must be cli, mcp, viewer, or other")
+        }
+        kind = parsed
+    } else {
+        kind = .cli
+    }
+
+    func validate(_ value: String, flag: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value == trimmed,
+              !trimmed.isEmpty,
+              value.utf8.count <= 256,
+              value.unicodeScalars.allSatisfy({
+                  !CharacterSet.controlCharacters.contains($0)
+              }) else {
+            fail("--\(flag) must be trimmed, non-empty, control-free, "
+                + "and at most 256 UTF-8 bytes")
+        }
+    }
+    validate(id, flag: "controller-id")
+    validate(label, flag: "controller-label")
+
+    // The CLI is intentionally short-lived. Its PID exiting must not immediately abandon a
+    // session that another invocation will continue; the requested TTL is the liveness signal.
+    return DurableSessionOwner(
+        id: id,
+        kind: kind,
+        label: label,
+        processIdentity: nil
+    )
 }
 
 switch command {
@@ -452,9 +583,9 @@ case "daemon":
 
     let pool = DisplayPool(sessionsPerDisplay: 1, displaySize: displaySize, budget: budget)
     do { try pool.setSessionsPerDisplay(perDisplay) } catch { fail("\(error)") }
-    let manager = SessionManager(pool: pool)
+    let holder = DaemonManagerHolder()
     let server = Transport.Server(path: socketPath) { request in
-        let response = await manager.handle(request)
+        let response = await holder.handle(request)
         if request.cmd == "daemon.stop", response.ok {
             // Give the socket response a moment to flush before ending the process.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -466,8 +597,39 @@ case "daemon":
     }
     do { try server.start() } catch { fail("\(error)") }
     daemonServer = server
+
+    let daemonInstanceID = UUID()
+    let manager: SessionManager
+    let recoveryStartup: SessionRecoveryStartupResult
+    do {
+        let store = try SessionStore(socketPath: socketPath)
+        let recovery = try DetachedSessionRecovery.live(
+            daemonInstanceID: daemonInstanceID)
+        let coordinator = SessionRecoveryCoordinator(
+            store: store,
+            recovery: recovery)
+        recoveryStartup = try coordinator.startup()
+        manager = try SessionManager(
+            pool: pool,
+            sessionStore: store,
+            recoveryCoordinator: coordinator,
+            daemonInstanceID: daemonInstanceID)
+        holder.install(manager)
+    } catch {
+        server.stop()
+        daemonServer = nil
+        fail("could not recover durable session state: \(error.localizedDescription)")
+    }
+
     print("spaceo daemon listening on \(socketPath)")
     print("  \(perDisplay) session(s) per \(Int(displaySize.width))x\(Int(displaySize.height)) display")
+    if !recoveryStartup.ledger.sessions.isEmpty {
+        print("  fenced \(recoveryStartup.ledger.sessions.count) detached session record(s)")
+    }
+    for blocked in recoveryStartup.blockedRecords {
+        let reasons = blocked.blockers.map(\.message).joined(separator: "; ")
+        print("  recovery pending for '\(blocked.sessionID)': \(reasons)")
+    }
     print("(ctrl-c to stop; sessions are destroyed and their apps quit on the way out)")
 
     // Shut down through Dispatch, not a bare signal handler.
@@ -504,24 +666,47 @@ case "daemon":
     RunLoop.main.run()
 
 case "session":
-    guard let sub = args.positional.first else { fail("session needs: create | list | destroy") }
+    guard let sub = args.positional.first else {
+        fail("session needs: create | list | heartbeat | destroy")
+    }
     switch sub {
     case "create":
-        validateFlags(["socket", "json", "session", "name"])
+        validateFlags([
+            "socket", "json", "session", "name", "controller-id", "controller-label",
+            "controller-kind", "controller-ttl", "lease",
+        ])
+        let owner = controllerOwnerArgument()
+        let ttl = doubleArgument("controller-ttl")
+        if let ttl, !(30...3_600).contains(ttl) {
+            fail("--controller-ttl must be from 30 through 3600 seconds")
+        }
+        let requestedLease = leaseArgument()
         remote { request in
             request.cmd = "session.create"
             request.session = stringArgument("session", "name")
+            request.controllerOwner = owner
+            request.controllerTTLSeconds = ttl
+            request.controllerLeaseID = requestedLease
         }
     case "list":
         validateFlags(["socket", "json"])
         remote { $0.cmd = "session.list" }
+    case "heartbeat":
+        validateFlags(["socket", "json", "session", "lease"])
+        let lease = leaseArgument(required: true)
+        remote { request in
+            request.cmd = "session.heartbeat"
+            request.session = stringArgument("session")
+            request.controllerLeaseID = lease
+        }
     case "destroy":
-        validateFlags(["socket", "json", "session", "all", "keep-apps"])
+        validateFlags(["socket", "json", "session", "all", "keep-apps", "lease"])
         remote { request in
             request.cmd = "session.destroy"
             request.session = stringArgument("session")
             request.full = args.bool("all")
             request.quitApps = !args.bool("keep-apps")
+            request.controllerLeaseID = leaseArgument()
         }
     default:
         fail("unknown session subcommand '\(sub)'")
@@ -541,21 +726,23 @@ case "pool":
     remote { $0.cmd = "pool" }
 
 case "run":
-    validateFlags(["socket", "json", "session"])
+    validateFlags(["socket", "json", "session", "lease"])
     guard let app = args.positional.first else { fail("run needs an application name or path") }
     remote { request in
         request.cmd = "run"
         request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
         request.app = app
         request.files = Array(args.positional.dropFirst())
     }
 
 case "adopt":
-    validateFlags(["socket", "json", "session", "pid"])
+    validateFlags(["socket", "json", "session", "pid", "lease"])
     guard let pid = pidArgument() else { fail("adopt needs --pid N") }
     remote { request in
         request.cmd = "adopt"
         request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
         request.pid = pid
     }
 
@@ -578,11 +765,12 @@ case "ax":
 case "click":
     validateFlags([
         "socket", "json", "session", "window", "element", "web",
-        "x", "y", "button", "count",
+        "x", "y", "button", "count", "lease",
     ])
     remote { request in
             request.cmd = "click"
             request.session = stringArgument("session")
+            request.controllerLeaseID = leaseArgument()
             request.window = windowArgument()
         request.element = stringArgument("element")
         request.web = args.bool("web") ? true : nil
@@ -593,22 +781,24 @@ case "click":
     }
 
 case "type":
-    validateFlags(["socket", "json", "session", "window", "web"])
+    validateFlags(["socket", "json", "session", "window", "web", "lease"])
     guard let text = args.positional.first else { fail("type needs a string") }
     remote { request in
             request.cmd = "type"
             request.session = stringArgument("session")
+            request.controllerLeaseID = leaseArgument()
             request.window = windowArgument()
         request.text = text
         request.web = args.bool("web") ? true : nil
     }
 
 case "key":
-    validateFlags(["socket", "json", "session", "window", "web"])
+    validateFlags(["socket", "json", "session", "window", "web", "lease"])
     guard let combo = args.positional.first else { fail("key needs a combo like cmd+s") }
     remote { request in
             request.cmd = "key"
         request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
         request.window = windowArgument()
         request.key = combo
         request.web = args.bool("web") ? true : nil
@@ -632,10 +822,11 @@ case "verify":
     }
 
 case "repark":
-    validateFlags(["socket", "json", "session"])
+    validateFlags(["socket", "json", "session", "lease"])
     remote { request in
         request.cmd = "repark"
         request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
     }
 
 case "mcp":

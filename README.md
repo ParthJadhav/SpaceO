@@ -106,8 +106,9 @@ refusal states the requested value, the limit, and what to do about it. Setting
 `SPACEO_UNSAFE_RESOURCE_LIMITS=1` in the daemon's environment raises the limits considerably; it
 is deliberately an operator decision at daemon start rather than something an agent can request.
 
-Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`, `spaceo_open_app`, `spaceo_read_screen`,
-`spaceo_click`, `spaceo_type`, `spaceo_press_key`, `spaceo_screenshot`, `spaceo_list_windows`,
+Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`,
+`spaceo_session_heartbeat`, `spaceo_open_app`, `spaceo_read_screen`, `spaceo_click`,
+`spaceo_type`, `spaceo_press_key`, `spaceo_screenshot`, `spaceo_list_windows`,
 `spaceo_verify_isolation`, `spaceo_pool_status`, `spaceo_session_destroy`.
 
 `spaceo_read_screen` is the one that matters. It returns an indexed outline —
@@ -123,6 +124,24 @@ page content (click these with --element wN):
 — and `spaceo_click` takes those references. Clicking `3` presses an app control through
 accessibility; clicking `w0` dispatches a real DOM event through the browser. Neither needs
 coordinates, so neither can miss.
+
+## Session ownership and recovery
+
+Creating a session returns a controller lease. Successful owner-scoped mutations renew its
+bounded TTL, and `spaceo session heartbeat --lease UUID` keeps it alive while a controller is
+otherwise idle. Lease values are returned only by create and heartbeat, never by session lists;
+MCP connections retain and supply their own leases automatically.
+
+An expired or disappeared controller leaves an abandoned session. After a short grace interval,
+SpaceO can reclaim its resources; “reclaimable” means safe to clean up, not safe for another
+controller to take over. Session lists and SpaceO Viewer expose the owner, age, last activity,
+reclaimability, and cleanup blockers.
+
+The daemon also keeps a private, per-socket recovery ledger. A new daemon fences every old lease
+before accepting work and treats prior display and window ids as diagnostic only. Detached
+recovery terminates only exact, currently matching processes that SpaceO launched; adopted apps
+are released without termination. See [Session ownership and recovery](docs/SESSION_RECOVERY.md)
+for lease handling, restart behavior, and operator retry steps.
 
 ## Sessions share displays
 

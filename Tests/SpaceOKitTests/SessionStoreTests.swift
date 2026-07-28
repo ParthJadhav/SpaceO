@@ -4,6 +4,15 @@ import Darwin
 
 final class SessionStoreTests: XCTestCase {
 
+    func testEncodedSizeLimitIncludesTrailingNewline() {
+        XCTAssertTrue(
+            SessionStore.encodedLedgerFits(
+                byteCount: SessionStore.maximumLedgerBytes - 1))
+        XCTAssertFalse(
+            SessionStore.encodedLedgerFits(
+                byteCount: SessionStore.maximumLedgerBytes))
+    }
+
     private struct InjectedWriteFailure: Error {}
 
     private func temporaryStateRoot() throws -> (container: URL, root: URL) {
