@@ -6,6 +6,8 @@ user's cursor, keyboard focus, and display.
 > [!NOTE]
 > Virtual-display creation and focus routing are enabled. The unsafe private focus getters from
 > the 2026-07-26 incident remain removed; focus preparation and route restoration are best-effort.
+> Isolation verification therefore reports the key-event and text-input routes as unknown, and a
+> no-breach live result as `partial` rather than claiming the user was verified as undisturbed.
 > Display creation no longer has product caps or preflight refusals for mirroring,
 > ownerless displays, physical-display activity, overlap, or cursor-fence availability. Those
 > conditions remain visible in diagnostics, and teardown is still verified. See the
@@ -24,7 +26,7 @@ Expected UX:
 ```
 $ spaceo demo
   PASS  stage created
-  PASS  launch did not disturb the user
+  PARTIAL  launch isolation — no covered breach; unknown required checks: key_input_route, text_input_route
   PASS  typed text reached the app
   PASS  window screenshot is really rendered
   PASS  session audit is clean
@@ -192,9 +194,14 @@ The viewer uses the same delivery path as the rest of SpaceO:
   events stamped with the window under your click. A target is primed with the same
   focus-without-raise sequence and paced pointer events used by the CLI.
 - Control is available for both SpaceO virtual displays and physical displays; display provenance
-  is not an input allowlist.
-- While Control is on, every keyboard shortcut, including Control-Command-Escape, is forwarded
-  to the selected display. Turn the toolbar toggle off to stop forwarding.
+  is not an input allowlist. The toggle becomes available only after the selected display has a
+  live stream; if capture stops or fails, the viewer turns Control off, releases held remote keys,
+  and reports the failure in text and through VoiceOver.
+- While Control is on, keyboard shortcuts are forwarded to the selected display except
+  **Control-Command-Escape**, which always exits Control locally and is never sent remotely.
+  Reserving that uncommon chord keeps ordinary Escape available to remote apps and avoids
+  VoiceOver's Control-Option modifier; the tradeoff is that a remote app cannot receive this one
+  chord. The surface help and status bar expose the shortcut while Control is active.
 - Drags stay with the window they started on; the keyboard follows the last window you clicked.
 - Session tiles are outlined with their session ids when a daemon is running (`session.list`
   over the daemon socket); without a daemon you get the plain display.
@@ -231,17 +238,30 @@ spaceo session destroy --session research
 spaceo daemon stop
 ```
 
-Every command that touches an app reports whether isolation held:
+Launch and input commands, plus `spaceo verify`, report isolation coverage and failures:
 
 ```
-  isolation: intact (user undisturbed)
+  isolation: partial (no covered breach; required checks remain unknown)
+    - menu_bar_owner: passed [observed] — NSWorkspace frontmost application
+    - window_server_front_process: passed [inferred] — inferred from AppKit; no safe WindowServer front-process getter is available
+    - key_input_route: unknown [unknown] — no safe public input-route getter is available
+    - text_input_route: unknown [unknown] — no safe public input-route getter is available
+    - cursor_location: passed [observed] — CoreGraphics event location
+    - active_space: passed [observed] — WindowServer active Space
 ```
 
 The check knows which processes and Spaces belong to agents, so it blames SpaceO only for
 changes that land on agent territory. You switching apps mid-command is reported as a note, not
-a violation — a safety check that cries wolf is one nobody reads.
+a violation — a safety check that cries wolf is one nobody reads. The removed private focus
+getters have no safe replacement, so current live checks cannot observe the key-event or
+text-input routes. `partial` means that no covered check found a breach; it does **not** mean the
+user was fully verified as undisturbed.
 
-`--json` on any command gives machine-readable output for an agent runtime to consume.
+`--json` exposes the same result under `isolation`: `verdict` is `intact`, `breached`, or
+`partial`; every entry in `checks` includes its `dimension`, `required`, `coverage`, `status`,
+`evidence`, and per-check `failures`. The top-level `failures` array contains the same failures
+for consumers that do not need to group them by check. The legacy `drift` field is omitted for a
+partial report, so an empty array cannot be mistaken for a fully covered clean result.
 
 ### Addressing elements
 

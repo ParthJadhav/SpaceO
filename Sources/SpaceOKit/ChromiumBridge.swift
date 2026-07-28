@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 
 /// Drives Chromium web content through the DevTools Protocol.
@@ -368,23 +369,98 @@ public actor ChromiumBridge {
         try await send("Input.insertText", ["text": text])
     }
 
-    public func key(_ combo: String) async throws {
-        // Enough for the keys agents actually press on a page.
-        let map: [String: (Int, String)] = [
-            "return": (13, "Enter"), "enter": (13, "Enter"), "tab": (9, "Tab"),
-            "esc": (27, "Escape"), "escape": (27, "Escape"), "delete": (8, "Backspace"),
-            "up": (38, "ArrowUp"), "down": (40, "ArrowDown"),
-            "left": (37, "ArrowLeft"), "right": (39, "ArrowRight"),
+    public func key(_ text: String) async throws {
+        try await key(KeyCombo.parse(text))
+    }
+
+    public func key(_ combo: KeyCombo) async throws {
+        try await Self.deliverKey(combo, pasteboard: .general) { params in
+            try await self.send("Input.dispatchKeyEvent", params)
+        }
+    }
+
+    struct DevToolsKey {
+        let windowsVirtualKeyCode: Int
+        let key: String
+        let code: String
+        let modifiers: Int
+    }
+
+    /// Builds and dispatches both CDP key events. Clipboard-mutating shortcuts are refused
+    /// before this helper constructs or sends either event.
+    static func deliverKey(
+        _ combo: KeyCombo,
+        pasteboard: NSPasteboard,
+        dispatch: ([String: Any]) async throws -> Void
+    ) async throws {
+        // CDP offers no isolated macOS pasteboard transaction either. Refuse before sending
+        // rawKeyDown, including modified Command-C/X variants that an application may bind.
+        _ = pasteboard
+        try combo.requireClipboardSafeRoute()
+        let key = try devToolsKey(for: combo)
+
+        func sendEvents() async throws {
+            let down: [String: Any] = [
+                "type": "rawKeyDown",
+                "windowsVirtualKeyCode": key.windowsVirtualKeyCode,
+                "nativeVirtualKeyCode": Int(combo.keyCode),
+                "key": key.key,
+                "code": key.code,
+                "modifiers": key.modifiers,
+            ]
+            try await dispatch(down)
+            try await dispatch([
+                "type": "keyUp",
+                "windowsVirtualKeyCode": key.windowsVirtualKeyCode,
+                "nativeVirtualKeyCode": Int(combo.keyCode),
+                "key": key.key,
+                "code": key.code,
+                "modifiers": key.modifiers,
+            ])
+        }
+
+        try await sendEvents()
+    }
+
+    static func devToolsKey(for combo: KeyCombo) throws -> DevToolsKey {
+        let map: [CGKeyCode: (windows: Int, key: String, code: String)] = [
+            8: (67, "c", "KeyC"),
+            7: (88, "x", "KeyX"),
+            36: (13, "Enter", "Enter"),
+            48: (9, "Tab", "Tab"),
+            51: (8, "Backspace", "Backspace"),
+            53: (27, "Escape", "Escape"),
+            123: (37, "ArrowLeft", "ArrowLeft"),
+            124: (39, "ArrowRight", "ArrowRight"),
+            125: (40, "ArrowDown", "ArrowDown"),
+            126: (38, "ArrowUp", "ArrowUp"),
         ]
-        guard !combo.isEmpty, combo.count <= 64, combo.utf8.count <= 256,
-              let (code, key) = map[combo.lowercased()] else {
-            throw SpaceOError.badRequest("'\(combo)' is not a key the browser bridge knows")
+        guard let mapped = map[combo.keyCode] else {
+            throw SpaceOError.badRequest(
+                "that key is not one the browser bridge knows")
         }
-        for type in ["keyDown", "keyUp"] {
-            try await send("Input.dispatchKeyEvent",
-                           ["type": type, "windowsVirtualKeyCode": code,
-                            "nativeVirtualKeyCode": code, "key": key])
+
+        var modifiers = 0
+        if combo.flags.contains(.maskAlternate) { modifiers |= 1 }
+        if combo.flags.contains(.maskControl) { modifiers |= 2 }
+        if combo.flags.contains(.maskCommand) { modifiers |= 4 }
+        if combo.flags.contains(.maskShift) { modifiers |= 8 }
+        let supported: CGEventFlags = [
+            .maskAlternate, .maskControl, .maskCommand, .maskShift,
+        ]
+        guard combo.flags.subtracting(supported).isEmpty else {
+            throw SpaceOError.badRequest(
+                "that modifier is not supported by the browser bridge")
         }
+
+        let renderedKey = combo.flags.contains(.maskShift)
+            && mapped.key.count == 1
+            ? mapped.key.uppercased() : mapped.key
+        return DevToolsKey(
+            windowsVirtualKeyCode: mapped.windows,
+            key: renderedKey,
+            code: mapped.code,
+            modifiers: modifiers)
     }
 
     /// Evaluate JavaScript in the page and return the result as a string.

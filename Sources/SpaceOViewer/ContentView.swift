@@ -147,7 +147,10 @@ struct ContentView: View {
             }
             Spacer()
             if model.interactionEnabled {
-                Text("control enabled")
+                Text("control enabled — \(ViewerControlPolicy.localExitDescription) exits")
+                    .foregroundStyle(.secondary)
+            } else if !model.streamRunning {
+                Text("control unavailable — waiting for live stream")
                     .foregroundStyle(.secondary)
             } else {
                 Text("viewing only — turn on Control to drive")
@@ -158,6 +161,30 @@ struct ContentView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Viewer status")
+        .accessibilityValue(statusAccessibilityValue(for: entry))
+    }
+
+    private func statusAccessibilityValue(for entry: DisplayEntry) -> String {
+        var parts = [
+            ViewerAccessibility.surfaceValue(
+                streamRunning: model.streamRunning,
+                controlEnabled: model.interactionEnabled
+            ),
+            "Selected display: \(entry.name)."
+        ]
+        if model.interactionEnabled {
+            parts.append(
+                "Press \(ViewerControlPolicy.localExitDescription) to exit Control."
+            )
+        } else if !model.streamRunning {
+            parts.append("Control is unavailable until the display has a live stream.")
+        }
+        if let note = model.note {
+            parts.append(note.isWarning ? "Warning: \(note.text)" : note.text)
+        }
+        return parts.joined(separator: " ")
     }
 
     private var permissionBanner: some View {
@@ -188,6 +215,8 @@ struct ContentView: View {
         .font(.callout)
         .padding(10)
         .background(.yellow.opacity(0.15))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Viewer permissions")
     }
 
     private func banner(text: String, color: Color) -> some View {
@@ -206,12 +235,15 @@ struct ContentView: View {
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            Toggle(isOn: $model.interactionEnabled) {
+            Toggle(isOn: Binding(
+                get: { model.interactionEnabled },
+                set: { model.setInteractionEnabled($0) }
+            )) {
                 Label("Control", systemImage: "keyboard")
             }
             .toggleStyle(.button)
-            .disabled(model.selected == nil)
-            .help("Forward your mouse and keyboard to this display")
+            .disabled(model.selected == nil || !model.streamRunning)
+            .help(controlHelp)
 
             Button {
                 model.saveScreenshot()
@@ -228,5 +260,16 @@ struct ContentView: View {
             }
             .help("Re-scan displays and sessions")
         }
+    }
+
+    private var controlHelp: String {
+        guard model.selected != nil else {
+            return "Select a display before turning on Control."
+        }
+        guard model.streamRunning else {
+            return "Control is unavailable until the selected display has a live stream."
+        }
+        return "Forward your mouse and keyboard to this display. "
+            + "\(ViewerControlPolicy.localExitDescription) always exits locally."
     }
 }

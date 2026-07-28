@@ -11,6 +11,108 @@ struct InputNote: Equatable {
     let isWarning: Bool
 }
 
+/// The one keyboard chord the Viewer owns while remote Control is active.
+///
+/// An unmodified Escape must remain available to remote apps, and Control-Option is VoiceOver's
+/// modifier. Control-Command-Escape is therefore reserved locally: it is uncommon in apps,
+/// remains reachable with VoiceOver running, and is shown anywhere Control state is described.
+enum ViewerControlPolicy {
+    static let localExitDescription = "Control-Command-Escape"
+    static let localExitKeyCode: UInt16 = 53
+
+    enum KeyDisposition: Equatable {
+        case local
+        case forward
+        case exitControl
+    }
+
+    enum ControlRequestDisposition: Equatable {
+        case enable
+        case disable
+        case blocked(String)
+    }
+
+    static func keyDisposition(interactionEnabled: Bool,
+                               keyCode: UInt16,
+                               modifiers: NSEvent.ModifierFlags) -> KeyDisposition {
+        guard interactionEnabled else { return .local }
+        if isLocalExitChord(keyCode: keyCode, modifiers: modifiers) {
+            return .exitControl
+        }
+        return .forward
+    }
+
+    static func isLocalExitChord(keyCode: UInt16,
+                                 modifiers: NSEvent.ModifierFlags) -> Bool {
+        let meaningful = modifiers.intersection([.command, .control, .option, .shift])
+        return keyCode == localExitKeyCode && meaningful == [.command, .control]
+    }
+
+    static func controlRequest(enabling: Bool,
+                               hasSelectedDisplay: Bool,
+                               streamRunning: Bool,
+                               screenRecordingGranted: Bool,
+                               accessibilityGranted: Bool) -> ControlRequestDisposition {
+        guard enabling else { return .disable }
+        guard hasSelectedDisplay else {
+            return .blocked("Control unavailable. Select a display first.")
+        }
+        guard streamRunning else {
+            return .blocked(
+                "Control unavailable. Wait for a live stream before sending input."
+            )
+        }
+        guard screenRecordingGranted else {
+            return .blocked(
+                "Control unavailable. Screen Recording permission is required to see the "
+                    + "display before sending input."
+            )
+        }
+        guard accessibilityGranted else {
+            return .blocked(
+                "Control unavailable. Accessibility permission is required to send input "
+                    + "to the selected display."
+            )
+        }
+        return .enable
+    }
+}
+
+enum ViewerAccessibility {
+    static func surfaceLabel(displayName: String) -> String {
+        "Remote display, \(displayName)"
+    }
+
+    static func surfaceValue(streamRunning: Bool, controlEnabled: Bool) -> String {
+        let stream = streamRunning ? "Live stream" : "Stream unavailable"
+        let control = controlEnabled
+            ? "Control enabled"
+            : "Viewing only"
+        return "\(stream). \(control)."
+    }
+
+    static func surfaceHelp(streamRunning: Bool, controlEnabled: Bool) -> String {
+        if controlEnabled {
+            return "Keyboard and pointer input go to the remote display. Press "
+                + "\(ViewerControlPolicy.localExitDescription) to exit Control."
+        }
+        if !streamRunning {
+            return "The remote display stream is unavailable. Control cannot be enabled until "
+                + "the stream is live."
+        }
+        return "A streamed remote display. Turn on Control to send keyboard and pointer input."
+    }
+
+    static func controlAnnouncement(enabled: Bool, displayName: String?) -> String {
+        if enabled {
+            let destination = displayName.map { " for \($0)" } ?? ""
+            return "Control enabled\(destination). Keyboard and pointer input now go to the "
+                + "remote display. Press \(ViewerControlPolicy.localExitDescription) to exit."
+        }
+        return "Control disabled. Keyboard and pointer input stay on this Mac."
+    }
+}
+
 /// Turns NSEvents from the console surface into per-PID deliveries on a background queue.
 ///
 /// VM semantics live here: a drag keeps going to the window it started on even when the pointer
@@ -18,9 +120,15 @@ struct InputNote: Equatable {
 /// in this path activates an app, raises a window, or moves the real cursor.
 final class ViewerInputController {
 
+    typealias KeyPoster = (_ code: CGKeyCode, _ flags: CGEventFlags, _ down: Bool,
+                           _ characters: String?, _ pid: pid_t) throws -> Void
+    typealias FrontWindowProvider = (_ displayBounds: CGRect) -> WindowRef?
+
     var onNote: ((InputNote?) -> Void)?
 
     private let queue = DispatchQueue(label: "spaceo.viewer.input", qos: .userInteractive)
+    private let postKeyEvent: KeyPoster
+    private let frontWindowProvider: FrontWindowProvider
     private let stateLock = NSLock()
     private var _display: DisplayEntry?
     private var _interactionEnabled = false
@@ -37,6 +145,13 @@ final class ViewerInputController {
     private var lastMoveUptime: UInt64 = 0
     private var candidateCache: (uptime: UInt64, list: [MirrorInput.WindowCandidate])?
     private var lastNote: InputNote?
+    private struct HeldKey {
+        let keyCode: UInt16
+        let flags: CGEventFlags
+        let characters: String?
+        let pid: pid_t
+    }
+    private var heldKeys: [UInt16: HeldKey] = [:]
 
     /// Held input state that must be released *promptly* on a transition, so it is guarded by a
     /// lock rather than confined to the queue. Restoring the user's input route is the one piece
@@ -44,44 +159,65 @@ final class ViewerInputController {
     private let routeLock = NSLock()
     private var pointerRoute: InputRouter.UserInputRoute?
 
+    init(
+        keyPoster: @escaping KeyPoster = { code, flags, down, characters, pid in
+            try MirrorInput.postKey(code: code, flags: flags, down: down,
+                                    characters: characters, to: pid)
+        },
+        frontWindowProvider: @escaping FrontWindowProvider = { displayBounds in
+            MirrorInput.frontWindow(on: displayBounds,
+                                    excluding: MirrorInput.selfExcludedPIDs)
+        }
+    ) {
+        postKeyEvent = keyPoster
+        self.frontWindowProvider = frontWindowProvider
+    }
+
     var display: DisplayEntry? {
         get { stateLock.withLock { _display } }
         set {
             stateLock.withLock { _display = newValue }
             // Order matters. Invalidate first: every event already queued for the old display
             // becomes a no-op immediately, rather than executing against it. Then release held
-            // state, synchronously, without joining the queue behind that backlog.
+            // state synchronously; invalid queued events drain as no-ops before cleanup runs.
             gate.select(displayID: newValue?.id)
-            stateLock.withLock { _interactionEnabled = false }
             restorePointerRoute()
-            queue.async { [weak self] in
-                self?.dragTarget = nil
-                self?.keyTarget = nil
-                self?.accessibilityPressHandled = false
-                self?.candidateCache = nil
+            // Synchronizing here lets any currently executing down finish and be recorded. The
+            // gate rejects queued/new work, then matching ups are delivered before targets clear.
+            queue.sync {
+                releaseHeldKeys()
+                dragTarget = nil
+                keyTarget = nil
+                accessibilityPressHandled = false
+                candidateCache = nil
             }
+            stateLock.withLock { _interactionEnabled = false }
         }
     }
 
     var interactionEnabled: Bool {
         get { stateLock.withLock { _interactionEnabled } }
         set {
-            let display = stateLock.withLock { () -> DisplayEntry? in
-                _interactionEnabled = newValue
-                return _display
-            }
-            if newValue, let display {
-                gate.enable(displayID: display.id)
-                return
+            if newValue {
+                let display = stateLock.withLock { () -> DisplayEntry? in
+                    _interactionEnabled = true
+                    return _display
+                }
+                if let display {
+                    gate.enable(displayID: display.id)
+                    return
+                }
             }
             gate.disable()
             restorePointerRoute()
-            queue.async { [weak self] in
-                self?.dragTarget = nil
-                self?.keyTarget = nil
-                self?.accessibilityPressHandled = false
-                self?.lastNote = nil
+            queue.sync {
+                releaseHeldKeys()
+                dragTarget = nil
+                keyTarget = nil
+                accessibilityPressHandled = false
+                lastNote = nil
             }
+            stateLock.withLock { _interactionEnabled = false }
         }
     }
 
@@ -227,24 +363,34 @@ final class ViewerInputController {
                             modifiers: NSEvent.ModifierFlags,
                             characters: String?,
                             on display: DisplayEntry) {
+        let flags = MirrorInput.flags(from: modifiers)
+        if let held = heldKeys[keyCode] {
+            do {
+                try postKeyEvent(CGKeyCode(keyCode), flags, down, characters, held.pid)
+                if !down { heldKeys.removeValue(forKey: keyCode) }
+            } catch {
+                note(error.localizedDescription, warning: true)
+            }
+            return
+        }
+
         // The clicked window may have closed since; fall back to the stage's front window.
         if let current = keyTarget,
            (try? WindowPlacement.liveBounds(of: current.windowID)) == nil {
             keyTarget = nil
         }
-        let target = keyTarget ?? MirrorInput.frontWindow(
-            on: display.bounds, excluding: MirrorInput.selfExcludedPIDs)
+        let target = keyTarget ?? frontWindowProvider(display.bounds)
         guard let target else {
             if down { note("no window on this stage to type into — click one first") }
             return
         }
         keyTarget = target
         do {
-            try MirrorInput.postKey(code: CGKeyCode(keyCode),
-                                    flags: MirrorInput.flags(from: modifiers),
-                                    down: down,
-                                    characters: characters,
-                                    to: target.pid)
+            try postKeyEvent(CGKeyCode(keyCode), flags, down, characters, target.pid)
+            if down {
+                heldKeys[keyCode] = HeldKey(keyCode: keyCode, flags: flags,
+                                            characters: characters, pid: target.pid)
+            }
         } catch {
             note(error.localizedDescription, warning: true)
         }
@@ -276,6 +422,22 @@ final class ViewerInputController {
         let (display, enabled) = stateLock.withLock { (_display, _interactionEnabled) }
         guard enabled, let display else { return nil }
         return display
+    }
+
+    /// Queue-confined transition cleanup. Every down successfully sent to a target gets one final
+    /// up sent to that same PID before the target and Control state are discarded.
+    private func releaseHeldKeys() {
+        let releases = Array(heldKeys.values)
+        heldKeys.removeAll()
+        for held in releases {
+            do {
+                try postKeyEvent(CGKeyCode(held.keyCode), held.flags, false,
+                                 held.characters, held.pid)
+            } catch {
+                note("could not release remote key \(held.keyCode): "
+                     + error.localizedDescription, warning: true)
+            }
+        }
     }
 
     /// Safe to call from any thread, and idempotent — a transition on the main thread and the

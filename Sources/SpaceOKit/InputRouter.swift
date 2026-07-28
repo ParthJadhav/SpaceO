@@ -17,6 +17,23 @@ public struct KeyCombo: Sendable, Equatable {
     public let keyCode: CGKeyCode
     public let flags: CGEventFlags
 
+    /// Command-C and Command-X are the native routes that can replace the shared pasteboard.
+    /// Extra modifiers do not make them safe: applications are free to bind variants such as
+    /// Command-Shift-C to another kind of copy.
+    var mutatesPasteboard: Bool {
+        flags.contains(.maskCommand) && (keyCode == 8 || keyCode == 7)
+    }
+
+    func requireClipboardSafeRoute() throws {
+        guard !mutatesPasteboard else {
+            throw SpaceOError.unsupportedTarget(
+                "clipboard-safe Command-C/Command-X delivery is unavailable: macOS provides "
+                + "no atomic way to restore the shared pasteboard without risking a newer user "
+                + "copy. Use a non-clipboard read/edit action; enabling this shortcut requires "
+                + "an isolated clipboard broker or an acknowledged target route.")
+        }
+    }
+
     public static func parse(_ input: String) throws -> KeyCombo {
         guard !input.isEmpty, input.count <= 64, input.utf8.count <= 256 else {
             throw SpaceOError.badRequest(
@@ -300,6 +317,26 @@ public enum InputRouter {
     }
 
     public static func key(_ combo: KeyCombo, to pid: pid_t) throws {
+        try deliverKey(combo, pasteboard: .general) {
+            try postKey(combo, to: pid)
+        }
+    }
+
+    /// Shared production/test seam so recognition and guarding cannot drift apart. The real
+    /// route supplies `postKey`; tests supply a pasteboard-writing command.
+    static func deliverKey(
+        _ combo: KeyCombo,
+        pasteboard: NSPasteboard,
+        delivery: () throws -> Void
+    ) throws {
+        // Deliberately inspect no pasteboard state. There is no safe shared-pasteboard
+        // transaction to start, so fail before synthesising either key event.
+        _ = pasteboard
+        try combo.requireClipboardSafeRoute()
+        try delivery()
+    }
+
+    private static func postKey(_ combo: KeyCombo, to pid: pid_t) throws {
         let source = CGEventSource(stateID: .hidSystemState)
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: combo.keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: combo.keyCode, keyDown: false)

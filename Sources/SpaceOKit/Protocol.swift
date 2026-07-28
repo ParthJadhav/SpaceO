@@ -136,6 +136,9 @@ public struct Response: Codable, Sendable {
     public var windows: [WindowInfo]?
     public var outline: String?
     public var path: String?
+    /// Structured isolation coverage and verdict.
+    public var isolation: IsolationReport?
+    /// Legacy isolation failures. Omitted for a partial report so `[]` cannot be read as clean.
     public var drift: [String]?
     public var ambient: [String]?
     public var findings: [String]?

@@ -360,8 +360,8 @@ public enum MCPServer {
                  ["session": sessionArg]),
 
             tool("spaceo_verify_isolation", """
-                Check that the session is healthy and has not disturbed the user: windows still \
-                in their tile, apps alive, display intact.
+                Audit session health and report per-check attention-isolation coverage. A partial \
+                verdict means no covered breach was found but a required route was unobservable.
                 """, ["session": sessionArg]),
 
             tool("spaceo_pool_status",
@@ -389,7 +389,7 @@ public enum MCPServer {
         }
 
         guard response.ok else {
-            respond(result: toolError(response.error ?? "unknown failure"), id: id)
+            respond(result: toolError(renderFailure(response)), id: id)
             return
         }
 
@@ -445,8 +445,49 @@ public enum MCPServer {
         return data
     }
 
+    static func renderIsolation(_ report: IsolationReport) -> String {
+        let summary: String
+        switch report.verdict {
+        case .intact:
+            summary = "isolation: intact (every required check has usable coverage)"
+        case .partial:
+            summary = "isolation: partial "
+                + "(no covered breach; required checks remain unknown)"
+        case .breached:
+            summary = "ISOLATION BREACH"
+        }
+
+        var lines = [summary]
+        for check in report.checks {
+            lines.append("- \(check.dimension.rawValue): \(check.status.rawValue) "
+                + "[\(check.coverage.rawValue)] — \(check.evidence)")
+            for failure in check.failures {
+                lines.append("  failure: \(failure)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func renderLegacyIsolation(_ drift: [String]) -> String {
+        drift.isEmpty
+            ? "isolation: coverage unavailable (daemon returned no per-check report)"
+            : "ISOLATION BREACH: " + drift.joined(separator: "; ")
+    }
+
+    /// The exact text placed in an MCP tool error. Kept internal so production failure rendering,
+    /// including per-check coverage, is exercised without a socket or JSON-RPC process.
+    static func renderFailure(_ response: Response) -> String {
+        var error = response.error ?? "unknown failure"
+        if let isolation = response.isolation {
+            error += "\n" + renderIsolation(isolation)
+        } else if let drift = response.drift {
+            error += "\n" + renderLegacyIsolation(drift)
+        }
+        return error
+    }
+
     /// Flatten a daemon response into something a model reads well.
-    private static func render(_ response: Response) -> String {
+    static func render(_ response: Response) -> String {
         var lines: [String] = []
         if let message = response.message { lines.append(message) }
         if let outline = response.outline { lines.append(outline) }
@@ -470,10 +511,10 @@ public enum MCPServer {
         }
         for finding in response.findings ?? [] { lines.append("issue: \(finding)") }
 
-        if let drift = response.drift {
-            lines.append(drift.isEmpty
-                ? "isolation intact — the user was not disturbed"
-                : "ISOLATION BREACH: " + drift.joined(separator: "; "))
+        if let isolation = response.isolation {
+            lines.append(renderIsolation(isolation))
+        } else if let drift = response.drift {
+            lines.append(renderLegacyIsolation(drift))
         }
         for change in response.ambient ?? [] { lines.append("note: \(change)") }
         return lines.isEmpty ? "ok" : lines.joined(separator: "\n")

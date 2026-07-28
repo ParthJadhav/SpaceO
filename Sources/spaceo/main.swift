@@ -91,6 +91,34 @@ func printSession(_ session: SessionInfo) {
     printWindows(session.windows, indent: "   ")
 }
 
+func printIsolation(_ report: IsolationReport) {
+    switch report.verdict {
+    case .intact:
+        print("  isolation: intact (every required check has usable coverage)")
+    case .partial:
+        print("  isolation: partial (no covered breach; required checks remain unknown)")
+    case .breached:
+        print("  ISOLATION BREACH:")
+    }
+
+    for check in report.checks {
+        print("    - \(check.dimension.rawValue): \(check.status.rawValue) "
+            + "[\(check.coverage.rawValue)] — \(check.evidence)")
+        for failure in check.failures {
+            print("      ! \(failure)")
+        }
+    }
+}
+
+func printLegacyIsolation(_ drift: [String]) {
+    if drift.isEmpty {
+        print("  isolation: coverage unavailable (daemon returned no per-check report)")
+    } else {
+        print("  ISOLATION BREACH:")
+        for item in drift { print("    - \(item)") }
+    }
+}
+
 func emit(_ response: Response, json: Bool) -> Never {
     if json {
         if let data = try? Wire.encoder.encode(response),
@@ -100,7 +128,14 @@ func emit(_ response: Response, json: Bool) -> Never {
         exit(response.ok ? 0 : 1)
     }
 
-    if !response.ok { fail(response.error ?? "unknown failure") }
+    if !response.ok {
+        if let isolation = response.isolation {
+            printIsolation(isolation)
+        } else if let drift = response.drift {
+            printLegacyIsolation(drift)
+        }
+        fail(response.error ?? "unknown failure")
+    }
 
     if let message = response.message { print(message) }
     if let session = response.session { printSession(session) }
@@ -127,13 +162,10 @@ func emit(_ response: Response, json: Bool) -> Never {
         let oneLine = value.replacingOccurrences(of: "\n", with: "\\n")
         print("  focused value: \(oneLine.count > 160 ? String(oneLine.prefix(160)) + "…" : oneLine)")
     }
-    if let drift = response.drift {
-        if drift.isEmpty {
-            print("  isolation: intact (user undisturbed)")
-        } else {
-            print("  ISOLATION BREACH:")
-            for item in drift { print("    - \(item)") }
-        }
+    if let isolation = response.isolation {
+        printIsolation(isolation)
+    } else if let drift = response.drift {
+        printLegacyIsolation(drift)
     }
     if let ambient = response.ambient, !ambient.isEmpty {
         for item in ambient { print("  note: \(item)") }

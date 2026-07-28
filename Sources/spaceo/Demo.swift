@@ -6,12 +6,13 @@ import SpaceOKit
 /// A self-contained end-to-end proof that needs no daemon.
 ///
 /// This is the acceptance test a human can watch: it runs the full agent workflow against a real
-/// app and asserts, at every step, that the user was not disturbed. Anything it prints as FAIL
-/// is a real defect, not a warning.
+/// app and reports both detected breaches and dimensions macOS does not safely expose. Anything
+/// it prints as FAIL is a detected defect; PARTIAL means required coverage was unavailable.
 enum Demo {
 
     private static var passed = 0
     private static var failed = 0
+    private static var partial = 0
 
     private static func check(_ label: String, _ condition: Bool, _ detail: String = "") {
         if condition {
@@ -20,6 +21,29 @@ enum Demo {
         } else {
             failed += 1
             print("  FAIL  \(label)\(detail.isEmpty ? "" : "  — \(detail)")")
+        }
+    }
+
+    private static func checkIsolation(_ label: String,
+                                       _ after: IsolationSnapshot,
+                                       comparedTo before: IsolationSnapshot) {
+        let report = after.report(comparedTo: before)
+        switch report.verdict {
+        case .intact:
+            check("\(label): intact", true)
+        case .breached:
+            check(
+                "\(label): breached",
+                false,
+                report.failures.joined(separator: "; ")
+            )
+        case .partial:
+            partial += 1
+            let unknown = report.checks
+                .filter { $0.required && $0.status == .unknown }
+                .map(\.dimension.rawValue)
+                .joined(separator: ", ")
+            print("  PARTIAL  \(label) — no covered breach; unknown required checks: \(unknown)")
         }
     }
 
@@ -139,9 +163,7 @@ enum Demo {
         // Settled, not instantaneous: a 200 ms flicker while an app starts is not a state
         // change, and any grab that did happen is reported separately below.
         let afterLaunch = IsolationSnapshot.captureStable()
-        check("launch did not disturb the user",
-              afterLaunch.isUndisturbed(comparedTo: launchBefore),
-              afterLaunch.drift(from: launchBefore).joined(separator: "; "))
+        checkIsolation("launch isolation", afterLaunch, comparedTo: launchBefore)
         if let restored = session.lastLaunchRestoredFocus {
             print("        note: \(app.name) grabbed focus on startup; handed it back to \(restored)")
         }
@@ -181,9 +203,11 @@ enum Demo {
         }
         check("typed text reached the app", typed.contains(marker),
               typed.isEmpty ? "focused element had no value" : String(typed.prefix(80)))
-        check("typing did not disturb the user",
-              IsolationSnapshot.capture().isUndisturbed(comparedTo: typeBefore),
-              IsolationSnapshot.capture().drift(from: typeBefore).joined(separator: "; "))
+        checkIsolation(
+            "typing isolation",
+            IsolationSnapshot.capture(),
+            comparedTo: typeBefore
+        )
 
         // ---- 5. accessibility addressing -------------------------------------------------
         do {
@@ -253,14 +277,12 @@ enum Demo {
                   "\(remaining.count) display(s) remain: \(remaining.map(String.init).joined(separator: ","))")
             check("pool is empty", pool.displayCount == 0 && pool.sessionCount == 0)
             let settled = IsolationSnapshot.captureStable()
-            check("user state restored",
-                  settled.isUndisturbed(comparedTo: userBefore),
-                  settled.drift(from: userBefore).joined(separator: "; "))
+            checkIsolation("user-state restoration", settled, comparedTo: userBefore)
         } else {
             print("\n  --keep: session left running on display \(session.stage.displayID)")
         }
 
-        print("\n  \(passed) passed, \(failed) failed")
+        print("\n  \(passed) passed, \(partial) partial, \(failed) failed")
         return failed == 0 ? 0 : 1
     }
 }

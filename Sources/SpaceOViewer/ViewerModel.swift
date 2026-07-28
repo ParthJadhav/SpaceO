@@ -25,10 +25,19 @@ final class ViewerModel: ObservableObject {
     @Published var selectedID: CGDirectDisplayID? {
         didSet { if oldValue != selectedID { restartStream() } }
     }
-    @Published var interactionEnabled = false {
+    @Published private(set) var interactionEnabled = false {
         didSet {
-            input.interactionEnabled = interactionEnabled && selected != nil
+            input.interactionEnabled = interactionEnabled
+                && selected != nil
+                && streamRunning
             if !interactionEnabled { note = nil }
+            guard oldValue != interactionEnabled else { return }
+            accessibilityAnnouncement(
+                ViewerAccessibility.controlAnnouncement(
+                    enabled: interactionEnabled,
+                    displayName: selected?.name
+                )
+            )
         }
     }
     @Published private(set) var streamRunning = false
@@ -40,6 +49,7 @@ final class ViewerModel: ObservableObject {
     let stream = DisplayStream()
     let input = ViewerInputController()
 
+    private let accessibilityAnnouncement: (String) -> Void
     private var refreshTimer: Timer?
     private var streamGeneration = 0
 
@@ -51,21 +61,38 @@ final class ViewerModel: ObservableObject {
         return sessions.filter { $0.displayID == selectedID }
     }
 
-    init() {
+    init(
+        automaticRefresh: Bool = true,
+        initialDisplays: [DisplayEntry] = [],
+        initialSelectedID: CGDirectDisplayID? = nil,
+        initialPermissions: PermissionState = PermissionState(),
+        initialStreamRunning: Bool = false,
+        accessibilityAnnouncement: @escaping (String) -> Void = {
+            AccessibilityNotification.Announcement($0).post()
+        }
+    ) {
+        displays = initialDisplays
+        selectedID = initialSelectedID
+        permissions = initialPermissions
+        streamRunning = initialStreamRunning
+        self.accessibilityAnnouncement = accessibilityAnnouncement
         stream.onStopped = { [weak self] error in
             Task { @MainActor [weak self] in
-                self?.streamRunning = false
-                if let error {
-                    self?.streamError = "stream stopped: \(error.localizedDescription)"
-                }
+                self?.handleUnexpectedStreamStop(error)
             }
         }
         input.onNote = { [weak self] value in
             Task { @MainActor [weak self] in self?.note = value }
         }
-        refresh()
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+        input.display = selected
+        if automaticRefresh {
+            refresh()
+            refreshTimer = Timer.scheduledTimer(
+                withTimeInterval: 2.0,
+                repeats: true
+            ) { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            }
         }
     }
 
@@ -91,6 +118,21 @@ final class ViewerModel: ObservableObject {
         }
         permissions = PermissionState(screenRecording: CGPreflightScreenCaptureAccess(),
                                       accessibility: AXIsProcessTrusted())
+        if interactionEnabled,
+           (!streamRunning || !permissions.screenRecording || !permissions.accessibility) {
+            interactionEnabled = false
+            let message = ViewerControlPolicy.controlRequest(
+                enabling: true,
+                hasSelectedDisplay: selected != nil,
+                streamRunning: streamRunning,
+                screenRecordingGranted: permissions.screenRecording,
+                accessibilityGranted: permissions.accessibility
+            )
+            if case let .blocked(text) = message {
+                note = InputNote(text: text, isWarning: true)
+                accessibilityAnnouncement(text)
+            }
+        }
         refreshSessions()
     }
 
@@ -142,9 +184,35 @@ final class ViewerModel: ObservableObject {
                 await MainActor.run { self.streamRunning = true }
             } catch {
                 guard generation == streamGeneration else { return }
-                await MainActor.run { self.streamError = error.localizedDescription }
+                await MainActor.run { self.handleStreamStartFailure(error) }
             }
         }
+    }
+
+    func handleUnexpectedStreamStop(_ error: Error?) {
+        let detail = error?.localizedDescription ?? "the capture ended unexpectedly"
+        transitionToUnavailableStream(
+            errorText: "stream stopped: \(detail)",
+            warningReason: "the live stream stopped: \(detail)"
+        )
+    }
+
+    func handleStreamStartFailure(_ error: Error) {
+        transitionToUnavailableStream(
+            errorText: error.localizedDescription,
+            warningReason: "the live stream failed to start: \(error.localizedDescription)"
+        )
+    }
+
+    private func transitionToUnavailableStream(errorText: String, warningReason: String) {
+        let hadControl = interactionEnabled
+        streamRunning = false
+        interactionEnabled = false
+        streamError = errorText
+        let prefix = hadControl ? "Control disabled because " : "Control unavailable because "
+        let warning = prefix + warningReason + "."
+        note = InputNote(text: warning, isWarning: true)
+        accessibilityAnnouncement(warning)
     }
 
     // MARK: - Screenshot
@@ -186,6 +254,25 @@ final class ViewerModel: ObservableObject {
     }
 
     // MARK: - Permissions
+
+    func setInteractionEnabled(_ enabled: Bool) {
+        switch ViewerControlPolicy.controlRequest(
+            enabling: enabled,
+            hasSelectedDisplay: selected != nil,
+            streamRunning: streamRunning,
+            screenRecordingGranted: permissions.screenRecording,
+            accessibilityGranted: permissions.accessibility
+        ) {
+        case .enable:
+            interactionEnabled = true
+        case .disable:
+            interactionEnabled = false
+        case let .blocked(message):
+            interactionEnabled = false
+            note = InputNote(text: message, isWarning: true)
+            accessibilityAnnouncement(message)
+        }
+    }
 
     func requestPermissions() {
         if !permissions.screenRecording {

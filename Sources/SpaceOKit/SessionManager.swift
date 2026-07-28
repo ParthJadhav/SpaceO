@@ -296,7 +296,8 @@ public actor SessionManager {
 
             var response = Response(ok: true)
             response.session = SessionInfo(session)
-            response.drift = after.breaches(from: before)
+            response.isolation = after.report(comparedTo: before)
+            response.drift = response.isolation?.legacyDrift
             response.ambient = after.ambientChanges(from: before)
             var message = "launched \(app.name) (pid \(app.pid)) onto '\(session.id)'"
             if let restored = session.lastLaunchRestoredFocus {
@@ -442,7 +443,8 @@ public actor SessionManager {
             }
             var response = Response(ok: true)
             let now = IsolationSnapshot.capture()
-            response.drift = now.breaches(from: before)
+            response.isolation = now.report(comparedTo: before)
+            response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
             failOnIsolationBreach(&response, action: "click")
             return response
@@ -472,7 +474,8 @@ public actor SessionManager {
             }
             var response = Response(ok: true)
             let now = IsolationSnapshot.capture()
-            response.drift = now.breaches(from: before)
+            response.isolation = now.report(comparedTo: before)
+            response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
             response.value = AXTree.focusedValue(pid: window.pid)
             failOnIsolationBreach(&response, action: "typing")
@@ -486,21 +489,25 @@ public actor SessionManager {
             }
             let session = try resolve(request.session)
             let window = try session.resolveWindow(request.window)
+            // Parse once before choosing native versus DevTools delivery. In particular this
+            // keeps Command-C/X recognition identical on both guarded production routes.
+            let parsedCombo = try KeyCombo.parse(combo)
             let before = IsolationSnapshot.capture()
             if request.web == true {
                 if let bridge = session.webBridge(for: window.pid) {
-                    try await bridge.key(combo)
+                    try await bridge.key(parsedCombo)
                 } else {
                     try InputRouter.prepareForInput(window)
-                    try InputRouter.key(KeyCombo.parse(combo), to: window.pid)
+                    try InputRouter.key(parsedCombo, to: window.pid)
                 }
             } else {
                 try InputRouter.prepareForInput(window)
-                try InputRouter.key(KeyCombo.parse(combo), to: window.pid)
+                try InputRouter.key(parsedCombo, to: window.pid)
             }
             var response = Response(ok: true)
             let now = IsolationSnapshot.capture()
-            response.drift = now.breaches(from: before)
+            response.isolation = now.report(comparedTo: before)
+            response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
             failOnIsolationBreach(&response, action: "key press")
             return response
@@ -544,16 +551,27 @@ public actor SessionManager {
         case "verify":
             let session = try resolve(request.session)
             session.sweepStrayWindows()
+            let snapshot = IsolationSnapshot.capture()
             var response = Response(ok: true)
             response.findings = session.audit()
             response.session = SessionInfo(session)
-            response.message = response.findings!.isEmpty
-                ? "session '\(session.id)' is healthy"
-                : "\(response.findings!.count) issue(s)"
-            if let findings = response.findings, !findings.isEmpty {
+            // A point-in-time audit exposes current covered state without inventing historical
+            // input-route evidence that macOS did not make observable.
+            response.isolation = snapshot.currentReport()
+            response.drift = response.isolation?.legacyDrift
+            let auditFailures = response.findings! + (response.isolation?.failures ?? [])
+            if auditFailures.isEmpty {
+                response.message = response.isolation?.verdict == .partial
+                    ? "session '\(session.id)' has no covered audit failures; "
+                        + "isolation coverage is partial"
+                    : "session '\(session.id)' passed its covered isolation audit"
+            } else {
+                response.message = "\(auditFailures.count) issue(s)"
+            }
+            if !auditFailures.isEmpty {
                 response.ok = false
                 response.error = "session '\(session.id)' failed its isolation audit:\n  - "
-                    + findings.joined(separator: "\n  - ")
+                    + auditFailures.joined(separator: "\n  - ")
             }
             return response
 
@@ -589,8 +607,10 @@ public actor SessionManager {
     }
 
     private func failOnIsolationBreach(_ response: inout Response, action: String) {
-        guard let drift = response.drift, !drift.isEmpty else { return }
+        let failures = response.isolation?.failures ?? response.drift ?? []
+        guard !failures.isEmpty else { return }
         response.ok = false
-        response.error = "isolation breach during \(action): " + drift.joined(separator: "; ")
+        response.error = "isolation breach during \(action): "
+            + failures.joined(separator: "; ")
     }
 }

@@ -319,15 +319,16 @@ final class AgentSession {
 
 struct IsolationSnapshot: Equatable {                 // the invariant, made testable
     let frontmostPID: pid_t
-    let windowServerFrontPID: pid_t
-    let keyFocusPID: pid_t
-    let typingFocusPID: pid_t
+    let windowServerFrontPID: pid_t                    // inferred from AppKit in live capture
+    let keyFocusPID: pid_t                             // unknown in live capture
+    let typingFocusPID: pid_t                          // unknown in live capture
     let cursor: CGPoint
     let activeSpace: UInt64
-    let agentCursorWarps: Int                         // for blame attribution
     let stageRects: [CGRect]
+    let coverage: IsolationSnapshotCoverage
     static func capture() -> IsolationSnapshot
 
+    func report(comparedTo: Self) -> IsolationReport  // coverage + per-check result
     func breaches(from: Self) -> [String]             // things SpaceO did
     func ambientChanges(from: Self) -> [String]       // things the user did
 }
@@ -336,10 +337,30 @@ struct IsolationSnapshot: Equatable {                 // the invariant, made tes
 `IsolationSnapshot` is deliberately a first-class type: the whole project's correctness claim is
 "this value does not change", so it should be a thing tests can assert on directly.
 
+Every required dimension carries one of three coverage levels:
+
+| dimension | live coverage | source |
+|---|---|---|
+| menu-bar owner | observed | `NSWorkspace.frontmostApplication` |
+| WindowServer front process | inferred | mirrors the AppKit observation; the unsafe private getter is not called |
+| key-input route | unknown | no safe public getter is available |
+| text-input route | unknown | no safe public getter is available |
+| cursor location | observed | CoreGraphics event location |
+| active Space | observed | WindowServer active-Space query |
+
+An observed query that returns no usable value is downgraded to `unknown` for that capture rather
+than turning a sentinel such as PID/Space `0` or a fallback point `(0,0)` into evidence.
+
+An isolation report is `breached` if a covered check detects an attributable failure, `partial`
+when no covered check failed but a required check is unknown, and `intact` only when every
+required check has usable coverage and none failed. CLI, JSON, and MCP all expose the same six
+checks and their per-check failures. In particular, the zero placeholders retained in live
+snapshot route fields are never treated as evidence that an input route is clear.
+
 **Blame attribution matters more than it sounds.** A naive before/after diff cannot distinguish
 "the agent grabbed the pointer" from "the user moved their mouse while the command ran", and a
 check that reports the second as a violation gets ignored within a day. So the snapshot carries
-what belongs to agents (`agentPIDs`, `agentSpaces`, `stageRects`, `agentCursorWarps`) and only
+what belongs to agents (`agentPIDs`, `agentSpaces`, `stageRects`) and only
 blames SpaceO for changes that land on agent territory:
 
 | observed change | verdict |

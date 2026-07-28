@@ -75,18 +75,20 @@ final class UnitTests: XCTestCase {
 
     func testSnapshotDriftDetectsFrontmostChange() {
         let a = IsolationSnapshot(frontmostPID: 100, windowServerFrontPID: 100,
-                                  cursor: .zero, activeSpace: 1, agentPIDs: [200])
+                                  cursor: .zero, activeSpace: 1, agentPIDs: [200],
+                                  coverage: .observed)
         let b = IsolationSnapshot(frontmostPID: 200, windowServerFrontPID: 100,
-                                  cursor: .zero, activeSpace: 1, agentPIDs: [200])
+                                  cursor: .zero, activeSpace: 1, agentPIDs: [200],
+                                  coverage: .observed)
         XCTAssertFalse(b.isUndisturbed(comparedTo: a))
         XCTAssertTrue(b.drift(from: a).contains { $0.contains("took the menu bar") })
     }
 
     func testSnapshotDriftDetectsSpaceSwitch() {
         let a = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1, cursor: .zero,
-                                  activeSpace: 1, agentSpaces: [7])
+                                  activeSpace: 1, agentSpaces: [7], coverage: .observed)
         let b = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1, cursor: .zero,
-                                  activeSpace: 7, agentSpaces: [7])
+                                  activeSpace: 7, agentSpaces: [7], coverage: .observed)
         XCTAssertTrue(b.drift(from: a).contains { $0.contains("pulled onto an agent") })
     }
 
@@ -94,11 +96,11 @@ final class UnitTests: XCTestCase {
         let before = IsolationSnapshot(
             frontmostPID: 10, windowServerFrontPID: 10,
             keyFocusPID: 10, typingFocusPID: 10,
-            cursor: .zero, activeSpace: 1, agentPIDs: [777])
+            cursor: .zero, activeSpace: 1, agentPIDs: [777], coverage: .observed)
         let after = IsolationSnapshot(
             frontmostPID: 10, windowServerFrontPID: 10,
             keyFocusPID: 777, typingFocusPID: 777,
-            cursor: .zero, activeSpace: 1, agentPIDs: [777])
+            cursor: .zero, activeSpace: 1, agentPIDs: [777], coverage: .observed)
 
         XCTAssertFalse(after.isUndisturbed(comparedTo: before))
         XCTAssertTrue(after.breaches(from: before).contains { $0.contains("key-input") })
@@ -107,9 +109,11 @@ final class UnitTests: XCTestCase {
 
     func testSnapshotToleratesSubPixelCursorNoise() {
         let a = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
-                                  cursor: CGPoint(x: 100, y: 100), activeSpace: 1)
+                                  cursor: CGPoint(x: 100, y: 100), activeSpace: 1,
+                                  coverage: .observed)
         let b = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
-                                  cursor: CGPoint(x: 100.4, y: 100.4), activeSpace: 1)
+                                  cursor: CGPoint(x: 100.4, y: 100.4), activeSpace: 1,
+                                  coverage: .observed)
         XCTAssertTrue(b.isUndisturbed(comparedTo: a), "sub-pixel jitter is not a disturbance")
     }
 
@@ -118,9 +122,11 @@ final class UnitTests: XCTestCase {
     /// a breach.
     func testSnapshotReportsCursorMovementAsDriftButNotBreach() {
         let a = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
-                                  cursor: CGPoint(x: 100, y: 100), activeSpace: 1)
+                                  cursor: CGPoint(x: 100, y: 100), activeSpace: 1,
+                                  coverage: .observed)
         let b = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
-                                  cursor: CGPoint(x: 400, y: 100), activeSpace: 1)
+                                  cursor: CGPoint(x: 400, y: 100), activeSpace: 1,
+                                  coverage: .observed)
         XCTAssertTrue(b.isUndisturbed(comparedTo: a))
         XCTAssertFalse(b.drift(from: a).isEmpty, "the movement should still be visible in drift")
     }
@@ -662,10 +668,10 @@ final class UnitTests: XCTestCase {
         let stage = CGRect(x: 2000, y: 0, width: 1000, height: 1000)
         let before = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
                                        cursor: CGPoint(x: 100, y: 100), activeSpace: 1,
-                                       stageRects: [stage])
+                                       stageRects: [stage], coverage: .observed)
         let after = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
                                       cursor: CGPoint(x: 700, y: 400), activeSpace: 1,
-                                      stageRects: [stage])
+                                      stageRects: [stage], coverage: .observed)
         XCTAssertTrue(after.isUndisturbed(comparedTo: before),
                       "the user moving their mouse on their own display is not our doing")
         XCTAssertEqual(after.ambientChanges(from: before).count, 1)
@@ -673,9 +679,11 @@ final class UnitTests: XCTestCase {
 
     func testUserSwitchingTheirOwnAppsIsNotABreach() {
         let before = IsolationSnapshot(frontmostPID: 10, windowServerFrontPID: 10,
-                                       cursor: .zero, activeSpace: 1, agentPIDs: [777])
+                                       cursor: .zero, activeSpace: 1, agentPIDs: [777],
+                                       coverage: .observed)
         let after = IsolationSnapshot(frontmostPID: 20, windowServerFrontPID: 20,
-                                      cursor: .zero, activeSpace: 1, agentPIDs: [777])
+                                      cursor: .zero, activeSpace: 1, agentPIDs: [777],
+                                      coverage: .observed)
         XCTAssertTrue(after.isUndisturbed(comparedTo: before),
                       "the user switching between their own apps is not our doing")
         XCTAssertTrue(after.ambientChanges(from: before).contains { $0.contains("own apps") })
@@ -683,18 +691,22 @@ final class UnitTests: XCTestCase {
 
     func testAgentAppTakingFocusIsABreach() {
         let before = IsolationSnapshot(frontmostPID: 10, windowServerFrontPID: 10,
-                                       cursor: .zero, activeSpace: 1, agentPIDs: [777])
+                                       cursor: .zero, activeSpace: 1, agentPIDs: [777],
+                                       coverage: .observed)
         let after = IsolationSnapshot(frontmostPID: 777, windowServerFrontPID: 777,
-                                      cursor: .zero, activeSpace: 1, agentPIDs: [777])
+                                      cursor: .zero, activeSpace: 1, agentPIDs: [777],
+                                      coverage: .observed)
         XCTAssertFalse(after.isUndisturbed(comparedTo: before))
         XCTAssertTrue(after.breaches(from: before).contains { $0.contains("took the menu bar") })
     }
 
     func testBeingPulledOntoAnAgentSpaceIsABreach() {
         let before = IsolationSnapshot(frontmostPID: 10, windowServerFrontPID: 10,
-                                       cursor: .zero, activeSpace: 1, agentSpaces: [637])
+                                       cursor: .zero, activeSpace: 1, agentSpaces: [637],
+                                       coverage: .observed)
         let after = IsolationSnapshot(frontmostPID: 10, windowServerFrontPID: 10,
-                                      cursor: .zero, activeSpace: 637, agentSpaces: [637])
+                                      cursor: .zero, activeSpace: 637, agentSpaces: [637],
+                                      coverage: .observed)
         XCTAssertFalse(after.isUndisturbed(comparedTo: before))
         XCTAssertTrue(after.breaches(from: before).contains { $0.contains("pulled onto an agent") })
     }
@@ -703,10 +715,10 @@ final class UnitTests: XCTestCase {
         let stage = CGRect(x: 2000, y: 0, width: 1000, height: 1000)
         let before = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
                                        cursor: CGPoint(x: 100, y: 100), activeSpace: 1,
-                                       stageRects: [stage])
+                                       stageRects: [stage], coverage: .observed)
         let after = IsolationSnapshot(frontmostPID: 1, windowServerFrontPID: 1,
                                       cursor: CGPoint(x: 2500, y: 500), activeSpace: 1,
-                                      stageRects: [stage])
+                                      stageRects: [stage], coverage: .observed)
         XCTAssertFalse(after.isUndisturbed(comparedTo: before))
         XCTAssertTrue(after.breaches(from: before).contains { $0.contains("agent screen") })
     }

@@ -97,10 +97,10 @@ final class IntegrationTests: XCTestCase {
 
     // MARK: - The isolation invariant
     //
-    // The whole project reduces to this test: run a full agent workflow and prove the user's
-    // frontmost app, cursor, and Space never moved.
+    // Run a full agent workflow and prove none of the covered dimensions detected a breach.
+    // Input-route coverage remains unknown until macOS provides a safe observation mechanism.
 
-    func testFullWorkflowLeavesTheUserUndisturbed() async throws {
+    func testFullWorkflowHasNoCoveredIsolationBreach() async throws {
         let appURL = try XCTUnwrap(AppLauncher.resolve("TextEdit"))
         let pool = DisplayPool(sessionsPerDisplay: 1, displaySize: CGSize(width: 1600, height: 1000))
         let session = AgentSession(id: "test-workflow", slot: try pool.allocate())
@@ -115,8 +115,11 @@ final class IntegrationTests: XCTestCase {
 
         // Launch
         let app = try await session.launch(app: appURL, opening: [scratch])
-        XCTAssertTrue(IsolationSnapshot.capture().isUndisturbed(comparedTo: before),
-                      "launch disturbed the user: \(IsolationSnapshot.capture().drift(from: before))")
+        let afterLaunch = IsolationSnapshot.capture()
+        XCTAssertTrue(
+            afterLaunch.report(comparedTo: before).failures.isEmpty,
+            "launch caused a covered isolation breach: \(afterLaunch.drift(from: before))"
+        )
 
         // Placement
         let window = try XCTUnwrap(session.primaryWindow, "app produced no window")
@@ -153,8 +156,10 @@ final class IntegrationTests: XCTestCase {
 
         // The invariant, over the whole workflow
         let after = IsolationSnapshot.capture()
-        XCTAssertTrue(after.isUndisturbed(comparedTo: before),
-                      "ISOLATION BREACH: \(after.drift(from: before).joined(separator: "; "))")
+        XCTAssertTrue(
+            after.report(comparedTo: before).failures.isEmpty,
+            "COVERED ISOLATION BREACH: \(after.drift(from: before).joined(separator: "; "))"
+        )
 
         // Teardown must also be clean
         let displayID = session.stage.displayID
@@ -397,10 +402,13 @@ final class IntegrationTests: XCTestCase {
         }
         XCTAssertEqual(afterRight, "r1", "right-click was lost or coerced — page saw '\(afterRight)'")
 
-        // And none of it disturbed the user.
-        XCTAssertTrue(IsolationSnapshot.capture().isUndisturbed(comparedTo: before),
-                      "driving a browser disturbed the user: "
-                      + IsolationSnapshot.capture().breaches(from: before).joined(separator: "; "))
+        // And none of the covered dimensions detected an attributable breach.
+        let afterDriving = IsolationSnapshot.capture()
+        XCTAssertTrue(
+            afterDriving.report(comparedTo: before).failures.isEmpty,
+            "driving a browser caused a covered isolation breach: "
+                + afterDriving.breaches(from: before).joined(separator: "; ")
+        )
 
         session.destroy()
         destroyed = true
