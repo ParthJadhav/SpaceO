@@ -34,7 +34,7 @@ public enum AppLauncher {
     /// a process that was already running, that process belongs to the user: relocating its
     /// windows would be SpaceO rearranging someone's desktop, which is the one thing this project
     /// promises not to do. The launch fails instead, before anything moves.
-    public static func launch(
+    public nonisolated(nonsending) static func launch(
         appURL: URL,
         opening files: [URL] = [],
         into region: CGRect,

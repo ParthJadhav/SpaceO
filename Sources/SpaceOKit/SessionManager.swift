@@ -12,18 +12,35 @@ public actor SessionManager {
     typealias SessionFactory =
         @Sendable (_ id: String, _ slot: DisplayPool.Slot) throws -> AgentSession
     typealias MaterializedAppHandler = (_ app: LaunchedApp) throws -> Void
-    typealias SessionLaunchOperation = (
-        _ session: AgentSession,
-        _ appURL: URL,
-        _ files: [URL],
-        _ onMaterialized: MaterializedAppHandler
-    ) async throws -> LaunchedApp
+
+    protocol SessionLaunching {
+        nonisolated(nonsending) func launch(
+            session: AgentSession,
+            appURL: URL,
+            files: [URL],
+            onMaterialized: MaterializedAppHandler
+        ) async throws -> LaunchedApp
+    }
+
+    private struct LiveSessionLauncher: SessionLaunching {
+        nonisolated(nonsending) func launch(
+            session: AgentSession,
+            appURL: URL,
+            files: [URL],
+            onMaterialized: MaterializedAppHandler
+        ) async throws -> LaunchedApp {
+            try await session.launch(
+                app: appURL,
+                opening: files,
+                onMaterialized: onMaterialized)
+        }
+    }
 
     private var sessions: [String: AgentSession] = [:]
     private var counter = 0
     private let pool: DisplayPool
     private let sessionFactory: SessionFactory
-    private let launchOperation: SessionLaunchOperation
+    private let sessionLauncher: any SessionLaunching
     private let daemonInstanceID: UUID
     private let reclamationPolicy: SessionReclamationPolicy
     private let successfulMutationHook: @Sendable () -> Void
@@ -44,7 +61,7 @@ public actor SessionManager {
     public init(pool: DisplayPool = DisplayPool(), runJanitor: Bool = true) {
         self.pool = pool
         self.sessionFactory = { AgentSession(id: $0, slot: $1) }
-        self.launchOperation = Self.liveLaunch
+        self.sessionLauncher = LiveSessionLauncher()
         self.operationGate = SessionOperationGate()
         self.daemonInstanceID = UUID()
         self.reclamationPolicy = SessionReclamationPolicy()
@@ -74,7 +91,7 @@ public actor SessionManager {
         let ledger = try persistence.load()
         self.pool = pool
         self.sessionFactory = { AgentSession(id: $0, slot: $1) }
-        self.launchOperation = Self.liveLaunch
+        self.sessionLauncher = LiveSessionLauncher()
         self.operationGate = SessionOperationGate()
         self.daemonInstanceID = daemonInstanceID
         self.reclamationPolicy = SessionReclamationPolicy()
@@ -93,12 +110,12 @@ public actor SessionManager {
         daemonInstanceID: UUID = UUID(),
         reclamationPolicy: SessionReclamationPolicy = SessionReclamationPolicy(),
         successfulMutationHook: @escaping @Sendable () -> Void = {},
-        launchOperation: @escaping SessionLaunchOperation = SessionManager.liveLaunch,
+        sessionLauncher: any SessionLaunching = LiveSessionLauncher(),
         sessionFactory: @escaping SessionFactory
     ) {
         self.pool = pool
         self.sessionFactory = sessionFactory
-        self.launchOperation = launchOperation
+        self.sessionLauncher = sessionLauncher
         self.operationGate = operationGate
         self.daemonInstanceID = daemonInstanceID
         self.reclamationPolicy = reclamationPolicy
@@ -120,13 +137,13 @@ public actor SessionManager {
         successfulMutationHook: @escaping @Sendable () -> Void = {},
         livePersistence: LiveSessionPersistence,
         recoveryCoordinator: SessionRecoveryCoordinator? = nil,
-        launchOperation: @escaping SessionLaunchOperation = SessionManager.liveLaunch,
+        sessionLauncher: any SessionLaunching = LiveSessionLauncher(),
         sessionFactory: @escaping SessionFactory
     ) throws {
         let ledger = try livePersistence.load()
         self.pool = pool
         self.sessionFactory = sessionFactory
-        self.launchOperation = launchOperation
+        self.sessionLauncher = sessionLauncher
         self.operationGate = operationGate
         self.daemonInstanceID = daemonInstanceID
         self.reclamationPolicy = reclamationPolicy
@@ -139,18 +156,6 @@ public actor SessionManager {
     }
 
     // MARK: - Janitor
-
-    private static func liveLaunch(
-        session: AgentSession,
-        appURL: URL,
-        files: [URL],
-        onMaterialized: MaterializedAppHandler
-    ) async throws -> LaunchedApp {
-        try await session.launch(
-            app: appURL,
-            opening: files,
-            onMaterialized: onMaterialized)
-    }
 
     /// The runtime janitor the architecture always promised.
     ///
@@ -961,11 +966,11 @@ public actor SessionManager {
             let appsBeforeLaunch = Set(session.apps.map(\.identity))
             let app: LaunchedApp
             do {
-                app = try await launchOperation(
-                    session,
-                    appURL,
-                    files,
-                    { materialized in
+                app = try await sessionLauncher.launch(
+                    session: session,
+                    appURL: appURL,
+                    files: files,
+                    onMaterialized: { materialized in
                         try self.recordPostEffectOrRollback(
                             session: session,
                             app: materialized)

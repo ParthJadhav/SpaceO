@@ -90,6 +90,36 @@ final class LiveSessionPersistenceTests: XCTestCase {
         }
     }
 
+    private final class MaterializingFailureLauncher: SessionManager.SessionLaunching {
+        private let materialized: LaunchedApp
+        private let memory: LedgerMemory
+        private let boundary: Observation
+
+        init(
+            materialized: LaunchedApp,
+            memory: LedgerMemory,
+            boundary: Observation
+        ) {
+            self.materialized = materialized
+            self.memory = memory
+            self.boundary = boundary
+        }
+
+        nonisolated(nonsending) func launch(
+            session: AgentSession,
+            appURL: URL,
+            files: [URL],
+            onMaterialized: SessionManager.MaterializedAppHandler
+        ) async throws -> LaunchedApp {
+            try session.registerMaterializedApp(materialized)
+            try onMaterialized(materialized)
+            boundary.set(
+                memory.load()?.sessions.first?.apps.map(\.identity)
+                    == [materialized.identity])
+            throw LedgerMemory.InjectedFailure()
+        }
+    }
+
     override func setUp() {
         super.setUp()
         ProcessOwnership.reset()
@@ -351,14 +381,10 @@ final class LiveSessionPersistenceTests: XCTestCase {
             pool: makePool(displayID: 92_005),
             runJanitor: false,
             livePersistence: persistence(memory),
-            launchOperation: { session, _, _, onMaterialized in
-                try session.registerMaterializedApp(materialized)
-                try onMaterialized(materialized)
-                boundary.set(
-                    memory.load()?.sessions.first?.apps.map(\.identity)
-                        == [identity])
-                throw LedgerMemory.InjectedFailure()
-            },
+            sessionLauncher: MaterializingFailureLauncher(
+                materialized: materialized,
+                memory: memory,
+                boundary: boundary),
             sessionFactory: { AgentSession(id: $0, slot: $1) })
         let created = await manager.handle(Request(cmd: "session.create"))
         XCTAssertTrue(created.ok, created.error ?? "")
