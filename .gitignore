@@ -1,4 +1,5 @@
 .build/
+.release/
 .DS_Store
 *.dSYM/
 
@@ -8,4 +9,3 @@
 
 # Demo and test captures.
 spaceo-*.png
-

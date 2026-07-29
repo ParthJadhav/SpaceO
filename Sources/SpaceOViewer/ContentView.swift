@@ -30,6 +30,13 @@ struct ContentView: View {
             Section("Physical displays") {
                 ForEach(model.physicalDisplays, content: displayRow)
             }
+            if !model.detachedSessions.isEmpty {
+                Section("Recovery") {
+                    ForEach(model.detachedSessions, id: \.id) { session in
+                        detachedSessionRow(session)
+                    }
+                }
+            }
         }
         .listStyle(.sidebar)
     }
@@ -56,6 +63,47 @@ struct ContentView: View {
         .tag(entry.id)
     }
 
+    private func detachedSessionRow(_ session: SessionInfo) -> some View {
+        let presentation = ViewerSessionPresentation(session: session)
+        let color = sessionColor(for: presentation.badge)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Text(session.id)
+                    .font(.caption.monospaced().weight(.semibold))
+                    .lineLimit(1)
+                if let badge = presentation.badge {
+                    sessionBadge(badge, color: color)
+                }
+            }
+            if let ownerText = presentation.ownerText {
+                Text(ownerText)
+                    .lineLimit(1)
+            }
+            if let timingText = presentation.timingText {
+                Text(timingText)
+                    .lineLimit(1)
+            }
+            Text("Detached from a prior daemon · no display target")
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            ForEach(
+                Array((session.recoveryBlockers ?? []).enumerated()),
+                id: \.offset
+            ) { entry in
+                Text(entry.element.message)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .font(.caption)
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            presentation.accessibilityDescription(sessionID: session.id)
+                + " Detached from a prior daemon and not targetable."
+        )
+    }
+
     // MARK: - Detail
 
     @ViewBuilder
@@ -64,7 +112,9 @@ struct ContentView: View {
             if !model.permissions.screenRecording || !model.permissions.accessibility {
                 permissionBanner
             }
-            if let error = model.streamError {
+            if case let .failed(error) = model.streamState {
+                streamFailureBanner(error)
+            } else if let error = model.streamError {
                 banner(text: error, color: .red)
             }
             if let selected = model.selected {
@@ -82,6 +132,13 @@ struct ContentView: View {
             ZStack(alignment: .topLeading) {
                 StreamSurface()
                 sessionOverlay(for: entry, in: geometry.size)
+                if model.streamState == .starting {
+                    ProgressView("Starting display stream…")
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityLabel("Starting display stream")
+                }
             }
         }
     }
@@ -95,20 +152,90 @@ struct ContentView: View {
             let frame = CGRect(x: session.x, y: session.y,
                                width: session.width, height: session.height)
             if let rect = mapping.viewRect(fromGlobalRect: frame) {
+                let presentation = ViewerSessionPresentation(session: session)
+                let color = sessionColor(for: presentation.badge)
                 ZStack(alignment: .topLeading) {
                     Rectangle()
-                        .strokeBorder(.cyan.opacity(0.6), lineWidth: 1)
-                    Text(session.id)
-                        .font(.caption2.monospaced())
-                        .padding(.horizontal, 4)
-                        .background(.cyan.opacity(0.6), in: RoundedRectangle(cornerRadius: 3))
-                        .foregroundStyle(.black)
-                        .padding(2)
+                        .strokeBorder(color.opacity(0.75), lineWidth: 1)
+                        .accessibilityHidden(true)
+                    sessionLabel(
+                        id: session.id,
+                        presentation: presentation,
+                        color: color
+                    )
+                    .padding(4)
                 }
                 .frame(width: rect.width, height: rect.height)
                 .offset(x: rect.minX, y: rect.minY)
+                .clipped()
                 .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    presentation.accessibilityDescription(sessionID: session.id)
+                )
             }
+        }
+    }
+
+    private func sessionLabel(
+        id: String,
+        presentation: ViewerSessionPresentation,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Text(id)
+                    .font(.caption2.monospaced().weight(.semibold))
+                    .lineLimit(1)
+                if let badge = presentation.badge {
+                    sessionBadge(badge, color: color)
+                }
+            }
+            if let ownerText = presentation.ownerText {
+                Label(ownerText, systemImage: "person.crop.circle")
+                    .lineLimit(1)
+            }
+            if let timingText = presentation.timingText {
+                Text(timingText)
+                    .lineLimit(1)
+            }
+        }
+        .font(.caption2)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .foregroundStyle(.primary)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(color.opacity(0.45), lineWidth: 0.5)
+        }
+    }
+
+    private func sessionBadge(_ badge: ViewerSessionBadge, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: badge.systemImage)
+                .foregroundStyle(color)
+            Text(badge.title)
+                .foregroundStyle(.primary)
+        }
+        .font(.caption2.weight(.semibold))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(color.opacity(0.18), in: Capsule())
+        .overlay {
+            Capsule()
+                .stroke(color.opacity(0.45), lineWidth: 0.5)
+        }
+        .fixedSize()
+    }
+
+    private func sessionColor(for badge: ViewerSessionBadge?) -> Color {
+        switch badge {
+        case .owned: .blue
+        case .abandoned: .orange
+        case .reclaimable: .green
+        case .cleanupPending: .red
+        case nil: .cyan
         }
     }
 
@@ -135,10 +262,9 @@ struct ContentView: View {
 
     private func statusBar(for entry: DisplayEntry) -> some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(model.streamRunning ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text(model.streamRunning ? "live" : "no stream")
+            Image(systemName: streamStatusSymbol)
+                .foregroundStyle(streamStatusColor)
+            Text(model.streamState.statusText)
                 .foregroundStyle(.secondary)
             if let note = model.note {
                 Text(note.text)
@@ -147,7 +273,10 @@ struct ContentView: View {
             }
             Spacer()
             if model.interactionEnabled {
-                Text("control enabled")
+                Text("control enabled — \(ViewerControlPolicy.localExitDescription) exits")
+                    .foregroundStyle(.secondary)
+            } else if !model.streamState.isLive {
+                Text(controlUnavailableStatus)
                     .foregroundStyle(.secondary)
             } else {
                 Text("viewing only — turn on Control to drive")
@@ -158,6 +287,58 @@ struct ContentView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Viewer status")
+        .accessibilityValue(statusAccessibilityValue(for: entry))
+    }
+
+    private var streamStatusSymbol: String {
+        switch model.streamState {
+        case .idle: "pause.circle"
+        case .starting: "clock.arrow.circlepath"
+        case .live: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var streamStatusColor: Color {
+        switch model.streamState {
+        case .idle: .secondary
+        case .starting: .blue
+        case .live: .green
+        case .failed: .red
+        }
+    }
+
+    private var controlUnavailableStatus: String {
+        switch model.streamState {
+        case .idle: "control unavailable — no stream selected"
+        case .starting: "control unavailable — stream starting"
+        case .failed: "control unavailable — stream failed"
+        case .live: "viewing only — turn on Control to drive"
+        }
+    }
+
+    private func statusAccessibilityValue(for entry: DisplayEntry) -> String {
+        var parts = [
+            ViewerAccessibility.surfaceValue(
+                streamRunning: model.streamRunning,
+                controlEnabled: model.interactionEnabled
+            ),
+            "Stream status: \(model.streamState.statusText).",
+            "Selected display: \(entry.name)."
+        ]
+        if model.interactionEnabled {
+            parts.append(
+                "Press \(ViewerControlPolicy.localExitDescription) to exit Control."
+            )
+        } else if !model.streamRunning {
+            parts.append("Control is unavailable until the display has a live stream.")
+        }
+        if let note = model.note {
+            parts.append(note.isWarning ? "Warning: \(note.text)" : note.text)
+        }
+        return parts.joined(separator: " ")
     }
 
     private var permissionBanner: some View {
@@ -165,7 +346,7 @@ struct ContentView: View {
             if !model.permissions.screenRecording {
                 HStack {
                     Label("Screen Recording permission is needed to view displays. "
-                          + "Relaunch the viewer after granting.",
+                          + "The viewer retries automatically after granting.",
                           systemImage: "exclamationmark.triangle.fill")
                     Spacer()
                     Button("Open Settings") {
@@ -188,6 +369,8 @@ struct ContentView: View {
         .font(.callout)
         .padding(10)
         .background(.yellow.opacity(0.15))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Viewer permissions")
     }
 
     private func banner(text: String, color: Color) -> some View {
@@ -201,17 +384,40 @@ struct ContentView: View {
         .background(color.opacity(0.15))
     }
 
+    private func streamFailureBanner(_ text: String) -> some View {
+        HStack {
+            Label(text, systemImage: "xmark.octagon.fill")
+                .lineLimit(3)
+            Spacer()
+            Button("Retry") { model.retryStream() }
+                .disabled(model.selected == nil || !model.permissions.screenRecording)
+        }
+        .font(.callout)
+        .padding(10)
+        .background(.red.opacity(0.15))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Display stream failed")
+    }
+
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup {
-            Toggle(isOn: $model.interactionEnabled) {
+            Toggle(isOn: Binding(
+                get: { model.interactionEnabled },
+                set: { model.setInteractionEnabled($0) }
+            )) {
                 Label("Control", systemImage: "keyboard")
             }
             .toggleStyle(.button)
-            .disabled(model.selected == nil)
-            .help("Forward your mouse and keyboard to this display")
+            .disabled(
+                model.selected == nil
+                    || !model.streamState.isLive
+                    || !model.permissions.screenRecording
+                    || !model.permissions.accessibility
+            )
+            .help(controlHelp)
 
             Button {
                 model.saveScreenshot()
@@ -226,7 +432,25 @@ struct ContentView: View {
             } label: {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
-            .help("Re-scan displays and sessions")
+            .help("Re-scan displays and restart the selected display stream")
         }
+    }
+
+    private var controlHelp: String {
+        guard model.selected != nil else {
+            return "Select a display before turning on Control."
+        }
+        guard model.streamState.isLive else {
+            return "Control is unavailable while the selected display stream is "
+                + "\(model.streamState.statusText)."
+        }
+        guard model.permissions.screenRecording else {
+            return "Grant Screen Recording permission before turning on Control."
+        }
+        guard model.permissions.accessibility else {
+            return "Grant Accessibility permission before turning on Control."
+        }
+        return "Forward your mouse and keyboard to this display. "
+            + "\(ViewerControlPolicy.localExitDescription) always exits locally."
     }
 }

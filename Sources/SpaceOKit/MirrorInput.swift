@@ -11,6 +11,29 @@ import CoreGraphics
 /// click, so these primitives are stateless and sleep-free and the caller supplies pacing.
 public enum MirrorInput {
 
+    // MARK: - Self-exclusion
+    //
+    // Viewing a *physical* display is legitimate — that is how you drive an app that is not on a
+    // stage. But the viewer's own window is on that display too, so hit testing could select it,
+    // and delivery would post a synthetic event straight back into the process that generated
+    // it. The result is a loop: each forwarded click produces another click, the queue grows,
+    // and the user watches the viewer operate its own controls.
+    //
+    // Two layers. Callers exclude their PID from selection, which is where the fix belongs; and
+    // the delivery primitives refuse it outright, which is what catches the path someone adds
+    // later and forgets to filter.
+
+    /// PIDs that must never receive synthetic input from this process.
+    public static var selfExcludedPIDs: Set<pid_t> { [getpid()] }
+
+    private static func rejectSelfDelivery(to pid: pid_t) throws {
+        guard pid != getpid() else {
+            throw SpaceOError.unsupportedTarget(
+                "refusing to deliver synthetic input to SpaceO itself (pid \(pid)); "
+                + "the viewer cannot drive its own window")
+        }
+    }
+
     // MARK: - Viewport geometry
 
     /// Maps points in an aspect-fit view of a display back to global screen coordinates.
@@ -147,7 +170,7 @@ public enum MirrorInput {
 
     // MARK: - Pointer
 
-    public enum PointerPhase: Equatable {
+    public enum PointerPhase: Equatable, Sendable {
         case move, down, drag, up
     }
 
@@ -169,6 +192,7 @@ public enum MirrorInput {
         clickCount: Int = 1,
         template: CGEvent? = nil
     ) throws {
+        try rejectSelfDelivery(to: target.pid)
         guard global.x.isFinite, global.y.isFinite else {
             throw SpaceOError.badRequest("pointer coordinates must be finite")
         }
@@ -194,7 +218,7 @@ public enum MirrorInput {
             event.setIntegerValueField(.mouseEventClickState, value: Int64(clickCount))
         }
         stamp(event, windowID: target.windowID)
-        event.postToPid(target.pid)
+        try postEventToPID(event, pid: target.pid)
     }
 
     /// Forward a scroll at a global point. Deltas are in pixels, positive `dy` scrolls up.
@@ -204,6 +228,7 @@ public enum MirrorInput {
         at global: CGPoint,
         to target: WindowRef
     ) throws {
+        try rejectSelfDelivery(to: target.pid)
         guard global.x.isFinite, global.y.isFinite else {
             throw SpaceOError.badRequest("scroll coordinates must be finite")
         }
@@ -214,7 +239,7 @@ public enum MirrorInput {
         }
         event.location = global
         stamp(event, windowID: target.windowID)
-        event.postToPid(target.pid)
+        try postEventToPID(event, pid: target.pid)
     }
 
     // MARK: - Keyboard
@@ -228,6 +253,7 @@ public enum MirrorInput {
         characters: String? = nil,
         to pid: pid_t
     ) throws {
+        try rejectSelfDelivery(to: pid)
         let source = CGEventSource(stateID: .hidSystemState)
         guard let event = CGEvent(keyboardEventSource: source,
                                   virtualKey: code, keyDown: down) else {
@@ -238,7 +264,7 @@ public enum MirrorInput {
             var utf16 = Array(characters.utf16)
             event.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
         }
-        event.postToPid(pid)
+        try postEventToPID(event, pid: pid)
     }
 
     /// Control characters and AppKit's function-key code points (U+F700…U+F8FF) must not be

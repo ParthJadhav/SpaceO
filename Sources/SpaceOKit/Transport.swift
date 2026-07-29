@@ -32,7 +32,9 @@ public enum Transport {
 
     // MARK: - Server
 
-    public final class Server {
+    /// `Server` crosses the accept thread and per-client tasks. Its mutable socket/thread state
+    /// is accessed only under `stateLock`; `path` and the sendable handler are immutable.
+    public final class Server: @unchecked Sendable {
         private let path: String
         private var listenFD: Int32 = -1
         private var thread: Thread?
@@ -41,9 +43,12 @@ public enum Transport {
         private var socketDevice: dev_t?
         private var socketInode: ino_t?
         private let stateLock = NSLock()
-        private let handler: (Request) async -> Response
+        private let handler: @Sendable (Request) async -> Response
 
-        public init(path: String, handler: @escaping (Request) async -> Response) {
+        public init(
+            path: String,
+            handler: @escaping @Sendable (Request) async -> Response
+        ) {
             self.path = path
             self.handler = handler
         }

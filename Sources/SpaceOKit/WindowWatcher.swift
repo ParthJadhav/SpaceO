@@ -32,27 +32,50 @@ public final class WindowWatcher {
                                                 kAXFocusedWindowChangedNotification,
                                                 kAXApplicationShownNotification]
 
+    /// How often the safety-net sweep runs when no notification has arrived.
+    ///
+    /// Notifications remain the primary mechanism — this is the backstop for the case the whole
+    /// ticket is about: a notification that never arrives, because registration silently failed,
+    /// because the app suppressed it, or because it landed in a window the observer does not
+    /// cover. Two seconds is short enough that a stray dialog is a blink rather than a fixture,
+    /// and long enough that the WindowServer round trip is not a background CPU cost.
+    public static let periodicSweepInterval: TimeInterval = 2.0
+
     private let pid: pid_t
     private let region: () -> CGRect
     private let onPlaced: Placement?
     private var observer: AXObserver?
     private var callbackTarget: Unmanaged<CallbackTarget>?
     private let element: AXUIElement
+    private var timer: DispatchSourceTimer?
 
     /// Windows we have already dealt with, so a re-notification does not re-move a window the
     /// agent has since positioned deliberately.
     private var handled = Set<CGWindowID>()
     private var refused = Set<CGWindowID>()
     private let lock = NSLock()
-    private let sweepLock = NSLock()
+    private let coalescer = SweepCoalescer()
+
+    /// Notifications the observer refused to register, with the AX error. Empty is the healthy
+    /// case; anything here means notification-driven containment is degraded for this app and
+    /// only the periodic sweep is holding the line, which the session audit must say out loud.
+    public private(set) var registrationFailures: [String] = []
 
     private var placedTotal = 0
     public var placedCount: Int { lock.withLock { placedTotal } }
     public var refusedCount: Int { lock.withLock { refused.count } }
+    /// Completed sweeps. Lets a test prove the periodic sweep really runs without reaching into
+    /// the WindowServer for evidence.
+    private var sweepTotal = 0
+    public var sweepCount: Int { lock.withLock { sweepTotal } }
 
     /// - Parameter region: read lazily, because a session's tile can move if the display
     ///   arrangement changes.
-    public init?(pid: pid_t, region: @escaping () -> CGRect, onPlaced: Placement? = nil) {
+    /// - Parameter periodicSweep: set false only in tests that drive `sweep()` by hand.
+    public init?(pid: pid_t,
+                 region: @escaping () -> CGRect,
+                 onPlaced: Placement? = nil,
+                 periodicSweep: Bool = true) {
         self.pid = pid
         self.region = region
         self.onPlaced = onPlaced
@@ -72,12 +95,35 @@ public final class WindowWatcher {
         let target = Unmanaged.passRetained(CallbackTarget(self))
         self.callbackTarget = target
         let context = target.toOpaque()
+        var failures: [String] = []
         for notification in Self.observedNotifications {
-            AXObserverAddNotification(observer, element, notification as CFString, context)
+            let result = AXObserverAddNotification(observer, element,
+                                                   notification as CFString, context)
+            // kAXErrorNotificationAlreadyRegistered is benign — the notification is live either
+            // way, which is all this list is claiming.
+            if result != .success && result != .notificationAlreadyRegistered {
+                failures.append("\(notification) (AX error \(result.rawValue))")
+            }
         }
+        self.registrationFailures = failures
         CFRunLoopAddSource(CFRunLoopGetMain(),
                            AXObserverGetRunLoopSource(observer),
                            .defaultMode)
+
+        if periodicSweep { startPeriodicSweep() }
+    }
+
+    /// The backstop sweep. Bounded (one WindowServer enumeration per tick, coalesced against
+    /// notification-driven sweeps) and cancellable, so `stop()` really does end all activity.
+    private func startPeriodicSweep() {
+        let source = DispatchSource.makeTimerSource(
+            queue: DispatchQueue.global(qos: .utility))
+        source.schedule(deadline: .now() + Self.periodicSweepInterval,
+                        repeating: Self.periodicSweepInterval,
+                        leeway: .milliseconds(250))
+        source.setEventHandler { [weak self] in self?.sweep() }
+        timer = source
+        source.resume()
     }
 
     /// Move any window of this app that is not already inside the region.
@@ -85,8 +131,14 @@ public final class WindowWatcher {
     /// Driven by the notification rather than a timer, but written as a full sweep because
     /// `kAXWindowCreated` does not reliably tell you *which* window appeared.
     public func sweep() {
-        guard sweepLock.try() else { return }
-        defer { sweepLock.unlock() }
+        guard coalescer.beginOrCoalesce() else { return }
+        repeat {
+            sweepOnce()
+            lock.withLock { sweepTotal += 1 }
+        } while coalescer.endOrRepeat()
+    }
+
+    private func sweepOnce() {
         let target = region()
         guard target.width > 0 else { return }
 
@@ -100,10 +152,18 @@ public final class WindowWatcher {
         }
 
         for window in currentWindows {
-            let alreadyHandled = lock.withLock { handled.contains(window.windowID) }
-            if alreadyHandled { continue }
-            if WindowPlacement.isInRegion(window, target) {
-                lock.withLock { _ = handled.insert(window.windowID) }
+            // Containment is re-derived from the WindowServer every sweep, for *every* window
+            // including ones already marked handled. `handled` records that we acted, not that
+            // the window is still where we put it — an app that repositions itself after
+            // placement, or grows past its tile, must be caught rather than trusted.
+            guard let contained = WindowPlacement.isFullyInRegion(window.windowID, target) else {
+                continue  // the WindowServer forgot it mid-sweep; the next pass will drop it
+            }
+            if contained {
+                lock.withLock {
+                    handled.insert(window.windowID)
+                    refused.remove(window.windowID)
+                }
                 continue
             }
 
@@ -113,8 +173,12 @@ public final class WindowWatcher {
             let fitted = CGRect(origin: frame.origin,
                                 size: CGSize(width: min(frame.width, max(320, window.frame.width)),
                                              height: min(frame.height, max(240, window.frame.height))))
-            if let placed = try? WindowPlacement.move(window, to: fitted),
-               target.contains(CGPoint(x: placed.midX, y: placed.midY)) {
+            // Accept only on full containment, and re-read the live bounds rather than trusting
+            // the value `move` echoed back: an app is free to resize itself the instant it is
+            // repositioned, and the echo would not show it.
+            let placed = try? WindowPlacement.move(window, to: fitted)
+            let landed = WindowPlacement.isFullyInRegion(window.windowID, target) ?? false
+            if let placed, landed {
                 lock.withLock {
                     handled.insert(window.windowID)
                     refused.remove(window.windowID)
@@ -123,7 +187,10 @@ public final class WindowWatcher {
                 onPlaced?(WindowRef(windowID: window.windowID, pid: pid,
                                     title: window.title, frame: placed))
             } else {
-                _ = lock.withLock { refused.insert(window.windowID) }
+                lock.withLock {
+                    handled.remove(window.windowID)
+                    refused.insert(window.windowID)
+                }
             }
         }
     }
@@ -137,6 +204,16 @@ public final class WindowWatcher {
     }
 
     public func stop() {
+        // The timer goes first, so no new sweep can start while the observer is being torn down.
+        // Cancelling the coalescer releases any repeat loop that is mid-flight; without it a
+        // final burst of notifications could keep the loop sweeping a dead app.
+        let source = lock.withLock { () -> DispatchSourceTimer? in
+            defer { timer = nil }
+            return timer
+        }
+        source?.cancel()
+        coalescer.cancel()
+
         // Idempotent and thread-safe: destroy paths can race a deinit-driven stop.
         // `observer` and `callbackTarget` are set together in init, so take them together.
         let state: (observer: AXObserver, target: Unmanaged<CallbackTarget>)? = lock.withLock {

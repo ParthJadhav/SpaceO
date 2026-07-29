@@ -157,6 +157,35 @@ public enum WindowPlacement {
         return region.contains(CGPoint(x: bounds.midX, y: bounds.midY))
     }
 
+    /// Does every pixel of `bounds` fall inside `region`?
+    ///
+    /// The stricter test the containment janitor uses. Midpoint containment is the right answer
+    /// for "which tile does this window belong to", but the wrong one for "has this window been
+    /// contained": a dialog twice its tile's width has its centre in the right place while
+    /// spilling across a neighbouring session — or off the agent display entirely, onto the
+    /// user's screen. Marking that handled is exactly the silent failure SpaceO exists to avoid.
+    public static func isFullyInside(_ bounds: CGRect, _ region: CGRect) -> Bool {
+        guard !bounds.isNull, !bounds.isInfinite, !region.isNull, !region.isInfinite,
+              bounds.width.isFinite, bounds.height.isFinite,
+              bounds.origin.x.isFinite, bounds.origin.y.isFinite,
+              region.width > 0, region.height > 0 else { return false }
+        // A zero-area window has no pixels to escape with; treat it as contained if its origin
+        // is, so a minimised or collapsed window does not loop forever in the janitor.
+        guard bounds.width >= 0, bounds.height >= 0 else { return false }
+        return bounds.minX >= region.minX && bounds.maxX <= region.maxX
+            && bounds.minY >= region.minY && bounds.maxY <= region.maxY
+    }
+
+    /// Live full-bounds containment for one window, straight from the WindowServer.
+    ///
+    /// Returns nil when the WindowServer no longer knows the window, so callers can tell
+    /// "escaped" from "closed" instead of collapsing both into false.
+    public static func isFullyInRegion(_ windowID: CGWindowID, _ region: CGRect) -> Bool? {
+        var bounds = CGRect.zero
+        guard SPOWindowBounds(windowID, &bounds) else { return nil }
+        return isFullyInside(bounds, region)
+    }
+
     /// Space ids this window is associated with.
     public static func spaces(of window: WindowRef) -> [UInt64] {
         (SPOSpacesForWindow(window.windowID) ?? []).map { $0.uint64Value }

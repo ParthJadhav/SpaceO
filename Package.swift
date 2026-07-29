@@ -46,7 +46,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SpaceOKitTests",
-            dependencies: ["SpaceOKit", "SpaceOMCP", "SpaceOPrivate"]
+            dependencies: ["SpaceOKit", "SpaceOMCP", "SpaceOPrivate", "SpaceOViewer"]
         ),
     ]
 )

@@ -15,8 +15,8 @@ If that holds under test, the project works.
 
 ## Non-goals
 
-- Not a window manager. SpaceO may move an existing process when macOS substitutes it or the
-  caller adopts it explicitly.
+- Not a window manager. SpaceO moves an already-running process's windows only when the caller
+  adopts it explicitly; a launch that macOS satisfies by substituting a running app fails instead.
 - Not an agent. SpaceO is the substrate an agent runtime sits on.
 - Not a sandbox. Agent apps run as the user, with the user's files. Isolation here is about
   *attention*, not security. Security isolation is Tier 2/3 (second login session, or a VM).

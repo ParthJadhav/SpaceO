@@ -14,10 +14,21 @@ public struct Capabilities: Sendable {
         public let name: String
         public let available: Bool
         public let detail: String
+        public let unavailableReason: String?
+    }
+
+    public struct PrivateAPIHost: Sendable, Equatable {
+        public let operatingSystemVersion: String
+        public let darwinBuild: String
+        public let architecture: String
+        public let tupleDescription: String
+        public let registryEntryCount: Int
+        public let qualifiedCapabilities: [String]
     }
 
     public let items: [Item]
     public let missingSymbols: [String]
+    public let privateAPIHost: PrivateAPIHost
 
     public init() {
         var found: [Item] = []
@@ -25,25 +36,48 @@ public struct Capabilities: Sendable {
         let privateCaps: [(SPOCapability, String)] = [
             (.virtualDisplay,     "CGVirtualDisplay classes"),
             (.focusWithoutRaise,  "SLPSPostEventRecordTo with public-route restoration"),
-            (.spaceQuery,         "space graph (SLSCopyManagedDisplaySpaces)"),
+            (.spaceQuery,         "SkyLight space graph and window geometry calls"),
             (.perPIDEvents,       "per-process events (CGEventPostToPid)"),
             (.axWindowID,         "AX element -> window id (_AXUIElementGetWindow)"),
         ]
         for (cap, detail) in privateCaps {
+            let available = SPOCapabilityAvailable(cap)
             found.append(Item(name: SPOCapabilityName(cap),
-                              available: SPOCapabilityAvailable(cap),
-                              detail: detail))
+                              available: available,
+                              detail: detail,
+                              unavailableReason: available
+                                  ? nil
+                                  : SPOCapabilityUnavailableReason(cap)))
         }
 
         found.append(Item(name: "accessibility",
                           available: AXIsProcessTrusted(),
-                          detail: "required for window placement and AX-driven input"))
+                          detail: "required for window placement and AX-driven input",
+                          unavailableReason: nil))
         found.append(Item(name: "screen-recording",
                           available: CGPreflightScreenCaptureAccess(),
-                          detail: "required for capture only"))
+                          detail: "required for capture only",
+                          unavailableReason: nil))
 
         self.items = found
         self.missingSymbols = SPOMissingSymbols()
+
+        let host = SPOCurrentHostTuple()
+        let registry = SPOQualifiedHostRegistry()
+        self.privateAPIHost = PrivateAPIHost(
+            operatingSystemVersion:
+                "\(host.operatingSystemMajor).\(host.operatingSystemMinor)."
+                    + "\(host.operatingSystemPatch)",
+            darwinBuild: host.darwinBuild,
+            architecture: host.architecture,
+            tupleDescription: SPOHostTupleDescription(host),
+            registryEntryCount: registry.count,
+            qualifiedCapabilities: privateCaps.compactMap { cap, _ in
+                SPOHostIsQualifiedForCapability(cap, host, registry)
+                    ? SPOCapabilityName(cap)
+                    : nil
+            }
+        )
     }
 
     /// True when SpaceO can create and drive a session (capture excluded).
@@ -72,8 +106,11 @@ public struct Capabilities: Sendable {
                 capability: "Objective-C ARC (required for virtual-display teardown)")
         }
         for name in required where name != "accessibility" {
-            if items.first(where: { $0.name == name })?.available != true {
-                throw SpaceOError.unavailable(capability: name)
+            if let item = items.first(where: { $0.name == name }), !item.available {
+                let capability = item.unavailableReason.map {
+                    "\(name): \($0)"
+                } ?? name
+                throw SpaceOError.unavailable(capability: capability)
             }
         }
         if items.first(where: { $0.name == "accessibility" })?.available != true {
@@ -94,9 +131,24 @@ public struct Capabilities: Sendable {
 
     /// Human-readable report used by `spaceo doctor`.
     public var report: String {
-        var lines: [String] = []
+        var lines = [
+            "  private API host  : \(privateAPIHost.tupleDescription)",
+            "  qualified entries: \(privateAPIHost.registryEntryCount)",
+        ]
+        if privateAPIHost.qualifiedCapabilities.isEmpty {
+            lines.append("  qualified surfaces: none")
+        } else {
+            lines.append(
+                "  qualified surfaces: "
+                    + privateAPIHost.qualifiedCapabilities.joined(separator: ", ")
+            )
+        }
+        lines.append("")
         for item in items {
             lines.append("  \(item.available ? "ok  " : "MISS") \(item.name.padding(toLength: 22, withPad: " ", startingAt: 0)) \(item.detail)")
+            if let reason = item.unavailableReason {
+                lines.append("       \(reason)")
+            }
         }
         if !missingSymbols.isEmpty {
             lines.append("")

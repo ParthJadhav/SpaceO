@@ -4,13 +4,14 @@ Give each AI agent its own screen on your Mac, so it can drive real apps while p
 user's cursor, keyboard focus, and display.
 
 > [!NOTE]
-> Virtual-display creation and focus routing are enabled. The unsafe private focus getters from
-> the 2026-07-26 incident remain removed; focus preparation and route restoration are best-effort.
-> Display creation no longer has product caps or preflight refusals for mirroring,
-> ownerless displays, physical-display activity, overlap, or cursor-fence availability. Those
-> conditions remain visible in diagnostics, and teardown is still verified. See the
+> Private display, Space, event-delivery, window-lookup, and focus behavior is enabled only for
+> an exact macOS version, Darwin build, architecture, and capability with recorded disposable-host
+> evidence. The qualification registry is currently empty, so no host is supported for those
+> mutations and `spaceo doctor` reports them as unavailable even when every private symbol exists.
+> The package can still build on macOS 14+, but that deployment target is not a support claim.
+> See the [private API support matrix](docs/PRIVATE_API_SUPPORT.md),
 > [incident report](docs/incidents/2026-07-26-display-input-lockout.md) and
-> [release audit](RELEASE_AUDIT.md) for the historical failure and accepted policy change.
+> [release audit](RELEASE_AUDIT.md) for the evidence procedure and historical failure.
 
 > [!WARNING]
 > **SpaceO isolates attention, not security.** Agent apps still run as your logged-in macOS user
@@ -19,12 +20,12 @@ user's cursor, keyboard focus, and display.
 > OS sandbox or hostile multi-tenant boundary. Run untrusted agents or applications in a separate
 > macOS login session or a VM.
 
-Expected UX:
+Expected UX once the required host capabilities have been qualified:
 
 ```
 $ spaceo demo
   PASS  stage created
-  PASS  launch did not disturb the user
+  PARTIAL  launch isolation — no covered breach; unknown required checks: key_input_route, text_input_route
   PASS  typed text reached the app
   PASS  window screenshot is really rendered
   PASS  session audit is clean
@@ -96,8 +97,18 @@ the auto-started daemon reads it:
 The MCP server starts the shared daemon on demand, so every agent on the machine pools the same
 agent displays instead of each spinning up its own.
 
-Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`, `spaceo_open_app`, `spaceo_read_screen`,
-`spaceo_click`, `spaceo_type`, `spaceo_press_key`, `spaceo_screenshot`, `spaceo_list_windows`,
+Display creation is admitted against a resource budget before anything is allocated — live
+sessions, attached displays, total framebuffer pixels and bytes, displays created per minute, and
+a minimum usable tile. A virtual display is a framebuffer the WindowServer composites inside
+*your* login session, so an agent stuck in a retry loop must not be able to walk the machine into
+a reboot. `spaceo doctor` and `spaceo pool` print current usage against the limits, and every
+refusal states the requested value, the limit, and what to do about it. Setting
+`SPACEO_UNSAFE_RESOURCE_LIMITS=1` in the daemon's environment raises the limits considerably; it
+is deliberately an operator decision at daemon start rather than something an agent can request.
+
+Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`,
+`spaceo_session_heartbeat`, `spaceo_open_app`, `spaceo_read_screen`, `spaceo_click`,
+`spaceo_type`, `spaceo_press_key`, `spaceo_screenshot`, `spaceo_list_windows`,
 `spaceo_verify_isolation`, `spaceo_pool_status`, `spaceo_session_destroy`.
 
 `spaceo_read_screen` is the one that matters. It returns an indexed outline —
@@ -113,6 +124,24 @@ page content (click these with --element wN):
 — and `spaceo_click` takes those references. Clicking `3` presses an app control through
 accessibility; clicking `w0` dispatches a real DOM event through the browser. Neither needs
 coordinates, so neither can miss.
+
+## Session ownership and recovery
+
+Creating a session returns a controller lease. Successful owner-scoped mutations renew its
+bounded TTL, and `spaceo session heartbeat --lease UUID` keeps it alive while a controller is
+otherwise idle. Lease values are returned only by create and heartbeat, never by session lists;
+MCP connections retain and supply their own leases automatically.
+
+An expired or disappeared controller leaves an abandoned session. After a short grace interval,
+SpaceO can reclaim its resources; “reclaimable” means safe to clean up, not safe for another
+controller to take over. Session lists and SpaceO Viewer expose the owner, age, last activity,
+reclaimability, and cleanup blockers.
+
+The daemon also keeps a private, per-socket recovery ledger. A new daemon fences every old lease
+before accepting work and treats prior display and window ids as diagnostic only. Detached
+recovery terminates only exact, currently matching processes that SpaceO launched; adopted apps
+are released without termination. See [Session ownership and recovery](docs/SESSION_RECOVERY.md)
+for lease handling, restart behavior, and operator retry steps.
 
 ## Sessions share displays
 
@@ -139,14 +168,26 @@ tiles are very small.
 
 ## Requirements and support status
 
-- Apple Silicon Mac; the package deployment target is macOS 14
+- Apple Silicon Mac for development; the package deployment target is macOS 14
 - **SIP stays on.** Nothing here needs it disabled.
 - Accessibility and Screen Recording granted to whatever runs `spaceo`
 
-The current development machine runs a macOS 27 developer build. Private framework behavior can
-change between macOS releases, so inspect `spaceo doctor` on each host before sessions are used;
-the deployment target is not itself a compatibility guarantee. Its display-graph findings are
-diagnostic and do not block creation.
+There is currently no supported release-host tuple. The macOS 27 development machine is
+deliberately not allowlisted merely because its symbols resolve. Every private capability fails
+closed until its exact host tuple has passed the disposable-login workflow and durable evidence
+has been reviewed. Run `spaceo doctor` for the detected tuple and per-capability reason; see the
+[private API support matrix](docs/PRIVATE_API_SUPPORT.md) for the required checks and known
+limitations.
+
+## Install a release
+
+Public releases use a versioned, Developer-ID signed, notarized, and stapled disk image containing
+both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar and its detached SpaceO
+publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or executing
+the payload; then verify the stapled ticket and Gatekeeper assessment before installation.
+
+See [Installing a SpaceO release](docs/INSTALL.md) for exact installation, upgrade, rollback,
+uninstall, artifact-verification, and maintainer publication procedures.
 
 ## Local development build
 
@@ -183,9 +224,16 @@ The viewer uses the same delivery path as the rest of SpaceO:
   events stamped with the window under your click. A target is primed with the same
   focus-without-raise sequence and paced pointer events used by the CLI.
 - Control is available for both SpaceO virtual displays and physical displays; display provenance
-  is not an input allowlist.
-- While Control is on, every keyboard shortcut, including Control-Command-Escape, is forwarded
-  to the selected display. Turn the toolbar toggle off to stop forwarding.
+  is not an input allowlist. The toggle becomes available only after the selected display has a
+  live stream; if capture stops or fails, the viewer turns Control off, releases held remote keys,
+  and reports the failure in text and through VoiceOver. The status bar distinguishes idle,
+  starting, live, and failed streams. **Retry** starts a failed selection again, while **Refresh**
+  re-scans display geometry and restarts the selected stream.
+- While Control is on, keyboard shortcuts are forwarded to the selected display except
+  **Control-Command-Escape**, which always exits Control locally and is never sent remotely.
+  Reserving that uncommon chord keeps ordinary Escape available to remote apps and avoids
+  VoiceOver's Control-Option modifier; the tradeoff is that a remote app cannot receive this one
+  chord. The surface help and status bar expose the shortcut while Control is active.
 - Drags stay with the window they started on; the keyboard follows the last window you clicked.
 - Session tiles are outlined with their session ids when a daemon is running (`session.list`
   over the daemon socket); without a daemon you get the plain display.
@@ -198,9 +246,11 @@ links to the right System Settings panes. `make viewer` wraps the binary in a bu
 automatically uses an available Developer ID or Apple Development certificate so its identity
 and privacy grants survive rebuilds. Set `SPACEO_CODESIGN_IDENTITY` to choose a certificate
 explicitly, or to `-` to force ad-hoc signing. When no certificate is available, the build falls
-back to ad-hoc signing and macOS may require the grants to be refreshed after a rebuild. The
-viewer creates no displays itself; agent displays appear when the daemon owns one or more
-sessions.
+back to ad-hoc signing and macOS may require the grants to be refreshed after a rebuild.
+Certificate-backed local builds request a secure timestamp. Public distribution never permits
+ad-hoc or Apple Development signing; the release pipeline requires an explicit Developer ID
+identity, notarizes and staples the artifacts, and fails closed if any trust check fails. The
+viewer creates no displays itself; agent displays appear when the daemon owns one or more sessions.
 
 ## Use
 
@@ -222,17 +272,30 @@ spaceo session destroy --session research
 spaceo daemon stop
 ```
 
-Every command that touches an app reports whether isolation held:
+Launch and input commands, plus `spaceo verify`, report isolation coverage and failures:
 
 ```
-  isolation: intact (user undisturbed)
+  isolation: partial (no covered breach; required checks remain unknown)
+    - menu_bar_owner: passed [observed] — NSWorkspace frontmost application
+    - window_server_front_process: passed [inferred] — inferred from AppKit; no safe WindowServer front-process getter is available
+    - key_input_route: unknown [unknown] — no safe public input-route getter is available
+    - text_input_route: unknown [unknown] — no safe public input-route getter is available
+    - cursor_location: passed [observed] — CoreGraphics event location
+    - active_space: passed [observed] — WindowServer active Space
 ```
 
 The check knows which processes and Spaces belong to agents, so it blames SpaceO only for
 changes that land on agent territory. You switching apps mid-command is reported as a note, not
-a violation — a safety check that cries wolf is one nobody reads.
+a violation — a safety check that cries wolf is one nobody reads. The removed private focus
+getters have no safe replacement, so current live checks cannot observe the key-event or
+text-input routes. `partial` means that no covered check found a breach; it does **not** mean the
+user was fully verified as undisturbed.
 
-`--json` on any command gives machine-readable output for an agent runtime to consume.
+`--json` exposes the same result under `isolation`: `verdict` is `intact`, `breached`, or
+`partial`; every entry in `checks` includes its `dimension`, `required`, `coverage`, `status`,
+`evidence`, and per-check `failures`. The top-level `failures` array contains the same failures
+for consumers that do not need to group them by check. The legacy `drift` field is omitted for a
+partial report, so an empty array cannot be mistaken for a fully covered clean result.
 
 ### Addressing elements
 

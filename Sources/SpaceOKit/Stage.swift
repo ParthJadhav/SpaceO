@@ -2,6 +2,15 @@ import Foundation
 import CoreGraphics
 import SpaceOPrivate
 
+protocol StageDisplayBacking: AnyObject {
+    var displayID: CGDirectDisplayID { get }
+    var valid: Bool { get }
+    var bounds: CGRect { get }
+    func invalidate()
+}
+
+extension SPOVirtualDisplay: StageDisplayBacking {}
+
 /// Serializes display reconfiguration.
 ///
 /// Attaching and retiring several virtual framebuffers in quick succession can overrun the
@@ -14,7 +23,7 @@ private final class DisplayLifecycleCoordinator: @unchecked Sendable {
         try queue.sync { try body() }
     }
 
-    func enqueue(_ body: @escaping () -> Void) {
+    func enqueue(_ body: @escaping @Sendable () -> Void) {
         queue.async(execute: body)
     }
 }
@@ -27,25 +36,65 @@ private final class DisplayLifecycleCoordinator: @unchecked Sendable {
 ///
 /// Normal teardown explicitly waits for the display to disappear. Diagnostics still inventory
 /// ownerless displays, but their presence does not block creating another stage.
-public final class Stage {
+/// A stage may be read by capture tasks while lifecycle work runs elsewhere. Immutable metadata
+/// is freely shared; every access to the mutable backing display and invalidation flags is
+/// serialized by `stateLock`.
+public final class Stage: @unchecked Sendable {
+
+    /// Process-wide display ownership is mutable, but never accessed without this holder's lock.
+    private final class OwnershipState: @unchecked Sendable {
+        let lock = NSLock()
+        var displayIDs: Set<CGDirectDisplayID> = []
+    }
+
+    /// Teardown owns the display reference after `Stage.deinit` begins. The wrapper makes that
+    /// one-way transfer explicit: the serial lifecycle queue is its only remaining accessor.
+    private final class PendingInvalidation: @unchecked Sendable {
+        let display: any StageDisplayBacking
+        let displayID: CGDirectDisplayID
+        let onlineDisplayIDs: @Sendable () -> [CGDirectDisplayID]
+
+        init(
+            display: any StageDisplayBacking,
+            displayID: CGDirectDisplayID,
+            onlineDisplayIDs: @escaping @Sendable () -> [CGDirectDisplayID]
+        ) {
+            self.display = display
+            self.displayID = displayID
+            self.onlineDisplayIDs = onlineDisplayIDs
+        }
+    }
 
     private static let lifecycle = DisplayLifecycleCoordinator()
-    private static let ownershipLock = NSLock()
-    private static var processOwnedDisplayIDs: Set<CGDirectDisplayID> = []
-    private let backing: SPOVirtualDisplay
+    private static let ownership = OwnershipState()
+    private let backing: any StageDisplayBacking
+    private let onlineDisplayIDsProvider: @Sendable () -> [CGDirectDisplayID]
+    private let stateLock = NSLock()
     private var didInvalidate = false
     private var invalidatedDisplayID: CGDirectDisplayID = 0
     public let name: String
     public let requestedSize: CGSize
 
-    public var displayID: CGDirectDisplayID { backing.displayID }
-    public var isValid: Bool { backing.valid }
+    public var displayID: CGDirectDisplayID {
+        stateLock.withLock { backing.displayID }
+    }
+    public var isValid: Bool {
+        stateLock.withLock { backing.valid }
+    }
     /// Global-coordinate rect of the agent's screen.
-    public var bounds: CGRect { backing.bounds }
+    public var bounds: CGRect {
+        stateLock.withLock { backing.bounds }
+    }
 
     public init(name: String, width: UInt32 = 1920, height: UInt32 = 1080, hiDPI: Bool = true) throws {
         guard width > 0, height > 0 else {
             throw SpaceOError.badRequest("display width and height must be positive")
+        }
+        guard SPOCapabilityAvailable(.virtualDisplay) else {
+            throw SpaceOError.stageCreationFailed(
+                SPOCapabilityUnavailableReason(.virtualDisplay)
+                    ?? "virtual-display is unavailable on this host"
+            )
         }
         let display: SPOVirtualDisplay = try Self.lifecycle.perform {
             guard let display = SPOVirtualDisplay(name: name, width: width,
@@ -70,8 +119,21 @@ public final class Stage {
             return display
         }
         self.backing = display
+        self.onlineDisplayIDsProvider = { Self.onlineDisplayIDs() }
         self.name = name
         self.requestedSize = CGSize(width: Int(width), height: Int(height))
+    }
+
+    init(
+        testingBacking: any StageDisplayBacking,
+        name: String = "test display",
+        onlineDisplayIDs: @escaping @Sendable () -> [CGDirectDisplayID]
+    ) {
+        backing = testingBacking
+        onlineDisplayIDsProvider = onlineDisplayIDs
+        self.name = name
+        requestedSize = testingBacking.bounds.size
+        Self.recordOwned(testingBacking.displayID)
     }
 
     /// Managed Space ids belonging to this display. A healthy stage owns exactly one, and it is
@@ -103,32 +165,46 @@ public final class Stage {
     /// phantom can still poison the next display-graph change.
     @discardableResult
     public func invalidate(waitingForRemoval timeout: TimeInterval = 10.0) -> Bool {
-        if didInvalidate {
-            return Stage.displayIsRetired(
-                invalidatedDisplayID, onlineDisplayIDs: Stage.onlineDisplayIDs())
-        }
-        didInvalidate = true
-        let id = displayID
-        invalidatedDisplayID = id
         let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 10
-        return Self.lifecycle.perform {
-            defer { Self.recordReleased(id) }
-            backing.invalidate()
-            guard id != 0 else { return true }
-            guard safeTimeout > 0 else {
-                return Self.displayIsRetired(id, onlineDisplayIDs: Self.onlineDisplayIDs())
+        return stateLock.withLock {
+            let id: CGDirectDisplayID
+            if didInvalidate {
+                id = invalidatedDisplayID
+            } else {
+                didInvalidate = true
+                id = backing.displayID
+                invalidatedDisplayID = id
             }
-
-            // The display's lifecycle runs on a private queue inside the shim, so a plain sleep
-            // is sufficient here — no main run loop required from the caller.
-            let deadline = Date().addingTimeInterval(safeTimeout)
-            while Date() < deadline {
-                if Self.displayIsRetired(id, onlineDisplayIDs: Self.onlineDisplayIDs()) {
+            return Self.lifecycle.perform {
+                // Repeating invalidation is intentional: a retained failed teardown must be able
+                // to ask the backing object to drop its display again on the next cleanup pass.
+                backing.invalidate()
+                guard id != 0 else {
+                    Self.recordReleased(id)
                     return true
                 }
-                usleep(50_000)
+                guard safeTimeout > 0 else {
+                    let retired = Self.displayIsRetired(
+                        id,
+                        onlineDisplayIDs: onlineDisplayIDsProvider())
+                    if retired { Self.recordReleased(id) }
+                    return retired
+                }
+
+                // The display's lifecycle runs on a private queue inside the shim, so a plain
+                // sleep is sufficient here — no main run loop required from the caller.
+                let deadline = Date().addingTimeInterval(safeTimeout)
+                while Date() < deadline {
+                    if Self.displayIsRetired(
+                        id,
+                        onlineDisplayIDs: onlineDisplayIDsProvider()) {
+                        Self.recordReleased(id)
+                        return true
+                    }
+                    usleep(50_000)
+                }
+                return false
             }
-            return false
         }
     }
 
@@ -203,17 +279,17 @@ public final class Stage {
 
     /// SpaceO displays attached to the login session but not owned by this process.
     public static func orphanedSpaceODisplayIDs() -> [CGDirectDisplayID] {
-        let owned = ownershipLock.withLock { processOwnedDisplayIDs }
+        let owned = ownership.lock.withLock { ownership.displayIDs }
         return spaceODisplayIDs().filter { !owned.contains($0) }
     }
 
     private static func recordOwned(_ id: CGDirectDisplayID) {
         guard id != 0 else { return }
-        _ = ownershipLock.withLock { processOwnedDisplayIDs.insert(id) }
+        _ = ownership.lock.withLock { ownership.displayIDs.insert(id) }
     }
 
     private static func recordReleased(_ id: CGDirectDisplayID) {
-        _ = ownershipLock.withLock { processOwnedDisplayIDs.remove(id) }
+        _ = ownership.lock.withLock { ownership.displayIDs.remove(id) }
     }
 
     static func displayIsRetired(
@@ -234,19 +310,31 @@ public final class Stage {
     }
 
     deinit {
-        guard !didInvalidate else { return }
+        let pending = stateLock.withLock { () -> PendingInvalidation? in
+            guard !didInvalidate else { return nil }
+            didInvalidate = true
+            return PendingInvalidation(
+                display: backing,
+                displayID: backing.displayID,
+                onlineDisplayIDs: onlineDisplayIDsProvider)
+        }
+        guard let pending else { return }
         // Do not block deinit, but still serialize the fallback teardown with every other
         // display graph change.
-        let display = backing
-        let id = display.displayID
         Self.lifecycle.enqueue {
-            display.invalidate()
+            pending.display.invalidate()
             let deadline = Date().addingTimeInterval(10)
             while Date() < deadline,
-                  !Stage.displayIsRetired(id, onlineDisplayIDs: Stage.onlineDisplayIDs()) {
+                  !Stage.displayIsRetired(
+                    pending.displayID,
+                    onlineDisplayIDs: pending.onlineDisplayIDs()) {
                 usleep(50_000)
             }
-            Stage.recordReleased(id)
+            if Stage.displayIsRetired(
+                pending.displayID,
+                onlineDisplayIDs: pending.onlineDisplayIDs()) {
+                Stage.recordReleased(pending.displayID)
+            }
         }
     }
 }

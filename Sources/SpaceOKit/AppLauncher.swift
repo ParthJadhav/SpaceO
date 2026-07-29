@@ -5,6 +5,10 @@ import CoreGraphics
 /// An application SpaceO started (or adopted) on behalf of an agent.
 public struct LaunchedApp: Sendable, Equatable {
     public let pid: pid_t
+    /// PID plus kernel start time. Every action that could disturb a process — force-terminate,
+    /// capture, input delivery — checks this rather than the PID alone, so a session that
+    /// outlived its app cannot act on whatever inherited its number.
+    public let identity: ProcessIdentity
     public let bundleIdentifier: String?
     public let name: String
     public let url: URL
@@ -26,12 +30,16 @@ public enum AppLauncher {
 
     /// Launch `appURL` (optionally opening `files`) and place all its windows in `region`.
     ///
-    /// Requests a separate process, but accepts application substitution when macOS reuses one.
-    public static func launch(
+    /// Requests a separate process and **refuses** application substitution. If macOS hands back
+    /// a process that was already running, that process belongs to the user: relocating its
+    /// windows would be SpaceO rearranging someone's desktop, which is the one thing this project
+    /// promises not to do. The launch fails instead, before anything moves.
+    public nonisolated(nonsending) static func launch(
         appURL: URL,
         opening files: [URL] = [],
         into region: CGRect,
-        timeout: TimeInterval = 15
+        timeout: TimeInterval = 15,
+        onMaterialized: (LaunchedApp) throws -> Void = { _ in }
     ) async throws -> (app: LaunchedApp, windows: [WindowRef]) {
 
         guard timeout.isFinite, (0.5...120).contains(timeout) else {
@@ -96,7 +104,13 @@ public enum AppLauncher {
             temporaryProfile = profile
         }
 
+        // Two independent tests for "this process is not ours", because the PID snapshot alone
+        // has a time-of-check/time-of-use hole: a user process that opens between the snapshot
+        // and `openApplication` is absent from `existing` and would be misread as ours. A start
+        // time from before we asked cannot be a process our request created, whatever the
+        // snapshot says.
         let existing = runningInstances(of: appURL)
+        let requestedAtMicroseconds = UInt64(max(0, Date().timeIntervalSince1970 * 1_000_000))
         let runningApp: NSRunningApplication
         do {
             if files.isEmpty {
@@ -112,25 +126,49 @@ public enum AppLauncher {
             throw SpaceOError.launchFailed("\(appURL.lastPathComponent): \(error.localizedDescription)")
         }
 
-        let reusedExistingProcess = existing.contains(runningApp.processIdentifier)
-        if reusedExistingProcess {
+        let pid = runningApp.processIdentifier
+        guard let identity = ProcessIdentity.current(of: pid) else {
             removeTemporaryProfile(at: temporaryProfile)
-            temporaryProfile = nil
+            throw SpaceOError.launchFailed(
+                "\(appURL.lastPathComponent) exited before SpaceO could identify it")
         }
 
-        if let profile = temporaryProfile {
-            devToolsPort = await waitForDevToolsPort(in: profile, timeout: min(timeout, 10))
+        // Refuse the substituted process. Note the asymmetry in how the two signals are combined:
+        // a *precise* start time predating the request is proof of a pre-existing process, while
+        // an imprecise one can only fall back to the racy snapshot. Either says "not ours".
+        let predatesRequest = identity.isPrecise
+            && identity.startedAtMicroseconds < requestedAtMicroseconds
+        if existing.contains(pid) || predatesRequest {
+            removeTemporaryProfile(at: temporaryProfile)
+            throw SpaceOError.launchFailed(
+                "\(appURL.lastPathComponent) is already running as pid \(pid); macOS reused that "
+                + "process instead of starting a new one. SpaceO will not move a running app's "
+                + "windows — quit it first, or adopt it deliberately with `spaceo adopt --pid \(pid)`")
         }
 
-        let app = LaunchedApp(pid: runningApp.processIdentifier,
-                              bundleIdentifier: runningApp.bundleIdentifier,
-                              name: runningApp.localizedName ?? appURL.deletingPathExtension().lastPathComponent,
-                              url: appURL,
-                              startedByUs: !reusedExistingProcess,
-                              devToolsPort: devToolsPort,
-                              temporaryProfile: temporaryProfile)
+        var app = LaunchedApp(
+            pid: pid,
+            identity: identity,
+            bundleIdentifier: runningApp.bundleIdentifier,
+            name: runningApp.localizedName
+                ?? appURL.deletingPathExtension().lastPathComponent,
+            url: appURL,
+            startedByUs: true,
+            devToolsPort: nil,
+            temporaryProfile: temporaryProfile)
 
         do {
+            // This callback is the WAL commit boundary. It runs immediately after SpaceO has an
+            // exact process identity, before DevTools discovery, window waits, placement, or any
+            // other potentially long operation. The session claims/registers the process and
+            // the daemon persists that identity before launch work may continue.
+            try onMaterialized(app)
+            if let profile = temporaryProfile {
+                devToolsPort = await waitForDevToolsPort(
+                    in: profile,
+                    timeout: min(timeout, 10))
+                app.devToolsPort = devToolsPort
+            }
             _ = try await WindowPlacement.waitForWindow(of: app.pid, timeout: timeout)
             // Settle: some apps resize themselves right after the first window appears.
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -156,30 +194,55 @@ public enum AppLauncher {
         }
     }
 
-    /// Adopt an already-running process into a stage without launching anything.
-    public static func adopt(pid: pid_t, into region: CGRect) throws -> (app: LaunchedApp, windows: [WindowRef]) {
+    /// Describe an already-running process well enough to claim it, without touching it.
+    ///
+    /// Separate from `adopt` so a caller can take exclusive ownership *before* the first window
+    /// moves. Adoption that mutates first and checks afterwards is how two sessions ended up
+    /// fighting over one process.
+    public static func describe(pid: pid_t) throws -> LaunchedApp {
         guard pid > 0 else {
             throw SpaceOError.badRequest("adopt needs a positive pid")
         }
-        try WindowPlacement.validate(frame: region)
-        guard let running = NSRunningApplication(processIdentifier: pid) else {
+        guard let running = NSRunningApplication(processIdentifier: pid),
+              let identity = ProcessIdentity.current(of: pid) else {
             throw SpaceOError.launchFailed("no running application with pid \(pid)")
         }
-        let app = LaunchedApp(pid: pid,
-                              bundleIdentifier: running.bundleIdentifier,
-                              name: running.localizedName ?? "pid \(pid)",
-                              url: running.bundleURL ?? URL(fileURLWithPath: "/"),
-                              startedByUs: false,
-                              devToolsPort: nil,
-                              temporaryProfile: nil)
-        let placed = try WindowPlacement.placeAll(of: pid, into: region)
-        return (app, placed)
+        return LaunchedApp(pid: pid,
+                           identity: identity,
+                           bundleIdentifier: running.bundleIdentifier,
+                           name: running.localizedName ?? "pid \(pid)",
+                           url: running.bundleURL ?? URL(fileURLWithPath: "/"),
+                           startedByUs: false,
+                           devToolsPort: nil,
+                           temporaryProfile: nil)
+    }
+
+    /// Move an already-described process's windows into `region`.
+    public static func place(_ app: LaunchedApp, into region: CGRect) throws -> [WindowRef] {
+        try WindowPlacement.validate(frame: region)
+        guard app.identity.isAlive else {
+            throw SpaceOError.launchFailed(
+                "\(app.name) (\(app.identity)) exited before its windows could be placed")
+        }
+        return try WindowPlacement.placeAll(of: app.pid, into: region)
+    }
+
+    /// Adopt an already-running process into a stage without launching anything.
+    public static func adopt(pid: pid_t, into region: CGRect) throws -> (app: LaunchedApp, windows: [WindowRef]) {
+        try WindowPlacement.validate(frame: region)
+        let app = try describe(pid: pid)
+        return (app, try place(app, into: region))
     }
 
     /// Ask an app to quit politely. Never force-kills apps we did not start.
+    ///
+    /// Both branches re-check the identity first: a session that has been alive for hours may be
+    /// holding a PID the kernel has since handed to something the user cares about, and
+    /// "terminate whatever has this number now" is not a teardown, it is a bug with a body count.
     public static func quit(_ app: LaunchedApp, force: Bool = false) {
-        guard let running = NSRunningApplication(processIdentifier: app.pid) else { return }
-        if force && app.startedByUs {
+        guard app.identity.isAlive,
+              let running = NSRunningApplication(processIdentifier: app.pid) else { return }
+        if force && app.startedByUs && app.identity.isPrecise {
             running.forceTerminate()
         } else {
             running.terminate()
@@ -192,7 +255,7 @@ public enum AppLauncher {
     /// into a recursive delete outside SpaceO's own temporary directory.
     @discardableResult
     public static func cleanupTemporaryProfile(for app: LaunchedApp) -> Bool {
-        guard NSRunningApplication(processIdentifier: app.pid) == nil else { return false }
+        guard !app.identity.isAlive else { return false }
         return removeTemporaryProfile(at: app.temporaryProfile)
     }
 
@@ -201,13 +264,13 @@ public enum AppLauncher {
     public static func cleanupTemporaryProfileEventually(for app: LaunchedApp) {
         guard !cleanupTemporaryProfile(for: app),
               let profile = app.temporaryProfile else { return }
-        scheduleTemporaryProfileCleanup(pid: app.pid, profile: profile)
+        scheduleTemporaryProfileCleanup(identity: app.identity, profile: profile)
     }
 
-    private static func scheduleTemporaryProfileCleanup(pid: pid_t, profile: URL) {
+    private static func scheduleTemporaryProfileCleanup(identity: ProcessIdentity, profile: URL) {
         Task.detached(priority: .utility) {
             for _ in 0..<300 {
-                guard NSRunningApplication(processIdentifier: pid) != nil else {
+                guard identity.isAlive else {
                     _ = removeTemporaryProfile(at: profile)
                     return
                 }

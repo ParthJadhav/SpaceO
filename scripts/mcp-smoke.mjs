@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const binary = resolve(process.argv[2] ?? ".build/release/spaceo");
+const scriptDirectory = dirname(fileURLToPath(import.meta.url));
+const expectedVersion = (
+  process.env.SPACEO_EXPECTED_VERSION
+  ?? readFileSync(resolve(scriptDirectory, "../VERSION"), "utf8")
+).trim();
 const socket = `/tmp/spaceo-mcp-smoke-${process.pid}.sock`;
 const server = spawn(binary, ["mcp", "--socket", socket], {
   stdio: ["pipe", "pipe", "pipe"],
@@ -77,8 +83,8 @@ try {
     `unexpected protocol negotiation: ${JSON.stringify(initialized)}`,
   );
   assert(
-    initialized.result?.serverInfo?.version === "1.0.0",
-    "MCP server did not advertise the release version",
+    initialized.result?.serverInfo?.version === expectedVersion,
+    `MCP server did not advertise release version ${expectedVersion}`,
   );
   assert(
     initialized.result?.instructions?.includes("isolates attention, not security"),
@@ -87,7 +93,7 @@ try {
 
   const listed = await request("tools/list");
   const tools = listed.result?.tools ?? [];
-  assert(tools.length === 12, `expected 12 tools, got ${tools.length}`);
+  assert(tools.length === 13, `expected 13 tools, got ${tools.length}`);
   assert(
     new Set(tools.map((tool) => tool.name)).size === tools.length,
     "tool names are not unique",
@@ -178,7 +184,7 @@ try {
   assert(exitCode === 0, `MCP process exited ${exitCode}. Diagnostics:\n${diagnostics}`);
 
   console.log(
-    "MCP smoke passed: protocol, 12 tools, validation, mutation safety, and clean exit",
+    "MCP smoke passed: protocol, 13 tools, validation, mutation safety, and clean exit",
   );
 } finally {
   if (!server.killed) server.kill("SIGTERM");

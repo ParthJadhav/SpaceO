@@ -30,13 +30,16 @@ public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatab
     case captureFailed(String)
     /// A malformed request from the CLI.
     case badRequest(String)
+    /// Requested cleanup left processes or virtual displays alive.
+    case teardownIncomplete(TeardownReport)
 
     public var description: String {
         switch self {
         case .unavailable(let cap):
             return """
-            unavailable on this build: \(cap)
-              The underlying class or symbol is unavailable on this macOS version.
+            unavailable on this host: \(cap)
+              The private implementation is either not evidence-qualified for this exact host \
+            tuple or its underlying class/symbol is unavailable.
               Run `spaceo doctor` for the full report.
             """
         case .accessibilityDenied:
@@ -66,6 +69,7 @@ public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatab
             """
         case .captureFailed(let why):        return "capture failed: \(why)"
         case .badRequest(let why):           return why
+        case .teardownIncomplete(let report): return report.recoveryDescription
         }
     }
 

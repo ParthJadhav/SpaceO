@@ -13,6 +13,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: Release configuration dry run
+        run: |
+          bash -n scripts/make-viewer-app.sh scripts/release.sh
+          node --check scripts/mcp-smoke.mjs
+          bash scripts/release.sh check
+          bash scripts/release.sh dry-run
       - name: Unit tests
         run: swift test --filter UnitTests
       - name: Release build
