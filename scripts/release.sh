@@ -24,6 +24,7 @@ NOTARY_PROFILE="${SPACEO_NOTARY_PROFILE:-}"
 NOTARY_KEY="${SPACEO_NOTARY_KEY:-}"
 NOTARY_KEY_ID="${SPACEO_NOTARY_KEY_ID:-}"
 NOTARY_ISSUER="${SPACEO_NOTARY_ISSUER:-}"
+LIVE_QUALIFICATION_RECORD="${SPACEO_LIVE_QUALIFICATION_RECORD:-}"
 NOTARY_ARGS=()
 ACTIVE_MOUNT=""
 WORK_DIR=""
@@ -51,7 +52,7 @@ Commands:
   check       Validate version consistency and required local tooling.
   dry-run     Show the versioned release plan and credential blockers; mutate nothing.
   preflight   Validate the Developer ID identity and deliberate notary credentials.
-  package     Build, test, sign, notarize, staple, and verify the release DMG.
+  package     Verify live qualification, then build, sign, notarize, staple, and verify.
   verify      Authenticate and re-run checksum, staple, Gatekeeper, and version checks.
 
 `package` and `preflight` fail closed unless SPACEO_CODESIGN_IDENTITY is an installed
@@ -90,8 +91,7 @@ load_version() {
 release_architecture() {
     case "$(uname -m)" in
         arm64) echo "arm64" ;;
-        x86_64) echo "x86_64" ;;
-        *) fail "unsupported release architecture: $(uname -m)" ;;
+        *) fail "SpaceO releases require Apple Silicon (arm64), got: $(uname -m)" ;;
     esac
 }
 
@@ -109,6 +109,13 @@ check_common() {
     require_command xcrun
     xcrun --find notarytool >/dev/null
     xcrun --find stapler >/dev/null
+    release_architecture >/dev/null
+}
+
+require_live_qualification() {
+    [[ -n "$LIVE_QUALIFICATION_RECORD" ]] \
+        || fail "SPACEO_LIVE_QUALIFICATION_RECORD must name a passing record for this commit"
+    "$REPOSITORY_ROOT/scripts/test.sh" verify-live-record "$LIVE_QUALIFICATION_RECORD"
 }
 
 configure_signing() {
@@ -336,6 +343,7 @@ package_distribution() {
     local app
     local app_zip
 
+    require_live_qualification
     run_preflight
     architecture="$(release_architecture)"
     output_dir="$RELEASE_ROOT/$VERSION"
@@ -352,7 +360,7 @@ package_distribution() {
     working_checksum="$WORK_DIR/$base_name.sha256"
     working_checksum_signature="$working_checksum.sig"
 
-    "$SWIFT" test
+    SWIFT="$SWIFT" "$REPOSITORY_ROOT/scripts/test.sh" safe
     "$SWIFT" build -c release
     "$NODE" "$REPOSITORY_ROOT/scripts/mcp-smoke.mjs" \
         "$REPOSITORY_ROOT/.build/release/spaceo"
@@ -452,6 +460,11 @@ case "$command" in
             echo "signing identity   : MISSING (publication will fail closed)"
         fi
         credential_summary
+        if [[ -n "$LIVE_QUALIFICATION_RECORD" ]]; then
+            echo "live qualification  : explicit record supplied (validated by package)"
+        else
+            echo "live qualification  : MISSING (packaging will fail closed)"
+        fi
         ;;
     preflight)
         run_preflight

@@ -26,11 +26,15 @@ assert_contains "$RELEASE_WORKFLOW" 'show-ref --verify --quiet "$release_ref"'
 assert_contains "$RELEASE_WORKFLOW" 'merge-base --is-ancestor "$release_commit" "$default_branch_commit"'
 assert_contains "$RELEASE_WORKFLOW" '[[ "$remote_tag_object" == "$EXPECTED_TAG_OBJECT" ]]'
 assert_contains "$RELEASE_WORKFLOW" 'signature=$signature'
+assert_contains "$RELEASE_WORKFLOW" 'needs: live-qualification'
+assert_contains "$RELEASE_WORKFLOW" 'SPACEO_LIVE_QUALIFICATION_RECORD:'
 
 # The verifier's trust anchor must be repository-owned, not learned from the artifact.
 assert_contains "$RELEASE_SCRIPT" "PUBLISHER_TEAM_ID=\"$PUBLISHER_TEAM_ID\""
 assert_contains "$RELEASE_SCRIPT" 'certificate leaf[subject.OU]'
 assert_contains "$RELEASE_SCRIPT" 'CHECKSUM_IDENTIFIER="dev.spaceo.release-checksum"'
+assert_contains "$RELEASE_SCRIPT" 'scripts/test.sh" verify-live-record'
+assert_contains "$RELEASE_SCRIPT" 'scripts/test.sh" safe'
 
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-release-security.XXXXXX")"
 trap 'rm -rf "$TEST_ROOT"' EXIT

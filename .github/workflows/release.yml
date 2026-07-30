@@ -15,8 +15,17 @@ permissions:
   contents: read
 
 jobs:
+  live-qualification:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/live-qualification.yml
+    with:
+      release_ref: ${{ github.event_name == 'push' && github.ref || format('refs/tags/{0}', inputs.release_tag) }}
+
   distribution:
-    runs-on: macos-14
+    needs: live-qualification
+    # macos-15 is an Apple Silicon image; the script also fails if the architecture drifts.
+    runs-on: macos-15
     timeout-minutes: 45
     environment: release
     permissions:
@@ -72,6 +81,17 @@ jobs:
           bash Tests/ReleaseSecurityTests.sh
           bash scripts/release.sh check
 
+      - name: Download live qualification evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: SpaceO-live-qualification
+          path: ${{ runner.temp }}/spaceo-live-qualification
+
+      - name: Verify live qualification evidence
+        run: |
+          bash scripts/test.sh verify-live-record \
+            "$RUNNER_TEMP/spaceo-live-qualification/spaceo-live-qualification.txt"
+
       - name: Require release credentials
         env:
           CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
@@ -105,6 +125,7 @@ jobs:
           NOTARY_KEY_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
           SPACEO_NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
           SPACEO_NOTARY_ISSUER: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          SPACEO_LIVE_QUALIFICATION_RECORD: ${{ runner.temp }}/spaceo-live-qualification/spaceo-live-qualification.txt
         run: |
           set -euo pipefail
           certificate_path="$RUNNER_TEMP/spaceo-developer-id.p12"

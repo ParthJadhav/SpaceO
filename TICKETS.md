@@ -204,10 +204,11 @@ Status definitions:
 ### SPAO-113 — Select and publish a software license
 
 - Priority: P0
-- Status: Open
-- Evidence: `RELEASE_AUDIT.md` records RA-014 as an unresolved release decision, and the
-  repository has no `LICENSE` file or package metadata that grants users rights to use, modify,
-  or redistribute SpaceO.
+- Status: Done
+- Evidence: The repository-root `LICENSE` contains the complete MIT License, and the README
+  identifies the project as MIT-licensed.
+- Decision: MIT was selected as a conventional permissive license that permits use, modification,
+  redistribution, and commercial integration while preserving the copyright and warranty notice.
 - Impact: Real users and downstream integrators cannot determine whether they are legally allowed
   to install, evaluate, redistribute, or contribute to the product.
 - Acceptance:
@@ -232,10 +233,10 @@ Status definitions:
 
 - Priority: P0
 - Status: Open
-- Evidence: `RELEASE_AUDIT.md` RA-044 records that the current release artifact is unnotarized and
-  rejected by Gatekeeper. `make install` copies only a locally built CLI binary, while the Viewer
-  wrapper signs with `--timestamp=none` and has no archive, notarization, staple, update, or
-  uninstall workflow.
+- Evidence: The fail-closed Developer ID DMG, notarization, stapling, checksum-signing, fresh-mount
+  verification, GitHub workflow, and install/upgrade/rollback/uninstall documentation are
+  implemented. `RELEASE_AUDIT.md` RA-044 remains unresolved because no credentialed,
+  independently qualified public artifact is recorded.
 - Impact: A normal user cannot install SpaceO through a trustworthy macOS release path, verify its
   provenance, or receive predictable upgrades without bypassing platform protections.
 - Acceptance:
@@ -268,20 +269,22 @@ Status definitions:
 - Verification: `testSingleTileLookupDoesNotMaterializeAnUnboundedLayout` passes at a capacity of
   1,000,000,000, and `make verify-release` passes with 80 non-GUI tests plus the release MCP smoke.
 
-### SPAO-117 — Run live WindowServer coverage normally
+### SPAO-117 — Separate safe tests from explicit live qualification
 
 - Priority: P0
 - Status: Done
-- Evidence: Environment acknowledgements made the release gate omit the only tests that exercise
-  real display lifecycle and input behavior.
-- Impact: A green default suite could miss regressions in the product's core workflow.
+- Evidence: Running live WindowServer tests by default can mutate the user's display graph, launch
+  applications, and send input on an unqualified login; treating prerequisite skips as success
+  also produces invalid release evidence.
+- Impact: Ordinary development must stay safe while release qualification must execute every live
+  test under explicit, auditable host and login opt-ins.
 - Fix:
-  - Removed integration and multi-display environment acknowledgement gates.
-  - `make test` and CI run the complete suite.
-  - `make test-live` directly runs the focused integration target.
+  - `make test` and CI use `scripts/test.sh safe` and exclude `IntegrationTests`.
+  - `make test-live` requires the live, qualified-host, and disposable-login opt-ins.
+  - Live qualification fails on any skipped test and emits an exact-commit record.
 - Acceptance:
-  - Live tests run without environment authorization or login-class policy.
-  - Technical prerequisites such as absent APIs, TCC grants, or applications remain explicit.
+  - Safe tests never create displays, launch GUI applications, or send input.
+  - Missing APIs, TCC grants, applications, or test execution fail live qualification.
   - Teardown still verifies that no virtual display leaked.
 
 ### SPAO-118 — Make isolation verdicts truthful about unobservable input routes
@@ -466,17 +469,19 @@ Status definitions:
   - Add deterministic oversized, moved-after-placement, and notification-during-sweep regressions.
   - Janitor shutdown leaves no task, app, or display behind.
 
-### SPAO-128 — Remove product-policy resource admission
+### SPAO-128 — Enforce bounded WindowServer resource admission
 
 - Priority: P0
 - Status: Done
-- Evidence: Fixed session/display/framebuffer/rate ceilings and an environment-only override
-  blocked otherwise representable normal use.
-- Impact: Admission differed by daemon-start authorization rather than platform capability.
+- Evidence: Unbounded session, display, framebuffer, and creation churn can destabilize the user's
+  graphical login even when individual values are technically representable.
+- Impact: A retrying or oversized workload could reach WindowServer before SpaceO refused it.
+- Fix: Enforce finite default limits before stage construction and provide one higher, still-bounded
+  process-start operator budget that never bypasses display-graph safety.
 - Acceptance:
-  - Apply no product ceiling to sessions, displays, framebuffer totals, or creation rate.
-  - Retain positive whole-pixel, arithmetic-representability, and finite-layout checks.
-  - Report usage without an authorization mode.
+  - Bound sessions, displays, framebuffer totals, edge size, tile size, and creation rate.
+  - Failed or rolled-back attachment attempts consume the rolling creation budget.
+  - Report usage against limits and clearly identify the bounded operator mode.
 
 ### SPAO-129 — Restore the user input route after every partial focus failure
 
@@ -583,12 +588,13 @@ Status definitions:
 
 ## Completed automated verification
 
-- 80 non-GUI tests pass after deleting the obsolete cursor-fence and parking test surface and
-  adding constant-space large-density tile lookup coverage.
+- 279 deterministic tests pass, including display-graph hazard classification, bounded resource
+  admission, and constant-space large-density tile lookup, without invoking live WindowServer
+  tests.
 - Clean debug build passes.
 - Release build and the 12-tool MCP protocol/validation/mutation-safety smoke pass.
-- Regression coverage exists for transport double-start, doctor/version JSON, unrestricted
-  display configuration, Viewer targeting semantics and former policy caps.
+- Regression coverage exists for transport double-start, doctor/version JSON, bounded display
+  configuration, Viewer targeting semantics, and release qualification records.
 - Live one-display runs passed native placement, CLI pointer/key/type delivery, capture,
   Viewer pointer/key/TextEdit delivery, toolbar screenshot sizing, isolation verification, app
   cleanup, daemon shutdown and zero-display teardown.

@@ -9,18 +9,21 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-14
+    # SpaceO ships for Apple Silicon. The versioned label avoids macos-latest architecture drift.
+    runs-on: macos-15
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Release configuration dry run
         run: |
-          bash -n scripts/make-viewer-app.sh scripts/release.sh
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          bash -n scripts/make-viewer-app.sh scripts/release.sh scripts/test.sh
           node --check scripts/mcp-smoke.mjs
           bash scripts/release.sh check
           bash scripts/release.sh dry-run
-      - name: Tests
-        run: swift test
+      - name: Safe tests (no WindowServer, apps, or input)
+        run: bash scripts/test.sh safe
       - name: Release build
         run: swift build -c release
       - name: MCP black-box smoke test

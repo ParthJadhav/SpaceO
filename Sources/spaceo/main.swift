@@ -499,7 +499,17 @@ case "doctor":
             print("  orphaned displays  : "
                   + orphanedDisplayIDs.map(String.init).joined(separator: ", "))
         }
-        print("  resource policy    : no product limits; runtime geometry checks only")
+        let doctorBudget = ResourceBudget.fromEnvironment()
+        print("  resource budget    : \(doctorBudget.maximumSessions) session(s), "
+              + "\(doctorBudget.maximumDisplays) display(s), "
+              + "\(doctorBudget.maximumTotalPixels) pixel(s), "
+              + "\(doctorBudget.maximumCreationsPerMinute) new display(s)/min, "
+              + "min tile \(Int(doctorBudget.minimumTileSize.width))x"
+              + "\(Int(doctorBudget.minimumTileSize.height))")
+        if doctorBudget.isUnsafe {
+            print("  budget mode        : bounded operator override "
+                  + "(SPACEO_UNSAFE_RESOURCE_LIMITS is set)")
+        }
     }
     exit(capabilities.canDrive ? 0 : 1)
 

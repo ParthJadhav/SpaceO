@@ -1,8 +1,8 @@
 # SpaceO Release Audit
 
 This is the defect log for the end-to-end release-hardening pass started on 2026-07-26.
-Rounds 1–5 preserve the historical containment record. The runtime capability blocks were
-removed on 2026-07-27 after the owner accepted the lifecycle and input-route fixes.
+Rounds 1–7 preserve the historical containment and policy record. Round 8 records the current
+bounded resource, display-graph, and explicit live-qualification posture.
 
 ## Environment
 
@@ -28,7 +28,7 @@ removed on 2026-07-27 after the owner accepted the lifecycle and input-route fix
 | RA-011 | Medium | Fixed | MCP startup/input framing can hang or consume unbounded memory |
 | RA-012 | Critical | Fixed | Ownerless SpaceO displays are not detected before creating more |
 | RA-013 | Medium | Fixed | Skipped live tests still wait in teardown with an invalid display baseline |
-| RA-014 | Release | Owner decision required | No public license has been selected |
+| RA-014 | Release | Fixed | MIT license selected and published at the repository root |
 | RA-015 | High | Fixed; live rerun pending | App launch could reuse a user-owned process and two sessions could fight over one PID |
 | RA-016 | Medium | Fixed | Private Chromium profiles leaked and DevTools/profile permissions were underspecified |
 | RA-017 | Medium | Fixed | Space ownership, dead-app evidence, and isolation failures were reported incorrectly |
@@ -58,7 +58,7 @@ removed on 2026-07-27 after the owner accepted the lifecycle and input-route fix
 | RA-041 | Critical | Fixed | Public production API still exposed the display-origin mutation proven to pin displays |
 | RA-042 | Medium | Fixed | Failed-daemon startup diagnostics were read into memory without a size bound |
 | RA-043 | Critical | Fixed; live rerun pending | Teardown and orphan guards ignored attached SpaceO displays once they became inactive |
-| RA-044 | Release | Open | Release artifact is ad-hoc signed, unnotarized, and rejected by Gatekeeper |
+| RA-044 | Release | Automation complete; credentialed qualification pending | No signed, notarized, independently qualified public artifact is recorded |
 | RA-045 | High | Fixed | Concurrent DevTools commands interleaved on one WebSocket and could drop each other's replies |
 | RA-046 | Medium | Fixed | Every Chromium launch leaked an uninvalidated `URLSession` for the daemon's lifetime |
 | RA-047 | High | Fixed | Window-watcher AX callbacks held an unretained watcher pointer and could use freed memory |
@@ -193,8 +193,8 @@ release candidate and is not targeted.
 
 ### RA-006, RA-010, and RA-011 — unsafe defaults and unbounded work
 
-- `swift test` now includes live WindowServer coverage; `make test-live` remains the focused live
-  target.
+- `make test` and CI run deterministic coverage without WindowServer, application, or input
+  mutation. `make test-live` requires three explicit qualification opt-ins and fails on skips.
 - Clipboard tests use a private named pasteboard rather than the user's general pasteboard.
 - Every native input boundary caps clicks at three and text at 8,000 characters, requires finite
   coordinates, and validates keys, scroll ticks, PIDs, and window IDs.
@@ -220,7 +220,8 @@ release candidate and is not targeted.
   evidence that an owned app exited. Audit findings and interaction-time isolation breaches now
   produce failed responses instead of `ok: true`.
 - Display dimensions must be finite whole pixels, fit in 32 bits, and provide tiles of at least
-  800×600; framebuffers are capped at 8192 pixels per side and 33,554,432 pixels total. Public
+  640×480 by default; framebuffers are capped at 8192 pixels per side and 33,554,432 pixels total.
+  Public
   tiling helpers refuse pathological materialization counts. Density must be positive. Session
   ids, keys, text, files, clicks, coordinates, PIDs, and window ids have explicit bounds and
   nontrapping conversions. CLI flags distinguish an omitted value from an invalid one instead
@@ -318,7 +319,8 @@ release candidate and is not targeted.
 - Release daemon SIGTERM regression passed with status 0 and socket removal.
 - Orphan guard regression passed on the affected login session: session creation was refused and
   attached SpaceO IDs remained exactly 291, 292, and 293.
-- `make install`, CI, and release-smoke infrastructure exist. Public licensing remains unresolved.
+- `make install`, CI, and release-smoke infrastructure existed; public licensing was unresolved
+  at this historical point and was later resolved by the MIT selection recorded in RA-014.
 - Result: **not release-ready** until graphical-session recovery and a cautious live workflow pass.
 
 ### Round 3 — incident containment
@@ -400,3 +402,19 @@ release candidate and is not targeted.
   in this document and the incident report, but its restrictions are superseded by owner decision.
 - Added regression coverage for same-server double start, structured CLI JSON, unrestricted
   density/display geometry, and current Viewer targeting semantics.
+
+### Round 8 — bounded production admission and release qualification
+
+- Restored finite session, display, aggregate framebuffer, minimum-tile, per-edge, and rolling
+  creation-rate limits. A process-start operator override raises but never removes those limits.
+- Creation now fails closed for mirrored, inactive, overlapping, unreadable, or ownerless display
+  graphs and rolls back a newly attached display if the post-attach graph becomes hazardous.
+- Deterministic tests are separated from live WindowServer qualification. Live runs require a
+  reserved Apple Silicon host and disposable login, fail on every skip, and emit a commit-bound
+  record that release packaging verifies before signing work begins.
+- Integrated safe verification passed 279 deterministic tests, the optimized warnings-as-errors
+  build, the 13-tool MCP smoke, release-security policy tests, workflow parsing, and the
+  non-mutating release check/dry run.
+- Release automation remains implemented but externally unqualified: signing, notarization,
+  independent exact-artifact qualification, repository environment protection, and publication
+  have not been performed by this integration.

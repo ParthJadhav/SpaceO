@@ -13,10 +13,10 @@ release:
 	$(SWIFT) build -c release
 
 test:
-	$(SWIFT) test
+	SWIFT="$(SWIFT)" bash scripts/test.sh safe
 
 test-live:
-	$(SWIFT) test --filter IntegrationTests
+	SWIFT="$(SWIFT)" bash scripts/test.sh live
 
 verify-release: release test
 	$(NODE) scripts/mcp-smoke.mjs .build/release/spaceo

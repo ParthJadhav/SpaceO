@@ -34,12 +34,20 @@ private final class DisplayLifecycleCoordinator: @unchecked Sendable {
 /// and macOS tells apps to stop drawing (and Electron AX trees go stale). A window on a second
 /// display's active Space renders normally, so every standard API just works. See FINDINGS.md §2.
 ///
-/// Normal teardown explicitly waits for the display to disappear. Diagnostics still inventory
-/// ownerless displays, but their presence does not block creating another stage.
+/// Normal teardown explicitly waits for the display to disappear. Creation fails closed before
+/// attachment, and rolls a new display back if attachment makes the user-display graph hazardous.
 /// A stage may be read by capture tasks while lifecycle work runs elsewhere. Immutable metadata
 /// is freely shared; every access to the mutable backing display and invalidation flags is
 /// serialized by `stateLock`.
 public final class Stage: @unchecked Sendable {
+
+    struct DisplayGraphSnapshot: Equatable {
+        var userOnlineDisplayIDs: [CGDirectDisplayID]
+        var userActiveDisplayIDs: [CGDirectDisplayID]
+        var mirroredUserDisplayIDs: [CGDirectDisplayID]
+        var orphanedSpaceODisplayIDs: [CGDirectDisplayID]
+        var boundsByDisplayID: [CGDirectDisplayID: CGRect]
+    }
 
     /// Process-wide display ownership is mutable, but never accessed without this holder's lock.
     private final class OwnershipState: @unchecked Sendable {
@@ -97,6 +105,14 @@ public final class Stage: @unchecked Sendable {
             )
         }
         let display: SPOVirtualDisplay = try Self.lifecycle.perform {
+            let before = Self.currentDisplayGraphSnapshot()
+            let existingHazards = Self.displayCreationHazards(in: before)
+            guard existingHazards.isEmpty else {
+                throw SpaceOError.stageCreationFailed(
+                    "display graph is hazardous; refusing to attach a virtual display: "
+                    + existingHazards.joined(separator: "; "))
+            }
+
             guard let display = SPOVirtualDisplay(name: name, width: width,
                                                   height: height, hiDPI: hiDPI) else {
                 throw SpaceOError.stageCreationFailed(
@@ -116,6 +132,20 @@ public final class Stage: @unchecked Sendable {
             }
 
             Self.recordOwned(display.displayID)
+            let after = Self.currentDisplayGraphSnapshot()
+            let newHazards = Self.displayCreationHazards(in: after)
+            guard newHazards.isEmpty else {
+                let displayID = display.displayID
+                let removed = Self.invalidateUnpublished(display)
+                Self.recordReleased(displayID)
+                throw SpaceOError.stageCreationFailed(
+                    "display graph became hazardous after attaching display \(displayID): "
+                    + newHazards.joined(separator: "; ")
+                    + (removed
+                       ? ". The new display was removed"
+                       : ". Removal of the new display could not be confirmed; stop creating "
+                         + "displays and run `spaceo doctor`"))
+            }
             return display
         }
         self.backing = display
@@ -265,7 +295,7 @@ public final class Stage: @unchecked Sendable {
         onlineDisplayIDs().filter { !isSpaceODisplay($0) }
     }
 
-    /// User-display mirroring state, reported for diagnostics without gating display creation.
+    /// Mirroring is a known unsafe configuration for CGVirtualDisplay on the verification host.
     public static func mirroredNonSpaceODisplayIDs() -> [CGDirectDisplayID] {
         nonSpaceOOnlineDisplayIDs().filter { CGDisplayIsInMirrorSet($0) != 0 }
     }
@@ -280,6 +310,102 @@ public final class Stage: @unchecked Sendable {
     public static func orphanedSpaceODisplayIDs() -> [CGDirectDisplayID] {
         let owned = ownership.lock.withLock { ownership.displayIDs }
         return spaceODisplayIDs().filter { !owned.contains($0) }
+    }
+
+    /// Refuse every display graph implicated in the 2026-07-26 lockout, plus incomplete display
+    /// inventory. This pure classifier is shared by the pre-attach and post-attach checks.
+    static func displayCreationHazards(in snapshot: DisplayGraphSnapshot) -> [String] {
+        let userOnline = Set(snapshot.userOnlineDisplayIDs)
+        let userActive = Set(snapshot.userActiveDisplayIDs)
+        var hazards: [String] = []
+
+        if userOnline.isEmpty {
+            hazards.append("no non-SpaceO user display is online")
+        }
+        if userActive.isEmpty {
+            hazards.append("no non-SpaceO user display is active")
+        }
+
+        let inactive = userOnline.subtracting(userActive).sorted()
+        if !inactive.isEmpty {
+            hazards.append(
+                "user display(s) online but inactive: \(idList(inactive))")
+        }
+        let activeButNotOnline = userActive.subtracting(userOnline).sorted()
+        if !activeButNotOnline.isEmpty {
+            hazards.append(
+                "display inventory is inconsistent; active user display(s) are not online: "
+                + idList(activeButNotOnline))
+        }
+        if !snapshot.mirroredUserDisplayIDs.isEmpty {
+            hazards.append(
+                "user display mirroring is enabled: "
+                + idList(snapshot.mirroredUserDisplayIDs))
+        }
+        if !snapshot.orphanedSpaceODisplayIDs.isEmpty {
+            hazards.append(
+                "ownerless SpaceO display(s) are still attached: "
+                + idList(snapshot.orphanedSpaceODisplayIDs))
+        }
+
+        let expectedBounds = userOnline.union(snapshot.orphanedSpaceODisplayIDs)
+            .union(snapshot.boundsByDisplayID.keys)
+        let missingBounds = expectedBounds.filter {
+            guard let bounds = snapshot.boundsByDisplayID[$0] else { return true }
+            return !bounds.origin.x.isFinite || !bounds.origin.y.isFinite
+                || !bounds.width.isFinite || !bounds.height.isFinite
+                || bounds.width <= 0 || bounds.height <= 0
+        }.sorted()
+        if !missingBounds.isEmpty {
+            hazards.append(
+                "display bounds are missing or invalid: \(idList(missingBounds))")
+        }
+
+        let bounded = snapshot.boundsByDisplayID
+            .filter { !missingBounds.contains($0.key) }
+            .sorted { $0.key < $1.key }
+        var overlaps: [String] = []
+        for firstIndex in bounded.indices {
+            for secondIndex in bounded.index(after: firstIndex)..<bounded.endIndex {
+                let first = bounded[firstIndex]
+                let second = bounded[secondIndex]
+                let intersection = first.value.intersection(second.value)
+                if !intersection.isNull,
+                   intersection.width > 0, intersection.height > 0 {
+                    overlaps.append("\(first.key)-\(second.key)")
+                }
+            }
+        }
+        if !overlaps.isEmpty {
+            hazards.append(
+                "display framebuffers overlap (display id pairs \(overlaps.joined(separator: ", ")))")
+        }
+        return hazards
+    }
+
+    private static func currentDisplayGraphSnapshot() -> DisplayGraphSnapshot {
+        let online = onlineDisplayIDs()
+        let active = activeDisplayIDs()
+        let userOnline = online.filter { !isSpaceODisplay($0) }
+        let userActive = active.filter { !isSpaceODisplay($0) }
+        let spaceO = online.filter(isSpaceODisplay)
+        let owned = ownership.lock.withLock { ownership.displayIDs }
+        var bounds: [CGDirectDisplayID: CGRect] = [:]
+        for id in online {
+            bounds[id] = CGDisplayBounds(id)
+        }
+        return DisplayGraphSnapshot(
+            userOnlineDisplayIDs: userOnline.sorted(),
+            userActiveDisplayIDs: userActive.sorted(),
+            mirroredUserDisplayIDs:
+                userOnline.filter { CGDisplayIsInMirrorSet($0) != 0 }.sorted(),
+            orphanedSpaceODisplayIDs:
+                spaceO.filter { !owned.contains($0) }.sorted(),
+            boundsByDisplayID: bounds)
+    }
+
+    private static func idList(_ ids: some Sequence<CGDirectDisplayID>) -> String {
+        ids.map(String.init).joined(separator: ", ")
     }
 
     private static func recordOwned(_ id: CGDirectDisplayID) {
@@ -298,7 +424,8 @@ public final class Stage: @unchecked Sendable {
         id == 0 || !onlineDisplayIDs.contains(id)
     }
 
-    private static func invalidateUnpublished(_ display: SPOVirtualDisplay) {
+    @discardableResult
+    private static func invalidateUnpublished(_ display: any StageDisplayBacking) -> Bool {
         let id = display.displayID
         display.invalidate()
         let deadline = Date().addingTimeInterval(3)
@@ -306,6 +433,7 @@ public final class Stage: @unchecked Sendable {
               !displayIsRetired(id, onlineDisplayIDs: onlineDisplayIDs()) {
             usleep(50_000)
         }
+        return displayIsRetired(id, onlineDisplayIDs: onlineDisplayIDs())
     }
 
     deinit {

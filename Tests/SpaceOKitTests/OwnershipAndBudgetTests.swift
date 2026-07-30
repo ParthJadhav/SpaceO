@@ -166,10 +166,12 @@ final class OwnershipAndBudgetTests: XCTestCase {
         }
     }
 
-    func testAnyPositivePixelTileWithinLayoutBoundsIsAccepted() {
+    func testUnusableTileDensityIsRejected() {
         let budget = ResourceBudget.default
         XCTAssertNoThrow(try budget.validateDisplaySize(
-            CGSize(width: 8, height: 8), capacity: 64))
+            CGSize(width: 1920, height: 1080), capacity: 4))
+        XCTAssertThrowsError(try budget.validateDisplaySize(
+            CGSize(width: 1920, height: 1080), capacity: 64))
     }
 
     func testZeroAreaTileAndUnboundedMaterializationAreRejected() throws {
@@ -181,7 +183,7 @@ final class OwnershipAndBudgetTests: XCTestCase {
             capacity: TileLayout.maximumCapacity + 1))
     }
 
-    // MARK: - Unrestricted usage accounting
+    // MARK: - Bounded usage admission
 
     private func usage(sessions: Int = 0, displays: Int = 0, pixels: Int = 0,
                        creations: Int = 0) -> ResourceBudget.Usage {
@@ -190,23 +192,55 @@ final class OwnershipAndBudgetTests: XCTestCase {
                              creationsInLastMinute: creations)
     }
 
-    func testSessionAndDisplayCountsHaveNoPolicyCeiling() {
+    func testSessionAndDisplayCeilingsAreEnforced() {
         let budget = ResourceBudget.default
         XCTAssertNoThrow(try budget.admitSession(
-            usage: usage(sessions: 1_000_000, displays: 1_000_000)))
+            usage: usage(sessions: budget.maximumSessions - 1)))
+        XCTAssertThrowsError(try budget.admitSession(
+            usage: usage(sessions: budget.maximumSessions)))
         let size = CGSize(width: 1920, height: 1080)
         XCTAssertNoThrow(try budget.admitDisplay(
             size: size, capacity: 1,
-            usage: usage(sessions: 1_000_000,
-                         displays: 1_000_000,
-                         pixels: 1_000_000_000,
-                         creations: 1_000_000)))
+            usage: usage(displays: budget.maximumDisplays - 1)))
+        XCTAssertThrowsError(try budget.admitDisplay(
+            size: size, capacity: 1,
+            usage: usage(displays: budget.maximumDisplays)))
     }
 
-    func testEnvironmentCannotChangeRuntimeAdmission() {
+    func testFramebufferAndCreationRateLimitsAreEnforced() {
+        let budget = ResourceBudget.default
+        let size = CGSize(width: 1920, height: 1080)
+        let added = 1920 * 1080
+        XCTAssertThrowsError(try budget.admitDisplay(
+            size: size, capacity: 1,
+            usage: usage(pixels: budget.maximumTotalPixels - added + 1))) { error in
+            XCTAssertTrue(error.localizedDescription.contains("framebuffer pixels"))
+        }
+
+        var byteUsage = usage()
+        byteUsage.bytes = budget.maximumTotalBytes
+        XCTAssertThrowsError(try budget.admitDisplay(
+            size: size, capacity: 1, usage: byteUsage)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("framebuffer bytes"))
+        }
+
+        XCTAssertThrowsError(try budget.admitDisplay(
+            size: size, capacity: 1,
+            usage: usage(creations: budget.maximumCreationsPerMinute))) { error in
+            XCTAssertTrue(error.localizedDescription.contains("per minute"))
+        }
+    }
+
+    func testOperatorOverrideIsExplicitBoundedAndDoesNotDisableAdmission() {
         XCTAssertEqual(ResourceBudget.fromEnvironment([:]), .default)
-        XCTAssertEqual(ResourceBudget.fromEnvironment(["IGNORED_SETTING": "1"]), .default)
-        XCTAssertFalse(ResourceBudget.fromEnvironment().isUnsafe)
+        XCTAssertEqual(ResourceBudget.fromEnvironment(
+            ["SPACEO_UNSAFE_RESOURCE_LIMITS": "TRUE"]), .unsafeOperator)
+        XCTAssertTrue(ResourceBudget.unsafeOperator.isUnsafe)
+        XCTAssertGreaterThan(ResourceBudget.unsafeOperator.maximumDisplays,
+                             ResourceBudget.default.maximumDisplays)
+        XCTAssertLessThan(ResourceBudget.unsafeOperator.maximumDisplays, Int.max)
+        XCTAssertThrowsError(try ResourceBudget.unsafeOperator.admitSession(
+            usage: usage(sessions: ResourceBudget.unsafeOperator.maximumSessions)))
     }
 
     // MARK: - Pool allocation
@@ -236,7 +270,19 @@ final class OwnershipAndBudgetTests: XCTestCase {
         XCTAssertEqual(factory.callCount, 1)
     }
 
-    func testConcurrentAllocationsAllReachTheAllocator() {
+    func testOverBudgetAllocationNeverConstructsAStage() {
+        let factory = RecordingStageFactory()
+        var budget = ResourceBudget.default
+        budget.maximumDisplays = 0
+        let pool = DisplayPool(sessionsPerDisplay: 1,
+                               displaySize: CGSize(width: 1920, height: 1080),
+                               budget: budget,
+                               stageFactory: factory.make)
+        XCTAssertThrowsError(try pool.allocate())
+        XCTAssertEqual(factory.callCount, 0)
+    }
+
+    func testFailedConcurrentCreationAttemptsStillConsumeTheRateBudget() {
         let factory = RecordingStageFactory()
         let pool = DisplayPool(sessionsPerDisplay: 1,
                                displaySize: CGSize(width: 1920, height: 1080),
@@ -255,8 +301,10 @@ final class OwnershipAndBudgetTests: XCTestCase {
         }
         XCTAssertEqual(failures.count(for: "factory-error"), 64)
         XCTAssertEqual(failures.count(for: "allocated"), 0)
-        XCTAssertEqual(factory.callCount, 64)
+        XCTAssertEqual(factory.callCount, ResourceBudget.default.maximumCreationsPerMinute)
         XCTAssertEqual(pool.usage().displays, 0)
+        XCTAssertEqual(pool.usage().creationsInLastMinute,
+                       ResourceBudget.default.maximumCreationsPerMinute)
     }
 
     func testPoolReportsUsageAgainstItsBudget() {
@@ -279,8 +327,8 @@ final class OwnershipAndBudgetTests: XCTestCase {
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(4))
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(0))
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(TileLayout.maximumCapacity + 1))
-        XCTAssertNoThrow(try pool.setSessionsPerDisplay(48))
-        XCTAssertEqual(pool.sessionsPerDisplay, 48)
+        XCTAssertThrowsError(try pool.setSessionsPerDisplay(48))
+        XCTAssertEqual(pool.sessionsPerDisplay, 4)
     }
 
     // MARK: - SPAO-128: tile lookup stays bounded

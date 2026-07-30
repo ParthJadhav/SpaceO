@@ -88,11 +88,12 @@ caller does not pin a size, the CLI grows the display to match the requested den
 keeps one empty display warm for its lifetime so rapid agent churn reuses a stable framebuffer;
 excess empty displays from a larger peak are retired after a grace period.
 
-**Runtime geometry — `ResourceBudget`.** `allocate()` does not impose product-policy ceilings on
-sessions, displays, framebuffer totals, or creation rate. It validates positive whole-pixel
-geometry representable by Swift and CoreGraphics. `pool` and `doctor` report current usage.
-Capacity remains bounded by `TileLayout.maximumCapacity` because the public full-layout API
-materializes an array; per-tile lookup stays O(1) and allocation-free.
+**Admission — `ResourceBudget`.** `allocate()` enforces live-session, attached-display, aggregate
+framebuffer pixel/byte, per-edge, minimum-tile, and rolling creation-rate limits before a `Stage`
+is constructed. The default budget is 16 sessions, 4 displays, 33,554,432 pixels (128 MiB at four
+bytes per pixel), and 4 new displays per minute. `SPACEO_UNSAFE_RESOURCE_LIMITS=1` is a
+process-start-only, higher but still bounded operator budget; it cannot bypass display-graph
+safety. `pool` and `doctor` report usage and limits.
 
 ### 3.1 Stage — `VirtualDisplay`
 
@@ -110,8 +111,8 @@ stage.invalidate()   // waits up to its timeout and returns whether removal comp
 - **Intended lifetime = object lifetime.** Releasing `CGVirtualDisplay` normally removes the
   display. The macOS 27 preview host nevertheless retained three ownerless displays after rapid
   churn, so SpaceO does not trust that contract blindly: teardown is verified and `doctor`
-  inventories unmatched vendor/model IDs. Ownerless IDs remain diagnostic and do not block
-  another creation attempt.
+  inventories unmatched vendor/model IDs. An ownerless ID blocks another creation attempt until
+  the graph is recovered.
 - The descriptor binds to a **private serial queue, never the main queue.** CoreGraphics
   publishes display lifecycle on that queue, so using the main queue would make creation and
   teardown depend on the *caller* running a main run loop — which an XCTest case or a one-shot
@@ -121,8 +122,10 @@ stage.invalidate()   // waits up to its timeout and returns whether removal comp
 - A process-local ownership registry distinguishes its live stages from ownerless SpaceO
   displays in the same graphical login session. Inventory and teardown use the online display
   list, not only active displays, so an inactive-but-still-attached phantom cannot be missed.
-- Mirroring, absence or deactivation of a physical display, framebuffer overlap, and ownerless
-  displays are diagnostic only.
+- Creation fails closed if no non-SpaceO display is online and active, any user display is
+  mirrored or inactive, display bounds overlap or cannot be read, or an ownerless SpaceO display
+  remains attached. The graph is checked immediately before attachment and again afterwards; a
+  newly attached display is removed if the second check detects degradation.
 - Production contains no display-origin mutation, diagonal-parking API, cursor fence, or
   pointer-warp path. `CGConfigureDisplayOrigin` pinned displays and poisoned later virtual-display
   creation in `probes/probe7.m`; see [FINDINGS.md](FINDINGS.md) §4.1.

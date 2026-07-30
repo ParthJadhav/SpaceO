@@ -95,9 +95,10 @@ the auto-started daemon reads it:
 The MCP server starts the shared daemon on demand, so every agent on the machine pools the same
 agent displays instead of each spinning up its own.
 
-`spaceo doctor` and `spaceo pool` report current display and session usage. SpaceO accepts any
-positive, technically representable display geometry and packing density; allocation failures
-from CoreGraphics or WindowServer are returned to the caller.
+`spaceo doctor` and `spaceo pool` report current usage and the active resource budget. SpaceO
+validates display geometry and packing density before calling CoreGraphics, and refuses allocation
+when the bounded session, display, framebuffer, tile-size, creation-rate, or display-graph safety
+limits would be exceeded.
 
 Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`,
 `spaceo_session_heartbeat`, `spaceo_open_app`, `spaceo_read_screen`, `spaceo_click`,
@@ -154,27 +155,36 @@ display 35  2560x1600 at (1920,0)  3/4 tiles used  spaces=118
 
 Each session gets a non-overlapping tile and can only see and screenshot its own. `spaceo pool
 set N` changes the density for displays created afterwards — existing ones keep their layout,
-because re-tiling under a running agent would move its windows out from under it. Any positive
-density is accepted. If you do not pin `--display-size`, the daemon grows the framebuffer for the
-requested density; if you do pin it, SpaceO honors the requested size even when the resulting
-tiles are very small.
+because re-tiling under a running agent would move its windows out from under it. Density and
+display size must fit the active resource budget and leave each tile at least 640×480 by default.
+If you do not pin `--display-size`, the daemon grows the framebuffer for the requested density
+until a budget limit is reached.
 
 ## Requirements and support status
 
-- Apple Silicon Mac for development; the package deployment target is macOS 14
+- The package deployment target is macOS 14 or later.
+- Public-release support and release packaging are currently Apple Silicon (`arm64`) only. Intel
+  remains unqualified and unsupported until equivalent implementation and independent evidence
+  exist.
 - **SIP stays on.** Nothing here needs it disabled.
 - Accessibility and Screen Recording granted to whatever runs `spaceo`
 
 Private focus records remain disabled. Other private surfaces are enabled when their required
 runtime class or symbol is present. Run `spaceo doctor` for per-capability availability and see
 [private API runtime support](docs/PRIVATE_API_SUPPORT.md) for the checks and known limitations.
+Runtime discovery is not a compatibility guarantee. See the [support policy](SUPPORT.md) and
+[release policy](docs/RELEASE_POLICY.md) for the supported-host and qualification rules.
 
 ## Install a release
 
-Public releases use a versioned, Developer-ID signed, notarized, and stapled disk image containing
-both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar and its detached SpaceO
-publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or executing
-the payload; then verify the stapled ticket and Gatekeeper assessment before installation.
+The supported public distribution model is a versioned Developer ID DMG—not the Mac App Store—
+containing both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar and its detached
+SpaceO publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or
+executing the payload; then verify the stapled ticket and Gatekeeper assessment.
+
+No signed, notarized, independently qualified public release is currently recorded in this
+repository. `VERSION` is the planned release number, not proof that an installable release exists.
+Do not treat a local build or ad-hoc-signed artifact as a public release.
 
 See [Installing a SpaceO release](docs/INSTALL.md) for exact installation, upgrade, rollback,
 uninstall, artifact-verification, and maintainer publication procedures.
@@ -194,8 +204,8 @@ make verify-release
 `doctor` reports virtual-display, input-routing, capture, permission, and display-graph state. It
 never calls the incompatible private key/typing-focus getters.
 
-If `doctor` reports **orphaned displays**, creation is still allowed. Treat the report as evidence
-that the current graphical login session may need a reset rather than as a software lockout.
+If `doctor` reports **orphaned displays**, new display creation is blocked until the display graph
+recovers. Stop retrying creation and reset the graphical login state as described by the diagnostic.
 
 ## Viewer app
 
@@ -306,18 +316,34 @@ $ spaceo ax
 make test
 ```
 
-The default suite includes unit, recovery, persistence, concurrency, host-compatibility, and live
-WindowServer coverage. The focused live target creates real virtual displays and drives installed
-applications:
+The default suite includes deterministic unit, recovery, persistence, concurrency, and
+host-compatibility coverage. It explicitly excludes `IntegrationTests`: ordinary local and CI
+tests never create virtual displays, launch GUI applications, or send input.
+
+The live qualification target creates real virtual displays and drives installed applications.
+Run it only on an Apple Silicon host reserved for qualification, inside a disposable active GUI
+login with Accessibility and Screen Recording already granted:
 
 ```bash
+SPACEO_LIVE_QUALIFICATION=1 \
+SPACEO_QUALIFIED_HOST=1 \
+SPACEO_DISPOSABLE_LOGIN=1 \
 make test-live
 ```
 
 The live suite asserts the isolation invariant end-to-end, proves DOM clicks actually reach a
 Chromium page, exercises simultaneous displays, and fails if a test leaks a virtual display.
-Tests report a skip only when an unavoidable technical prerequisite such as a required runtime
-API, TCC grant, or installed application is unavailable.
+The qualification command records the commit, platform prerequisites, discovered/executed counts,
+and result in `.build/spaceo-live-qualification.txt`. Any skipped test—including a missing runtime
+API, TCC grant, or installed application—fails qualification. A direct unqualified Swift test
+invocation skips this class without touching the live host; such skips are never release evidence.
+
+## Project policies
+
+SpaceO is open source under the permissive [MIT License](LICENSE). Changes and releases are
+tracked in the [changelog](CHANGELOG.md). See the [security policy](SECURITY.md) for private
+vulnerability reporting and boundary guidance, and the [support policy](SUPPORT.md) for supported
+versions and issue-reporting expectations.
 
 The release MCP transport has its own black-box test:
 
@@ -332,8 +358,8 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 
 | | |
 |---|---|
-| headless displays | enabled without a pool count cap or display-graph preflight refusal |
-| tiling | any positive density, non-overlapping tiles, per-tile capture, spill when full |
+| headless displays | bounded admission plus pre/post-attach display-graph safety checks |
+| tiling | budgeted density with minimum usable tiles, per-tile capture, spill when full |
 | Spaces | each display owns its own; windows placed there stay composited |
 | launch | isolated new application instances placed into the session tile |
 | late windows | watched and re-parked into the owning tile |
@@ -365,9 +391,9 @@ Known boundaries:
   while the physical displays were mirrored at high refresh left phantom virtual displays in
   the login session and left both physical displays online but inactive. A display sleep/wake
   removed the ownerless display IDs. The lifecycle remains serialized, one empty daemon display
-  is kept warm instead of churned, and detach failures plus mirror/orphan/user-display state are
-  reported. By owner decision, those observations no longer refuse or roll back display creation,
-  and pointer fencing is absent rather than a creation precondition.
+  is kept warm instead of churned, and resource admission limits display count, framebuffer
+  memory, and creation churn. Creation now refuses mirrored, inactive, overlapping, unreadable, or
+  ownerless display graphs and rolls back a new display if the post-attach graph is hazardous.
 - **Private API risk.** `dlsym` detects a missing name, not a changed calling convention or
   behavior. SpaceO avoids the corrupting private getters, verifies restoration through public
   AppKit state, and reports when a required class or symbol is absent.

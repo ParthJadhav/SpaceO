@@ -9,6 +9,75 @@ import SpaceOPrivate
 /// Pure-logic tests. No WindowServer state, no permissions, must pass anywhere.
 final class UnitTests: XCTestCase {
 
+    private func displayGraph(
+        online: [CGDirectDisplayID] = [1],
+        active: [CGDirectDisplayID] = [1],
+        mirrored: [CGDirectDisplayID] = [],
+        orphaned: [CGDirectDisplayID] = [],
+        bounds: [CGDirectDisplayID: CGRect] = [
+            1: CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        ]
+    ) -> Stage.DisplayGraphSnapshot {
+        Stage.DisplayGraphSnapshot(
+            userOnlineDisplayIDs: online,
+            userActiveDisplayIDs: active,
+            mirroredUserDisplayIDs: mirrored,
+            orphanedSpaceODisplayIDs: orphaned,
+            boundsByDisplayID: bounds)
+    }
+
+    func testHealthyDisplayGraphAdmitsCreation() {
+        let snapshot = displayGraph(
+            online: [1, 2],
+            active: [1, 2],
+            bounds: [
+                1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                2: CGRect(x: 1920, y: 0, width: 2560, height: 1440),
+            ])
+        XCTAssertEqual(Stage.displayCreationHazards(in: snapshot), [])
+    }
+
+    func testHazardousDisplayGraphsFailClosed() {
+        let noUserDisplay = displayGraph(online: [], active: [], bounds: [:])
+        XCTAssertEqual(Stage.displayCreationHazards(in: noUserDisplay).count, 2)
+
+        let inactive = displayGraph(online: [1, 2], active: [1], bounds: [
+            1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+            2: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+        ])
+        XCTAssertTrue(Stage.displayCreationHazards(in: inactive)
+            .contains { $0.contains("online but inactive: 2") })
+
+        let mirrored = displayGraph(mirrored: [1])
+        XCTAssertTrue(Stage.displayCreationHazards(in: mirrored)
+            .contains { $0.contains("mirroring") })
+
+        let orphaned = displayGraph(
+            orphaned: [291],
+            bounds: [
+                1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                291: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+            ])
+        XCTAssertTrue(Stage.displayCreationHazards(in: orphaned)
+            .contains { $0.contains("ownerless SpaceO") })
+    }
+
+    func testInvalidOrOverlappingDisplayBoundsAreHazardous() {
+        let missingBounds = displayGraph(bounds: [:])
+        XCTAssertTrue(Stage.displayCreationHazards(in: missingBounds)
+            .contains { $0.contains("missing or invalid") })
+
+        let overlap = displayGraph(
+            online: [1, 2],
+            active: [1, 2],
+            bounds: [
+                1: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                2: CGRect(x: 1800, y: 0, width: 1920, height: 1080),
+            ])
+        XCTAssertTrue(Stage.displayCreationHazards(in: overlap)
+            .contains { $0.contains("overlap") && $0.contains("1-2") })
+    }
+
     func testDisplayRetirementRequiresRemovalFromTheOnlineInventory() {
         XCTAssertFalse(Stage.displayIsRetired(291, onlineDisplayIDs: [1, 4, 291]),
                        "an inactive-but-online virtual display is still attached")
@@ -817,7 +886,7 @@ final class UnitTests: XCTestCase {
 
     func testPoolAcceptsDensityWithinLayoutRepresentation() {
         let pool = DisplayPool(sessionsPerDisplay: 1,
-                               displaySize: CGSize(width: 1280, height: 800))
+                               displaySize: CGSize(width: 1280, height: 960))
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(4))
         XCTAssertEqual(pool.sessionsPerDisplay, 4)
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(10_000))

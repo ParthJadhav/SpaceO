@@ -1,12 +1,13 @@
 # Installing a SpaceO release
 
-SpaceO releases are distributed as a versioned macOS disk image containing two Developer-ID
-signed executables:
+SpaceO's supported public distribution model is a versioned Developer ID macOS disk image
+containing two signed executables:
 
 - `spaceo`, the CLI, daemon, and MCP server
 - `SpaceO Viewer.app`, the optional graphical console
 
-The disk image and Viewer are notarized and stapled. Each release also includes a SHA-256
+This is a direct Developer ID distribution, not a Mac App Store release. The disk image and Viewer
+must be notarized and stapled. Each release also includes a SHA-256
 sidecar and a detached Developer ID signature over that sidecar. Official SpaceO releases are
 signed by Team ID `75LRT8TRQY`. Do not install an artifact whose publisher, checksum, staple,
 signature, or Gatekeeper assessment fails.
@@ -14,6 +15,11 @@ signature, or Gatekeeper assessment fails.
 SpaceO uses private macOS behavior and its deployment target is not a compatibility guarantee.
 Review “Requirements and support status” in the project README and run `spaceo doctor` on every
 intended host before creating a session.
+
+No signed, notarized, independently qualified public release is currently recorded in this
+repository. The commands below define how to verify a candidate or future release; they do not
+assert that version `1.0.0` or any downloadable artifact has passed the
+[public-release gates](RELEASE_POLICY.md).
 
 ## Verify and install
 
@@ -146,6 +152,10 @@ terminal, IDE, or MCP host that launches it, and a global reset would affect unr
 
 ## Maintainer release procedure
 
+The commands in this section implement packaging and trust verification. They do not replace the
+independent live qualification and explicit approval required by the
+[release policy](RELEASE_POLICY.md).
+
 `VERSION` is the canonical release number; `SpaceOVersion.current` embeds the same value into the
 CLI and MCP server. `scripts/release.sh check` refuses a mismatch. Use only numeric
 `MAJOR.MINOR.PATCH` releases so the value is also valid for both Viewer bundle version fields.
@@ -180,24 +190,43 @@ does not fall back to ad-hoc, Apple Development, or a different Developer ID tea
 partial, mixed, invalid, unreadable, or non-SpaceO credential inputs stop preflight before the
 build.
 
-Run `make release-package` with the same environment. The pipeline:
+First run the live qualification procedure from the README on a qualified Apple Silicon host in
+a disposable login. It writes `.build/spaceo-live-qualification.txt`; missing TCC grants,
+applications, runtime APIs, or any skipped test fail the qualification. Copy that record alongside
+the exact Git checkout being packaged, then run `make release-package` with the signing
+environment above and:
+
+```bash
+SPACEO_LIVE_QUALIFICATION_RECORD=/path/to/spaceo-live-qualification.txt \
+make release-package
+```
+
+The pipeline:
 
 1. checks repository and embedded versions;
-2. runs the test suite, optimized build, and MCP black-box smoke test;
-3. signs the CLI and Viewer with hardened runtime and a secure timestamp;
-4. verifies both with `codesign --verify --strict`;
-5. notarizes and staples the Viewer;
-6. builds, notarizes, and staples the versioned disk image;
-7. signs the checksum sidecar with the SpaceO publisher identity;
-8. authenticates that sidecar, then verifies the checksum, stapled ticket, exact publisher
+2. verifies that the live record passed every discovered integration test for the exact commit
+   and arm64 architecture;
+3. runs the safe test suite, optimized build, and MCP black-box smoke test;
+4. signs the CLI and Viewer with hardened runtime and a secure timestamp;
+5. verifies both with `codesign --verify --strict`;
+6. notarizes and staples the Viewer;
+7. builds, notarizes, and staples the versioned disk image;
+8. signs the checksum sidecar with the SpaceO publisher identity;
+9. authenticates that sidecar, then verifies the checksum, stapled ticket, exact publisher
    signatures, embedded versions, and Gatekeeper assessments from a freshly mounted image.
 
 Artifacts are written under `.release/VERSION/` as a DMG, checksum, and detached checksum
 signature. `make verify-distribution ARTIFACT=...` requires all three and repeats the final
 integrity and trust checks without publishing.
 
-The `Signed release` GitHub Actions workflow uses the same script. It requires these repository
-or protected-environment secrets:
+The `Signed release` GitHub Actions workflow first calls the separate `Live qualification`
+workflow on a self-hosted runner labelled `spaceo-live-qualified`. The `live-qualification`
+environment must supply `SPACEO_QUALIFIED_HOST=1` and `SPACEO_DISPOSABLE_LOGIN=1`; repository
+configuration must independently enforce any desired reviewers or protection. The packaging job
+cannot start until the live record for its exact tag commit is downloaded and verified.
+
+The packaging job then uses the same release script. It requires these repository or
+protected-environment secrets:
 
 - `DEVELOPER_ID_APPLICATION_P12_BASE64`
 - `DEVELOPER_ID_APPLICATION_P12_PASSWORD`
@@ -208,6 +237,10 @@ or protected-environment secrets:
 
 The workflow imports credentials into an ephemeral keychain, removes the temporary key and
 certificate files on exit, and reaches the GitHub release publication step only after the full
-package verification succeeds. Tag pushes publish. A manual dispatch fully qualifies its input
-under `refs/tags/`, rejects branches and commits not contained in the default branch, packages the
+package verification succeeds. Tag pushes publish. A manual dispatch validates its source under
+`refs/tags/`, rejects branches and commits not contained in the default branch, packages the
 explicit tag, and only retains the verified workflow artifacts.
+
+Because a tag push is the publication trigger, record the independent qualification and explicit
+release-owner approval before pushing the tag. A successful workflow proves its automated gates;
+it does not retroactively supply missing human qualification.
