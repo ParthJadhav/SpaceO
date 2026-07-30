@@ -81,6 +81,9 @@ public struct Capabilities: Sendable {
     }
 
     /// True when SpaceO can create and drive a session (capture excluded).
+    ///
+    /// Private focus priming is optional: `InputRouter.prepareForInput` deliberately falls back
+    /// to direct per-PID delivery when the focus-record ABI has not been independently qualified.
     public var canDrive: Bool {
         builtWithARC
             && required.allSatisfy { name in
@@ -95,8 +98,7 @@ public struct Capabilities: Sendable {
     }
 
     private var required: [String] {
-        ["virtual-display", "focus-without-raise", "space-query",
-         "per-pid-events", "ax-window-id", "accessibility"]
+        ["virtual-display", "space-query", "per-pid-events", "ax-window-id", "accessibility"]
     }
 
     /// Throws the most useful error for whatever is missing, or returns.

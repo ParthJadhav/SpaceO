@@ -113,13 +113,34 @@ NSString *SPOHostTupleDescription(SPOHostTuple *host) {
 }
 
 NSArray<SPOHostQualification *> *SPOQualifiedHostRegistry(void) {
-    // Intentionally empty. Add a capability-specific entry only after the exact tuple passes
-    // the disposable-login procedure in docs/PRIVATE_API_SUPPORT.md, and put that artifact's
-    // durable path or URL in `evidenceReference`.
+    // Entries are intentionally capability-specific. In particular, the focus-record layout is
+    // not enabled by the successful display/input regression: direct per-PID delivery does not
+    // require that global input-route mutation.
     static NSArray<SPOHostQualification *> *registry;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        registry = @[];
+        SPOHostTuple *macOS27DevelopmentHost = [[SPOHostTuple alloc]
+            initWithOperatingSystemMajor:27
+            minor:0
+            patch:0
+            darwinBuild:@"26A5368g"
+            architecture:@"arm64"
+            evidenceReference:
+                @"docs/qualification/macos-27.0-26A5368g-arm64.md"];
+        registry = @[
+            [[SPOHostQualification alloc]
+                initWithCapability:SPOCapabilityVirtualDisplay
+                host:macOS27DevelopmentHost],
+            [[SPOHostQualification alloc]
+                initWithCapability:SPOCapabilitySpaceQuery
+                host:macOS27DevelopmentHost],
+            [[SPOHostQualification alloc]
+                initWithCapability:SPOCapabilityPerPIDEvents
+                host:macOS27DevelopmentHost],
+            [[SPOHostQualification alloc]
+                initWithCapability:SPOCapabilityAXWindowID
+                host:macOS27DevelopmentHost],
+        ];
     });
     return registry;
 }

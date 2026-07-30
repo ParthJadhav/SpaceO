@@ -98,46 +98,62 @@ final class HostCompatibilityTests: XCTestCase {
         )
     }
 
-    func testBuiltInRegistryIsEmptyAndCurrentHostReportsUnsupportedReason() {
-        XCTAssertTrue(
-            SPOQualifiedHostRegistry().isEmpty,
-            "no host may be enabled before disposable-login evidence is recorded"
-        )
-        let reason = SPOCapabilityUnavailableReason(.virtualDisplay)
-        XCTAssertTrue(reason?.contains("no evidence-backed qualified tuples") == true)
-        XCTAssertTrue(reason?.contains("Symbol/class presence is insufficient") == true)
-        XCTAssertTrue(reason?.contains(SPOHostTupleDescription(SPOCurrentHostTuple())) == true)
-    }
+    func testBuiltInRegistryQualifiesOnlyRecordedSurfacesOnTheExactDevelopmentHost() {
+        let registry = SPOQualifiedHostRegistry()
+        XCTAssertEqual(registry.count, 4)
 
-    func testCapabilitiesAndStageCreationSurfaceTheUnsupportedHostReason() {
-        let capabilities = Capabilities()
-        XCTAssertFalse(capabilities.canDrive)
-        XCTAssertEqual(capabilities.privateAPIHost.registryEntryCount, 0)
-        XCTAssertTrue(capabilities.privateAPIHost.qualifiedCapabilities.isEmpty)
+        let current = SPOCurrentHostTuple()
+        let isRecordedHost =
+            current.operatingSystemMajor == 27
+            && current.operatingSystemMinor == 0
+            && current.operatingSystemPatch == 0
+            && current.darwinBuild == "26A5368g"
+            && current.architecture == "arm64"
 
-        let privateItems = capabilities.items.filter {
-            [
-                "virtual-display",
-                "focus-without-raise",
-                "space-query",
-                "per-pid-events",
-                "ax-window-id",
-            ].contains($0.name)
-        }
-        XCTAssertEqual(privateItems.count, 5)
-        XCTAssertTrue(privateItems.allSatisfy { !$0.available })
-        XCTAssertTrue(privateItems.allSatisfy {
-            $0.unavailableReason?.contains("no evidence-backed qualified tuples") == true
-        })
-        XCTAssertTrue(capabilities.report.contains("qualified surfaces: none"))
-
-        XCTAssertThrowsError(try Stage(name: "must-not-be-created")) { error in
-            XCTAssertTrue(
-                error.localizedDescription.contains(
-                    "no evidence-backed qualified tuples"
-                )
+        for capability: SPOCapability in [
+            .virtualDisplay, .spaceQuery, .perPIDEvents, .axWindowID,
+        ] {
+            XCTAssertEqual(
+                SPOHostIsQualifiedForCapability(capability, current, registry),
+                isRecordedHost
             )
         }
+        XCTAssertFalse(
+            SPOHostIsQualifiedForCapability(.focusWithoutRaise, current, registry),
+            "the unqualified focus-record layout must stay disabled"
+        )
+    }
+
+    func testCurrentHostCapabilitiesMatchTheExactQualificationRegistry() {
+        let capabilities = Capabilities()
+        let current = SPOCurrentHostTuple()
+        let isRecordedHost =
+            current.operatingSystemMajor == 27
+            && current.operatingSystemMinor == 0
+            && current.operatingSystemPatch == 0
+            && current.darwinBuild == "26A5368g"
+            && current.architecture == "arm64"
+
+        XCTAssertEqual(capabilities.privateAPIHost.registryEntryCount, 4)
+        XCTAssertEqual(
+            Set(capabilities.privateAPIHost.qualifiedCapabilities),
+            isRecordedHost
+                ? Set([
+                    "virtual-display", "space-query", "per-pid-events", "ax-window-id",
+                ])
+                : []
+        )
+
+        let focus = capabilities.items.first { $0.name == "focus-without-raise" }
+        XCTAssertEqual(focus?.available, false)
+        XCTAssertTrue(
+            focus?.unavailableReason?.contains("no evidence-backed qualified tuples") == true
+        )
+        XCTAssertEqual(
+            capabilities.canDrive,
+            isRecordedHost
+                && capabilities.items.first { $0.name == "accessibility" }?.available == true
+        )
     }
 
     private func host(

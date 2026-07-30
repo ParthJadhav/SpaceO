@@ -11,19 +11,22 @@ capability-specific registry entry on all three axes:
 - Darwin build (`kern.osversion`)
 - process architecture (`arm64` or `x86_64`)
 
-The registry in `SpaceOPrivate.m` is intentionally empty. In particular, the current macOS 27
-development host is **not supported or qualified**. No tuple should be added merely because the
-project builds, its symbols resolve, or a test happened to pass in the developer's primary login.
+The registry in `SpaceOPrivate.m` contains a narrow qualification for the exact macOS 27.0
+development tuple recorded in
+`docs/qualification/macos-27.0-26A5368g-arm64.md`. It enables virtual display lifecycle, Space and
+window queries, AX window lookup, and direct per-PID event delivery. The private focus-record
+layout remains unqualified and disabled; driving uses the direct per-PID fallback without that
+global route mutation.
 
 ## Surfaces requiring independent evidence
 
 | Capability | Private behavior or layout | Current qualified tuples |
 |---|---|---|
-| `virtual-display` | `CGVirtualDisplay` descriptor, mode, settings, lifetime, and teardown behavior | none |
+| `virtual-display` | `CGVirtualDisplay` descriptor, mode, settings, lifetime, and teardown behavior | macOS 27.0 / 26A5368g / arm64 |
 | `focus-without-raise` | Three `SLPSPostEventRecordTo` records, including the assumed `0xf8` byte layouts and restoration behavior | none |
-| `space-query` | SkyLight connection, managed-display spaces, window spaces, active Space, and WindowServer bounds calls | none |
-| `per-pid-events` | Resolved `CGEventPostToPid` calling convention and delivery behavior | none |
-| `ax-window-id` | Private `_AXUIElementGetWindow` calling convention and window-ID result | none |
+| `space-query` | SkyLight connection, managed-display spaces, window spaces, active Space, and WindowServer bounds calls | macOS 27.0 / 26A5368g / arm64 |
+| `per-pid-events` | Resolved `CGEventPostToPid` calling convention and delivery behavior | macOS 27.0 / 26A5368g / arm64 |
+| `ax-window-id` | Private `_AXUIElementGetWindow` calling convention and window-ID result | macOS 27.0 / 26A5368g / arm64 |
 
 Qualification is per row. Evidence for `space-query` on a host does not enable virtual displays,
 focus records, per-PID events, or private AX lookup on that same host.

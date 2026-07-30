@@ -5,9 +5,10 @@ user's cursor, keyboard focus, and display.
 
 > [!NOTE]
 > Private display, Space, event-delivery, window-lookup, and focus behavior is enabled only for
-> an exact macOS version, Darwin build, architecture, and capability with recorded disposable-host
-> evidence. The qualification registry is currently empty, so no host is supported for those
-> mutations and `spaceo doctor` reports them as unavailable even when every private symbol exists.
+> an exact macOS version, Darwin build, architecture, and capability with recorded host
+> evidence. The registry currently qualifies the exact macOS 27.0 / 26A5368g / arm64 development
+> tuple for display lifecycle, queries, window lookup, and direct per-PID events. Private focus
+> records remain disabled; input uses direct delivery without that global route mutation.
 > The package can still build on macOS 14+, but that deployment target is not a support claim.
 > See the [private API support matrix](docs/PRIVATE_API_SUPPORT.md),
 > [incident report](docs/incidents/2026-07-26-display-input-lockout.md) and
@@ -172,10 +173,11 @@ tiles are very small.
 - **SIP stays on.** Nothing here needs it disabled.
 - Accessibility and Screen Recording granted to whatever runs `spaceo`
 
-There is currently no supported release-host tuple. The macOS 27 development machine is
-deliberately not allowlisted merely because its symbols resolve. Every private capability fails
-closed until its exact host tuple has passed the disposable-login workflow and durable evidence
-has been reviewed. Run `spaceo doctor` for the detected tuple and per-capability reason; see the
+The exact macOS 27.0 / 26A5368g / arm64 development tuple is qualified for the four private
+surfaces needed by the direct-delivery workflow. Private focus records remain disabled. Every
+other host and capability fails closed until its exact tuple has passed the qualification
+workflow and durable evidence has been reviewed. Run `spaceo doctor` for the detected tuple and
+per-capability reason; see the
 [private API support matrix](docs/PRIVATE_API_SUPPORT.md) for the required checks and known
 limitations.
 
