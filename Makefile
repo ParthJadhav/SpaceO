@@ -13,15 +13,9 @@ release:
 	$(SWIFT) build -c release
 
 test:
-	$(SWIFT) test --filter UnitTests
+	$(SWIFT) test
 
 test-live:
-	@test "$$SPACEO_RUN_INTEGRATION_TESTS" = "1" || { \
-		echo "refusing: live tests mutate WindowServer; use a disposable graphical login and run:" >&2; \
-		echo "  SPACEO_RUN_INTEGRATION_TESTS=1 make test-live" >&2; \
-		exit 2; \
-	}
-	@echo "warning: running live display/input tests in the current graphical login"
 	$(SWIFT) test --filter IntegrationTests
 
 verify-release: release test

@@ -42,9 +42,8 @@ public final class DisplayPool {
         var free: Int? { (0..<capacity).first { !taken.contains($0) } }
     }
 
-    /// How a `Stage` is built. Injectable so admission control can be tested without asking the
-    /// WindowServer for a real framebuffer — the tests that matter here are about *refusing*
-    /// allocations, and they should not need a graphical login to run.
+    /// How a `Stage` is built. Injectable so allocation behavior can be tested without asking the
+    /// WindowServer for a real framebuffer.
     public typealias StageFactory = (_ name: String, _ width: UInt32, _ height: UInt32,
                                      _ hiDPI: Bool) throws -> Stage
 
@@ -109,8 +108,7 @@ public final class DisplayPool {
                 "sessions per display must be at most \(TileLayout.maximumCapacity); "
                 + "\(value) would give each session a tile no window can use")
         }
-        // Validate against the *new* density, so a change that would make future tiles unusable
-        // is refused now rather than at the next allocation.
+        // Validate technical layout bounds before applying the new density.
         _ = try budget.validateDisplaySize(displaySize, capacity: value)
         lock.withLock { sessionsPerDisplay = value }
     }
@@ -119,10 +117,7 @@ public final class DisplayPool {
 
     /// Reserve a tile, reusing a display that has room before making a new one.
     ///
-    /// Admission runs under the same lock as the allocation it guards. Checking a budget and then
-    /// creating a display in a separate step is a race by construction: two concurrent
-    /// `session.create` calls both see room, and the machine ends up with one more display than
-    /// the limit allows — which is precisely the case where one extra matters.
+    /// Allocation runs under one lock so concurrent callers receive distinct slots/displays.
     public func allocate() throws -> Slot {
         lock.lock()
         defer { lock.unlock() }
@@ -155,8 +150,7 @@ public final class DisplayPool {
 
     // MARK: - Budget accounting
 
-    /// What the pool is currently holding. Read by `pool` and `doctor` so the limits are visible
-    /// before someone hits them, not only in the error that refuses them.
+    /// What the pool is currently holding. Read by `pool` and `doctor`.
     public func usage() -> ResourceBudget.Usage {
         lock.withLock {
             pruneCreationWindowLocked()

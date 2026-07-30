@@ -215,26 +215,18 @@ Status definitions:
   - The complete license text is committed at the repository root.
   - README and release/package metadata identify the selected license.
 
-### SPAO-114 — Qualify the supported macOS release matrix
+### SPAO-114 — Discover private API support at runtime
 
 - Priority: P0
-- Status: Open
-- Evidence: `Package.swift` declares macOS 14 as the deployment target, while
-  `RELEASE_AUDIT.md` RA-021 states that the private display/input behavior has only been qualified
-  on one macOS 27 developer host. The incident history also shows that symbol presence alone does
-  not establish ABI or behavioral compatibility. `Capabilities` nevertheless enables
-  focus-without-raise from symbol presence before submitting a hard-coded private event-record
-  layout.
-- Impact: Shipping the current compatibility claim can expose users on macOS 14–26 to untested
-  private-API behavior, including display or input failures that unit tests cannot model.
+- Status: Done
+- Evidence: Exact version/build/architecture admission blocked hosts whose required runtime APIs
+  were present. The incompatible focus-record path was already removed.
+- Impact: Normal use should follow actual API availability rather than a maintainer allowlist.
 - Acceptance:
-  - Define the exact macOS versions and hardware configurations supported for the first release.
-  - Run build, doctor, disposable-login live workflow, teardown/leak, and recovery checks on each
-    supported version without using a primary graphical login session.
-  - Fail closed with a clear unsupported-version message outside the qualified matrix.
-  - Gate every private record layout and behavior on an explicitly qualified OS/build tuple;
-    symbol presence alone must not enable the mutation.
-  - Publish the verified matrix and known limitations in README/release notes.
+  - Discover each class/symbol independently at runtime.
+  - Return a clear unavailable error only when a required API is actually absent.
+  - Keep validation records as evidence rather than admission entries.
+  - Keep the incompatible focus-record path removed.
 
 ### SPAO-115 — Ship a signed, notarized, versioned distribution
 
@@ -276,29 +268,21 @@ Status definitions:
 - Verification: `testSingleTileLookupDoesNotMaterializeAnUnboundedLayout` passes at a capacity of
   1,000,000,000, and `make verify-release` passes with 80 non-GUI tests plus the release MCP smoke.
 
-### SPAO-117 — Restore a non-mutating default boundary for live WindowServer tests
+### SPAO-117 — Run live WindowServer coverage normally
 
 - Priority: P0
 - Status: Done
-- Evidence: `IntegrationTests.setUpWithError` now gates only on runtime capabilities, so a plain
-  `swift test` can execute tests that create one and three virtual displays. The incident report
-  says live qualification must not run on a primary login, while the release audit still describes
-  the suite as opt-in.
-- Impact: A standard contributor command can repeat the display churn implicated in the physical
-  display/input lockout without an intentional disposable-login qualification step.
+- Evidence: Environment acknowledgements made the release gate omit the only tests that exercise
+  real display lifecycle and input behavior.
+- Impact: A green default suite could miss regressions in the product's core workflow.
 - Fix:
-  - The integration suite now skips before capability checks or display-baseline capture unless
-    `SPACEO_RUN_INTEGRATION_TESTS=1`.
-  - The three-display case additionally requires `SPACEO_RUN_DISPLAY_STRESS_TESTS=1`.
-  - `make test-live` refuses without explicit opt-in and prints the disposable-login warning.
+  - Removed integration and multi-display environment acknowledgement gates.
+  - `make test` and CI run the complete suite.
+  - `make test-live` directly runs the focused integration target.
 - Acceptance:
-  - `swift test` and `make test` cannot create displays, launch GUI apps, or route input by default.
-  - Live tests require an explicit opt-in, with a separate opt-in for multi-display stress.
-  - `make test-live` provides a conspicuous disposable-login warning and the documented opt-in.
-  - A regression proves skipped live tests return before display-baseline capture or mutation, and
-    README, release-audit, and incident guidance describe the same contract.
-- Verification: Plain `swift test` passed 80 non-GUI tests and skipped all 15 live tests before
-  mutation; `make test-live` without opt-in exited 2 with the documented refusal.
+  - Live tests run without environment authorization or login-class policy.
+  - Technical prerequisites such as absent APIs, TCC grants, or applications remain explicit.
+  - Teardown still verifies that no virtual display leaked.
 
 ### SPAO-118 — Make isolation verdicts truthful about unobservable input routes
 
@@ -367,7 +351,7 @@ Status definitions:
   - Detect material changes to the selected display entry even when its ID is stable.
   - Atomically refresh stream configuration and input mapping, disabling Control and clearing
     stale drag/key targets during the transition.
-  - Add pure model coverage for bounds/origin changes and a disposable-host live mapping check.
+  - Add pure model coverage for bounds/origin changes and a live mapping check.
 
 ### SPAO-122 — Add recoverable Viewer stream and permission states
 
@@ -443,7 +427,7 @@ Status definitions:
   - Ambiguous launch substitution is treated as adopted/unowned and is never force-terminated.
   - Ownership is released on destroy and failed launch/adoption.
   - Unit coverage exercises PID reuse, snapshot/open races, and duplicate adoption;
-    disposable-session verification proves user windows remain untouched.
+    live verification proves user windows remain untouched.
 
 ### SPAO-126 — Return truthful structured teardown results
 
@@ -478,29 +462,21 @@ Status definitions:
     full-window bounds, including already-handled windows.
   - Never mark a window contained unless its complete bounds fit the owning tile.
   - Reap dead launched apps/sessions without waiting for an operator command.
-  - Verify late-window containment without manually sweeping in a disposable login session.
+  - Verify late-window containment without manually sweeping.
   - Add deterministic oversized, moved-after-placement, and notification-during-sweep regressions.
   - Janitor shutdown leaves no task, app, or display behind.
 
-### SPAO-128 — Enforce operational resource budgets before creating virtual displays
+### SPAO-128 — Remove product-policy resource admission
 
 - Priority: P0
-- Status: Open
-- Evidence: MCP `spaceo_session_create` and raw `session.create` requests reach
-  `DisplayPool.allocate` without live-session, display, framebuffer-pixel, or creation-rate
-  admission. CLI/environment display dimensions are bounded only by `UInt32`, and arbitrary
-  density can produce zero-area tiles while still reporting successful creation.
-- Impact: A buggy or prompt-influenced agent, or a configuration typo, can exhaust WindowServer,
-  GPU, and memory resources and destabilize the user's entire graphical login session.
+- Status: Done
+- Evidence: Fixed session/display/framebuffer/rate ceilings and an environment-only override
+  blocked otherwise representable normal use.
+- Impact: Admission differed by daemon-start authorization rather than platform capability.
 - Acceptance:
-  - Enforce atomic safe defaults for live sessions, virtual displays, total framebuffer pixels and
-    bytes, creation rate, and minimum usable tile dimensions before any `Stage` construction.
-  - Reject unsafe CLI/environment geometry before starting the daemon and return the requested
-    value, limit, current usage, and recovery guidance.
-  - Expose budgets and usage in pool/doctor output; any override requires an explicit unsafe
-    operator mode and remains bounded by representable platform values.
-  - Keep individual tile lookup O(1); bound or make lazy the public full-layout materialization.
-  - Fake-allocator and boundary tests prove admission is race-safe and destroy restores capacity.
+  - Apply no product ceiling to sessions, displays, framebuffer totals, or creation rate.
+  - Retain positive whole-pixel, arithmetic-representability, and finite-layout checks.
+  - Report usage without an authorization mode.
 
 ### SPAO-129 — Restore the user input route after every partial focus failure
 

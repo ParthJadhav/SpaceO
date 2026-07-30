@@ -265,8 +265,7 @@ public final class Stage: @unchecked Sendable {
         onlineDisplayIDs().filter { !isSpaceODisplay($0) }
     }
 
-    /// Mirroring is a known unsafe configuration for CGVirtualDisplay on the verification host:
-    /// repeated attachment made every physical display inactive while virtual displays remained.
+    /// User-display mirroring state, reported for diagnostics without gating display creation.
     public static func mirroredNonSpaceODisplayIDs() -> [CGDirectDisplayID] {
         nonSpaceOOnlineDisplayIDs().filter { CGDisplayIsInMirrorSet($0) != 0 }
     }

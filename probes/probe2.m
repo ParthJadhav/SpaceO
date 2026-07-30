@@ -23,7 +23,7 @@ int main(void) { @autoreleasepool {
     printf("  %-32s %s\n", names[i], dlsym(sl, names[i]) ? "resolved" : "MISSING");
 
   printf("\n-- focus state --\n");
-  printf("  intentionally not queried: private getter ABI is not safety-qualified\n");
+  printf("  intentionally not queried: incompatible private getter path was removed\n");
 
   printf("\n-- displays --\n");
   uint32_t n = 0; CGDirectDisplayID ids[16];

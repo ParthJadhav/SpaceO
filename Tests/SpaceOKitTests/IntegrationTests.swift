@@ -14,14 +14,6 @@ final class IntegrationTests: XCTestCase {
     private var hasDisplayBaseline = false
 
     override func setUpWithError() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["SPACEO_RUN_INTEGRATION_TESTS"] == "1",
-            """
-            Live SpaceO tests mutate the login session's display and input state.
-            Run only in a disposable graphical login with:
-              SPACEO_RUN_INTEGRATION_TESTS=1 make test-live
-            """
-        )
         let capabilities = Capabilities()
         try XCTSkipUnless(capabilities.canDrive, """
             SpaceO cannot drive sessions on this host:
@@ -72,13 +64,6 @@ final class IntegrationTests: XCTestCase {
     }
 
     func testMultipleStagesCoexist() throws {
-        try XCTSkipUnless(
-            ProcessInfo.processInfo.environment["SPACEO_RUN_DISPLAY_STRESS_TESTS"] == "1",
-            """
-            Multi-display stress is separately gated because repeated display churn caused the
-            2026-07-26 lockout. Set SPACEO_RUN_DISPLAY_STRESS_TESTS=1 only on a disposable host.
-            """
-        )
         let before = Set(Stage.activeDisplayIDs())
         var stages: [Stage] = []
         defer { stages.forEach { $0.invalidate() } }

@@ -5,7 +5,6 @@
 #import <dlfcn.h>
 #import <math.h>
 #import <objc/runtime.h>
-#import <sys/sysctl.h>
 
 // GetProcessForPID/GetProcessPID are soft-deprecated but remain the only way to obtain the
 // ProcessSerialNumber that SLPSPostEventRecordTo requires. There is no replacement.
@@ -25,163 +24,6 @@ static AXError    (*p_AXUIElementGetWindow)(AXUIElementRef, uint32_t *);
 static void       (*p_CGEventPostToPid)(pid_t, CGEventRef);
 
 static NSMutableArray<NSString *> *g_missing = nil;
-
-#pragma mark - Evidence-backed host qualification
-
-@implementation SPOHostTuple
-
-- (instancetype)initWithOperatingSystemMajor:(NSInteger)major
-                                       minor:(NSInteger)minor
-                                       patch:(NSInteger)patch
-                                 darwinBuild:(NSString *)darwinBuild
-                                architecture:(NSString *)architecture
-                           evidenceReference:(nullable NSString *)evidenceReference {
-    self = [super init];
-    if (!self) return nil;
-    _operatingSystemMajor = major;
-    _operatingSystemMinor = minor;
-    _operatingSystemPatch = patch;
-    _darwinBuild = [darwinBuild copy];
-    _architecture = [architecture copy];
-    _evidenceReference = [evidenceReference copy];
-    return self;
-}
-
-@end
-
-@implementation SPOHostQualification
-
-- (instancetype)initWithCapability:(SPOCapability)capability
-                              host:(SPOHostTuple *)host {
-    self = [super init];
-    if (!self) return nil;
-    _capability = capability;
-    _host = host;
-    return self;
-}
-
-@end
-
-static NSString *SPODarwinBuild(void) {
-    size_t size = 0;
-    if (sysctlbyname("kern.osversion", NULL, &size, NULL, 0) != 0 || size < 2)
-        return @"unknown";
-    char *buffer = calloc(size, sizeof(char));
-    if (!buffer) return @"unknown";
-    NSString *result = @"unknown";
-    if (sysctlbyname("kern.osversion", buffer, &size, NULL, 0) == 0) {
-        NSString *value = [NSString stringWithUTF8String:buffer];
-        if (value.length > 0) result = value;
-    }
-    free(buffer);
-    return result;
-}
-
-static NSString *SPOProcessArchitecture(void) {
-#if defined(__arm64__) || defined(__aarch64__)
-    return @"arm64";
-#elif defined(__x86_64__)
-    return @"x86_64";
-#else
-    return @"unknown";
-#endif
-}
-
-SPOHostTuple *SPOCurrentHostTuple(void) {
-    static SPOHostTuple *host;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        NSOperatingSystemVersion version = NSProcessInfo.processInfo.operatingSystemVersion;
-        host = [[SPOHostTuple alloc]
-            initWithOperatingSystemMajor:version.majorVersion
-            minor:version.minorVersion
-            patch:version.patchVersion
-            darwinBuild:SPODarwinBuild()
-            architecture:SPOProcessArchitecture()
-            evidenceReference:nil];
-    });
-    return host;
-}
-
-NSString *SPOHostTupleDescription(SPOHostTuple *host) {
-    return [NSString stringWithFormat:@"macOS %ld.%ld.%ld / Darwin build %@ / %@",
-            (long)host.operatingSystemMajor,
-            (long)host.operatingSystemMinor,
-            (long)host.operatingSystemPatch,
-            host.darwinBuild,
-            host.architecture];
-}
-
-NSArray<SPOHostQualification *> *SPOQualifiedHostRegistry(void) {
-    // Entries are intentionally capability-specific. In particular, the focus-record layout is
-    // not enabled by the successful display/input regression: direct per-PID delivery does not
-    // require that global input-route mutation.
-    static NSArray<SPOHostQualification *> *registry;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        SPOHostTuple *macOS27DevelopmentHost = [[SPOHostTuple alloc]
-            initWithOperatingSystemMajor:27
-            minor:0
-            patch:0
-            darwinBuild:@"26A5368g"
-            architecture:@"arm64"
-            evidenceReference:
-                @"docs/qualification/macos-27.0-26A5368g-arm64.md"];
-        registry = @[
-            [[SPOHostQualification alloc]
-                initWithCapability:SPOCapabilityVirtualDisplay
-                host:macOS27DevelopmentHost],
-            [[SPOHostQualification alloc]
-                initWithCapability:SPOCapabilitySpaceQuery
-                host:macOS27DevelopmentHost],
-            [[SPOHostQualification alloc]
-                initWithCapability:SPOCapabilityPerPIDEvents
-                host:macOS27DevelopmentHost],
-            [[SPOHostQualification alloc]
-                initWithCapability:SPOCapabilityAXWindowID
-                host:macOS27DevelopmentHost],
-        ];
-    });
-    return registry;
-}
-
-static BOOL SPOHasEvidenceReference(SPOHostTuple *host) {
-    NSString *reference = [host.evidenceReference
-        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    return reference.length > 0;
-}
-
-static BOOL SPOHostTuplesMatch(SPOHostTuple *observed, SPOHostTuple *qualified) {
-    return observed.operatingSystemMajor == qualified.operatingSystemMajor
-        && observed.operatingSystemMinor == qualified.operatingSystemMinor
-        && observed.operatingSystemPatch == qualified.operatingSystemPatch
-        && [observed.darwinBuild isEqualToString:qualified.darwinBuild]
-        && [observed.architecture isEqualToString:qualified.architecture];
-}
-
-BOOL SPOHostIsQualifiedForCapability(
-    SPOCapability cap,
-    SPOHostTuple *host,
-    NSArray<SPOHostQualification *> *registry
-) {
-    if (cap < 0 || cap >= SPOCapabilityCount || !host) return NO;
-    for (SPOHostQualification *entry in registry) {
-        if (![entry isKindOfClass:SPOHostQualification.class]) continue;
-        if (entry.capability != cap || !SPOHasEvidenceReference(entry.host)) continue;
-        if (SPOHostTuplesMatch(host, entry.host)) return YES;
-    }
-    return NO;
-}
-
-BOOL SPOCapabilityAllowedForHost(
-    SPOCapability cap,
-    SPOHostTuple *host,
-    NSArray<SPOHostQualification *> *registry,
-    BOOL requiredBehaviorPresent
-) {
-    return requiredBehaviorPresent
-        && SPOHostIsQualifiedForCapability(cap, host, registry);
-}
 
 static void *resolve(void *handle, const char *name) {
     void *sym = dlsym(handle, name);
@@ -231,7 +73,9 @@ static BOOL SPORequiredBehaviorPresent(SPOCapability cap) {
                 && objc_getClass("CGVirtualDisplayMode") != Nil
                 && objc_getClass("CGVirtualDisplaySettings") != Nil;
         case SPOCapabilityFocusWithoutRaise:
-            return p_SLPSPostEventRecordTo != NULL;
+            // The record layout is not a runtime-discoverable contract. This incompatible path
+            // remains removed; direct per-PID delivery does not require it.
+            return NO;
         case SPOCapabilitySpaceQuery:
             return p_SLSMainConnectionID != NULL
                 && p_SLSCopyManagedDisplaySpaces != NULL
@@ -249,12 +93,7 @@ static BOOL SPORequiredBehaviorPresent(SPOCapability cap) {
 
 BOOL SPOCapabilityAvailable(SPOCapability cap) {
     SPOLoad();
-    return SPOCapabilityAllowedForHost(
-        cap,
-        SPOCurrentHostTuple(),
-        SPOQualifiedHostRegistry(),
-        SPORequiredBehaviorPresent(cap)
-    );
+    return SPORequiredBehaviorPresent(cap);
 }
 
 NSString *SPOCapabilityName(SPOCapability cap) {
@@ -270,33 +109,14 @@ NSString *SPOCapabilityName(SPOCapability cap) {
 
 NSString *_Nullable SPOCapabilityUnavailableReason(SPOCapability cap) {
     SPOLoad();
-    SPOHostTuple *current = SPOCurrentHostTuple();
-    NSArray<SPOHostQualification *> *registry = SPOQualifiedHostRegistry();
-    if (!SPOHostIsQualifiedForCapability(cap, current, registry)) {
-        NSMutableArray<NSString *> *qualified = [NSMutableArray array];
-        for (SPOHostQualification *entry in registry) {
-            if (entry.capability != cap || !SPOHasEvidenceReference(entry.host)) continue;
-            [qualified addObject:SPOHostTupleDescription(entry.host)];
-        }
-        NSString *currentDescription = SPOHostTupleDescription(current);
-        if (qualified.count == 0) {
-            return [NSString stringWithFormat:
-                @"unsupported host for %@: no evidence-backed qualified tuples are registered; "
-                 "current host is %@. Symbol/class presence is insufficient. Validate this exact "
-                 "tuple in a disposable login and record the evidence before enabling it.",
-                SPOCapabilityName(cap), currentDescription];
-        }
-        return [NSString stringWithFormat:
-            @"unsupported host for %@: current host %@ is not an exact match for an "
-             "evidence-backed tuple (%@). Symbol/class presence is insufficient.",
-            SPOCapabilityName(cap),
-            currentDescription,
-            [qualified componentsJoinedByString:@"; "]];
+    if (cap == SPOCapabilityFocusWithoutRaise) {
+        return @"the incompatible private focus-record path is not used; "
+               @"input falls back to direct per-PID delivery";
     }
     if (!SPORequiredBehaviorPresent(cap)) {
         return [NSString stringWithFormat:
-            @"qualified host %@ is missing a required symbol or Objective-C class for %@",
-            SPOHostTupleDescription(current), SPOCapabilityName(cap)];
+            @"the current macOS runtime is missing a required symbol or Objective-C class for %@",
+            SPOCapabilityName(cap)];
     }
     return nil;
 }

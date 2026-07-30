@@ -144,22 +144,17 @@ final class UnitTests: XCTestCase {
         XCTAssertTrue(SpaceOError.unavailable(capability: "x").description.contains("spaceo doctor"))
     }
 
-    func testFocusCapabilityRequiresBothHostQualificationAndRuntimeSymbol() {
-        let missing = Set(SPOMissingSymbols())
-        let current = SPOCurrentHostTuple()
-        let expected = SPOCapabilityAllowedForHost(
-            .focusWithoutRaise,
-            current,
-            SPOQualifiedHostRegistry(),
-            !missing.contains("SLPSPostEventRecordTo")
-        )
+    func testIncompatibleFocusRecordCapabilityRemainsUnavailable() {
         let available = Capabilities().items.first {
             $0.name == "focus-without-raise"
         }?.available
-        XCTAssertEqual(available, expected)
+        XCTAssertEqual(available, false)
+        XCTAssertTrue(
+            Capabilities().items.first { $0.name == "focus-without-raise" }?
+                .unavailableReason?.contains("direct per-PID delivery") == true)
     }
 
-    func testVirtualDisplayCapabilityRequiresHostQualificationAndClassInventory() {
+    func testVirtualDisplayCapabilityMatchesClassInventory() {
         let classes = [
             "CGVirtualDisplay",
             "CGVirtualDisplayDescriptor",
@@ -167,16 +162,10 @@ final class UnitTests: XCTestCase {
             "CGVirtualDisplaySettings",
         ]
         let classesPresent = classes.allSatisfy { NSClassFromString($0) != nil }
-        let expected = SPOCapabilityAllowedForHost(
-            .virtualDisplay,
-            SPOCurrentHostTuple(),
-            SPOQualifiedHostRegistry(),
-            classesPresent
-        )
         let available = Capabilities().items.first {
             $0.name == "virtual-display"
         }?.available
-        XCTAssertEqual(available, expected)
+        XCTAssertEqual(available, classesPresent)
     }
 
     // MARK: - Pasteboard guard
@@ -795,9 +784,8 @@ final class UnitTests: XCTestCase {
         XCTAssertEqual(tiles[0].origin.y, 900)
     }
 
-    /// Capacity is bounded now (SPAO-128). The former "any positive integer" policy let a caller
-    /// choose how much the layout allocates, and produced tiles no window could use.
-    func testTilingIsBoundedByAUsableCapacity() {
+    /// Full-layout materialization remains technically bounded.
+    func testTilingMaterializationIsBounded() {
         let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let tiles = TileLayout.rects(in: bounds, capacity: 4_097)
         XCTAssertEqual(tiles.count, TileLayout.maximumCapacity)
@@ -817,7 +805,7 @@ final class UnitTests: XCTestCase {
                                      capacity: TileLayout.maximumCapacity,
                                      index: TileLayout.maximumCapacity))
 
-        // Past the bound: refused rather than silently producing zero-area tiles.
+        // Past the materialization bound: no array is allocated.
         XCTAssertNil(TileLayout.rect(in: bounds, capacity: 1_000_000_000, index: 0))
     }
 
@@ -827,9 +815,7 @@ final class UnitTests: XCTestCase {
         XCTAssertTrue(TileLayout.rects(in: bounds, capacity: -1).isEmpty)
     }
 
-    /// Density is admitted against the tile it would actually produce (SPAO-128), so a request
-    /// that "succeeds" into an unusable workspace is refused instead.
-    func testPoolRefusesDensityThatWouldProduceUnusableTiles() {
+    func testPoolAcceptsDensityWithinLayoutRepresentation() {
         let pool = DisplayPool(sessionsPerDisplay: 1,
                                displaySize: CGSize(width: 1280, height: 800))
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(4))
@@ -839,7 +825,7 @@ final class UnitTests: XCTestCase {
         XCTAssertEqual(pool.sessionsPerDisplay, 4, "a refused density must not be applied")
     }
 
-    func testPoolAcceptsSaneDisplaysButRejectsInvalidOrOversizedGeometry() {
+    func testPoolAcceptsLargeDisplaysButRejectsInvalidGeometry() {
         // Large is still fine — a virtual display is not a panel anyone has to buy.
         let large = DisplayPool(displaySize: CGSize(width: 5_120, height: 2_880))
         XCTAssertNoThrow(try large.setSessionsPerDisplay(1))
@@ -850,12 +836,10 @@ final class UnitTests: XCTestCase {
             CGSize(width: 1_280.5, height: 800),
             CGSize(width: CGFloat.infinity, height: 800),
             CGSize(width: CGFloat(UInt32.max) + 1, height: 800),
-            // Representable by UInt32 but far past what a login session can composite.
-            CGSize(width: 16_384, height: 16_384),
         ] {
             let pool = DisplayPool(displaySize: invalidSize)
             XCTAssertThrowsError(try pool.setSessionsPerDisplay(1),
-                                 "unsafe display geometry \(invalidSize) must be rejected")
+                                 "invalid display geometry \(invalidSize) must be rejected")
         }
     }
 

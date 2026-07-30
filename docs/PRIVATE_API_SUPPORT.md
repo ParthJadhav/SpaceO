@@ -1,80 +1,43 @@
-# Private API host support
+# Private API runtime support
 
-SpaceO treats private API compatibility as an evidence decision, not an availability check.
-Resolving a symbol or finding an Objective-C class proves only that a name exists. It does not
-prove a record layout, selector surface, calling convention, return ownership rule, or behavior.
+SpaceO enables each private surface from the classes and symbols available in the running
+process. It does not use an operating-system version, Darwin-build, architecture allowlist, or a
+host qualification registry.
 
-Every private surface is therefore disabled unless the running process exactly matches a
-capability-specific registry entry on all three axes:
+| Capability | Runtime requirement |
+|---|---|
+| `virtual-display` | `CGVirtualDisplay`, its descriptor/mode/settings classes, and the selectors SpaceO uses |
+| `space-query` | SkyLight connection, managed-display Space, window-Space, active-Space, and bounds symbols |
+| `per-pid-events` | `CGEventPostToPid` |
+| `ax-window-id` | `_AXUIElementGetWindow` |
+| `focus-without-raise` | intentionally unavailable; incompatible private focus-record getters remain removed |
 
-- macOS major, minor, and patch version
-- Darwin build (`kern.osversion`)
-- process architecture (`arm64` or `x86_64`)
+Availability is independent per row. A missing requirement disables only that capability and
+produces a readable runtime error. TCC grants and application behavior can still affect an
+operation after API discovery.
 
-The registry in `SpaceOPrivate.m` contains a narrow qualification for the exact macOS 27.0
-development tuple recorded in
-`docs/qualification/macos-27.0-26A5368g-arm64.md`. It enables virtual display lifecycle, Space and
-window queries, AX window lookup, and direct per-PID event delivery. The private focus-record
-layout remains unqualified and disabled; driving uses the direct per-PID fallback without that
-global route mutation.
+`spaceo doctor` reports the runtime inventory, TCC state, display graph, and a reason for every
+unavailable capability. Runtime errors from CoreGraphics, SkyLight, Accessibility, or
+ScreenCaptureKit are returned normally; SpaceO does not claim that an absent API works.
 
-## Surfaces requiring independent evidence
+## Validation
 
-| Capability | Private behavior or layout | Current qualified tuples |
-|---|---|---|
-| `virtual-display` | `CGVirtualDisplay` descriptor, mode, settings, lifetime, and teardown behavior | macOS 27.0 / 26A5368g / arm64 |
-| `focus-without-raise` | Three `SLPSPostEventRecordTo` records, including the assumed `0xf8` byte layouts and restoration behavior | none |
-| `space-query` | SkyLight connection, managed-display spaces, window spaces, active Space, and WindowServer bounds calls | macOS 27.0 / 26A5368g / arm64 |
-| `per-pid-events` | Resolved `CGEventPostToPid` calling convention and delivery behavior | macOS 27.0 / 26A5368g / arm64 |
-| `ax-window-id` | Private `_AXUIElementGetWindow` calling convention and window-ID result | macOS 27.0 / 26A5368g / arm64 |
+Host validation records under `docs/validation/` document configurations that have been exercised.
+They are evidence for maintainers, not admission entries, and do not gate other macOS versions,
+builds, architectures, user logins, normal use, or the test suite.
 
-Qualification is per row. Evidence for `space-query` on a host does not enable virtual displays,
-focus records, per-PID events, or private AX lookup on that same host.
-
-## Evidence required before adding an entry
-
-Run the checks in a disposable macOS login or disposable VM snapshot. The primary developer login
-is not an acceptable verification environment for display or input mutations.
-
-Record an artifact containing:
-
-1. The exact `sw_vers` output, `sysctl -n kern.osversion`, and process architecture.
-2. Hardware/VM identity and whether the login can be discarded without data loss.
-3. The exact SpaceO commit and compiler/Xcode version.
-4. A result for every behavior covered by the capability entry, including failure and teardown.
-5. Before/after evidence that the user's physical displays, active Space, frontmost application,
-   key route, pointer route, and cursor were recovered or remained unaffected as applicable.
-6. Repetition sufficient to exercise asynchronous teardown and partial-failure paths.
-7. The artifact's durable repository path or URL.
-
-For `virtual-display`, evidence must include creation, bounds publication, repeated teardown, and
-post-crash/orphan inspection. For `focus-without-raise`, it must include a failure injected after
-each record and verified route restoration. For `space-query`, validate every grouped SkyLight
-call and returned ownership/type assumption. For per-PID events and AX-window lookup, validate both
-successful delivery/lookup and a rejected or unavailable target.
-
-## Adding a qualified tuple
-
-After review of the recorded artifact, add one `SPOHostQualification` entry for one capability in
-`SPOQualifiedHostRegistry()`. Its `SPOHostTuple.evidenceReference` must be non-empty and point to
-the artifact. Copy the exact version, build, and architecture from that artifact; do not use
-ranges, prefixes, or inferred compatibility with adjacent builds.
-
-Then run:
+Run the complete suite with:
 
 ```bash
-swift test --filter HostCompatibilityTests
-swift test --filter UnitTests
-swift build
-swift build --target SpaceOKit -Xswiftc -swift-version -Xswiftc 6
+make test
 ```
 
-An OS update, Darwin build change, or architecture change produces a different tuple and fails
-closed until independently qualified.
+Run the focused WindowServer suite with:
 
-## Runtime and doctor behavior
+```bash
+make test-live
+```
 
-`SpaceOPrivate` checks the tuple again at each Objective-C mutation/query boundary. Swift callers
-cannot bypass it by invoking a symbol directly: per-PID event delivery also goes through the shim.
-`spaceo doctor` prints the observed tuple, registry count, qualified surfaces, and a reason for
-each unavailable capability. An empty missing-symbol list does not change unsupported status.
+Live tests run in the current graphical login. A case may skip only when a technical prerequisite
+such as an absent API, missing TCC grant, or unavailable target application prevents the tested
+operation.

@@ -145,11 +145,8 @@ Same API BetterDisplay / DeskPad / Mirage use.
 ~200 ms and the display normally vanishes on exit. **[counterexample, 2026-07-26]** rapid
 create/retire churn on the macOS 27 preview host left three vendor-tagged SpaceO displays attached
 after every owning process exited. Process lifetime is therefore the normal behavior, not a
-crash-safety guarantee; production must verify teardown and refuse to add displays when an
-ownerless one exists.
-
-**[policy superseded, 2026-07-27]** The owner directed removal of the ownerless-display creation
-block. Current production code reports ownerless IDs but does not refuse another attachment.
+crash-recovery guarantee; production verifies and reports teardown. Ownerless IDs remain
+diagnostic and do not gate another attachment.
 
 **[verified]** The virtual display gets **its own managed Space**, reported as a second entry in
 `SLSCopyManagedDisplaySpaces` with `spaces=1`. That Space is always the current Space *of that
@@ -318,7 +315,8 @@ Historical probes demonstrated display creation/scaling, own-Space allocation, d
 cross-app window relocation, focus-without-raise, per-PID **keyboard** delivery, and capture.
 Repeated end-to-end testing later invalidated the safety claim: the physical displays became
 inactive, ownerless virtual displays remained, and the assumed focus-getter ABI corrupted memory.
-The current build disables both private capabilities and makes no zero-disturbance release claim.
+The current build discovers private display/query/event surfaces at runtime, keeps the
+incompatible focus-record path removed, and reports isolation coverage explicitly.
 
 **Not** verified here, and worth testing before committing:
 - per-PID **mouse click** delivery (keyboard was tested; cua documents mouse works with the
@@ -328,8 +326,8 @@ The current build disables both private capabilities and makes no zero-disturban
 - HiDPI/Retina coordinate mapping for click targeting on the virtual display
 
 Private API risk is not bounded by `dlsym`: the crash involved symbols that were present.
-A releasable capability gate needs version-specific ABI validation, behavioral qualification,
-and a safe recovery boundary. The current build fails closed before display or focus mutation.
+Validation records and explicit runtime errors remain important, but they are not host admission
+gates. The incompatible focus-record mutation remains absent.
 
 ---
 

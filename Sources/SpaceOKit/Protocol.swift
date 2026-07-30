@@ -170,7 +170,7 @@ public struct SessionInfo: Codable, Sendable {
     }
 }
 
-/// The active resource budget, flattened for the wire.
+/// Runtime representation bounds, flattened for wire compatibility.
 public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var maximumSessions: Int
     public var maximumDisplays: Int
@@ -180,8 +180,7 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var minimumTileWidth: Int
     public var minimumTileHeight: Int
     public var maximumDisplayEdge: Int
-    /// True when the operator started the daemon with the unsafe budget, so a reader is never
-    /// left guessing why the numbers look generous.
+    /// Retained for wire compatibility; unrestricted runtime operation reports `false`.
     public var unsafeOperatorMode: Bool
 
     public init(_ budget: ResourceBudget) {

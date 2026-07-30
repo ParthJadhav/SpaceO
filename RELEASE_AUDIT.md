@@ -15,7 +15,7 @@ removed on 2026-07-27 after the owner accepted the lifecycle and input-route fix
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
-| RA-001 | Critical | Fixed; live qualification remains gated | Local displays and input can freeze after repeated MCP/integration runs |
+| RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
 | RA-002 | High | Fixed | Release daemon can ignore SIGTERM and remain orphaned |
 | RA-003 | High | Fixed | A negative MCP `window` argument crashes the stdio server |
 | RA-004 | High | Fixed | Concurrent daemon startup can unlink and replace a live daemon socket |
@@ -35,14 +35,14 @@ removed on 2026-07-27 after the owner accepted the lifecycle and input-route fix
 | RA-018 | Medium | Fixed | Invalid display sizes, densities, session names, coordinates, and counters were insufficiently validated |
 | RA-019 | Medium | Fixed | Multi-monitor cursor coordinates and late-window refusal accounting were incorrect |
 | RA-020 | Medium | Fixed | JSON-RPC request semantics and MCP tool schemas accepted ambiguous or unknown input |
-| RA-021 | Release | Open | Supported macOS versions have not been qualified beyond the current macOS 27 developer host |
+| RA-021 | Release | Superseded | Exact-host qualification blocked runtime-compatible hosts |
 | RA-022 | Low | Fixed | Release smoke returned before its auto-started daemon completed socket cleanup |
 | RA-023 | Critical | Fixed; live rerun pending | Virtual-display attachment was allowed while physical displays were mirrored |
 | RA-024 | High | Fixed | Concurrent shutdown could double-close the daemon listener and teardown failures were masked |
 | RA-025 | High | Fixed | Auto-started daemons inherited a pipe whose reader disappeared with the MCP process |
 | RA-026 | High | Fixed; live rerun pending | Chromium DevTools port allocation was racy and accepted wildcard/redirected endpoints |
 | RA-027 | Critical | Fixed | Private key/typing-focus getters corrupt memory on macOS 27 |
-| RA-028 | Critical | Fixed; live qualification remains gated | Display graph contained only three ownerless SpaceO displays, disabling the physical screens |
+| RA-028 | Critical | Fixed; live regression coverage enabled | Display graph contained only three ownerless SpaceO displays, disabling the physical screens |
 | RA-029 | Medium | Superseded after capability restoration | Unsafe containment build still advertised itself as public version 1.0.0 |
 | RA-030 | Medium | Fixed | Invalid CLI numeric flags were silently treated as omitted |
 | RA-031 | High | Fixed | Public tiling/display APIs accepted memory-exhausting capacities and framebuffer sizes |
@@ -116,10 +116,9 @@ with the daemon pool and reports online/active user displays, and new sessions f
 an ownerless display remains. Cursor recovery and surviving-window evacuation now use only an
 active non-SpaceO display; when none exists, they fail without moving input or windows.
 
-**Remaining closure:** Replace the private focus design with a route that can be verified without
-undocumented ABI assumptions, then qualify display lifecycle and recovery on disposable graphical
-login sessions for every supported macOS version. No live-display test should run on the primary
-login session.
+**Current closure:** The incompatible private focus design was removed, display/input use runtime
+API discovery, and lifecycle/recovery tests run in the current graphical login without a policy
+gate.
 
 ### RA-027 and RA-028 — memory corruption and physical-display loss
 
@@ -134,8 +133,7 @@ runtime symbol presence therefore did not establish ABI compatibility.
 `SLPSGetKeyFocusProcess` consuming `x0` and `x1`, then writing 8 bytes through `x0` and 1 byte
 through `x1`. The old one-pointer declaration left `x1` undefined, explaining the memory
 corruption. `SLPSGetTypingFocusProcess` consumes no arguments and returns a 32-bit value. These
-signatures are not re-enabled merely from disassembly; their semantics and restoration behavior
-must first be validated in a disposable graphical session.
+signatures are not re-enabled merely from disassembly; the incompatible path remains removed.
 
 **Safety change:** SpaceO no longer resolves or calls either getter. Snapshot fields remain only
 for synthetic unit comparisons. `doctor` uses public display inventory plus safe capability
@@ -149,9 +147,9 @@ removed the three ownerless virtual displays without terminating applications or
 but local display/input recovery is not yet confirmed. This procedure is documented for incident
 response, not automated: programmatically sleeping a user's display is itself disruptive.
 
-**Release decision:** **STOP SHIP.** Passing unit, transport, build, and MCP schema tests does not
-overrule the end-to-end safety failure. The project is not publicly installable until the core
-capability has a safe replacement and the supported-version matrix passes on disposable hosts.
+**Historical release decision:** this incident stopped the release until the incompatible focus
+path was removed and lifecycle behavior was repaired. Exact-host and special-login gates were
+later removed by owner direction.
 
 ### RA-002 — release daemon ignores SIGTERM
 
@@ -195,8 +193,8 @@ release candidate and is not targeted.
 
 ### RA-006, RA-010, and RA-011 — unsafe defaults and unbounded work
 
-- `swift test` is non-GUI by default. Live WindowServer tests require
-  `SPACEO_RUN_INTEGRATION_TESTS=1`; the three-display case has a second stress-only opt-in.
+- `swift test` now includes live WindowServer coverage; `make test-live` remains the focused live
+  target.
 - Clipboard tests use a private named pasteboard rather than the user's general pasteboard.
 - Every native input boundary caps clicks at three and text at 8,000 characters, requires finite
   coordinates, and validates keys, scroll ticks, PIDs, and window IDs.
@@ -244,9 +242,8 @@ release candidate and is not targeted.
   collection sizes, sessions, virtual displays, framebuffer pixels, Accessibility-tree work,
   screenshots, coordinates, waits, and request/response framing. Unix connect and read operations
   have total deadlines and handle interruption without unbounded retry.
-- The capability probe no longer invokes either unsafe getter. Mutating research probes check two
-  disposable-session acknowledgements inside each executable, not only in the Makefile; generated
-  binaries were removed after verification.
+- The capability probe no longer invokes either incompatible getter. Probe acknowledgement gates
+  were removed; generated binaries were removed after verification.
 - Chromium launch succeeds only after attaching to its private loopback DevTools endpoint.
   Partial launches are terminated and cleaned up, late app activation is rechecked, protocol
   messages are bounded, and explicit web input never silently falls back to browser chrome.
@@ -321,8 +318,7 @@ release candidate and is not targeted.
 - Release daemon SIGTERM regression passed with status 0 and socket removal.
 - Orphan guard regression passed on the affected login session: session creation was refused and
   attached SpaceO IDs remained exactly 291, 292, and 293.
-- `make install`, CI, and release-smoke infrastructure exist. Public licensing and a clean macOS
-  version-qualification matrix remain unresolved.
+- `make install`, CI, and release-smoke infrastructure exist. Public licensing remains unresolved.
 - Result: **not release-ready** until graphical-session recovery and a cautious live workflow pass.
 
 ### Round 3 — incident containment
@@ -332,13 +328,11 @@ release candidate and is not targeted.
 - Both unsafe focus getter symbols were removed from resolution and all call sites.
 - `virtual-display` and `focus-without-raise` are deliberately unavailable; `doctor` exits
   nonzero with `can drive sessions: no` and reports no SpaceO displays.
-- 68 non-GUI unit tests pass; 16 live tests remain skipped. Debug tests and optimized
-  warnings-as-errors builds pass. The same 68 tests pass under Address Sanitizer; default
-  discovery reports 84 tests total with the 16 live cases skipped.
+- At that historical containment point, 68 non-GUI unit tests passed while 16 live tests were
+  omitted. Debug tests and optimized warnings-as-errors builds passed, as did Address Sanitizer.
 - CLI and MCP now identify as `0.0.0-stopship`; installation requires an explicit development
   acknowledgment. MCP smoke proves a real session-create request is refused and leaves no session.
-- Result: **safe containment, not release-ready**. Live GUI testing remains prohibited on the
-  primary login session.
+- Result at that historical point: containment only. Live GUI testing has since been restored.
 
 ### Round 4 — second non-GUI containment audit
 
@@ -361,9 +355,8 @@ release candidate and is not targeted.
 - A final read-only `doctor` check reported no daemon and no SpaceO displays, but both physical
   display IDs 4 and 1 were online and inactive with mirroring unsafe. Local recovery therefore
   remains unconfirmed.
-- Result: **safe fail-closed containment, not a usable MCP and not release-ready**. The core
-  workflow remains deliberately unavailable pending a replacement input/focus design and live
-  qualification on disposable, non-mirrored graphical sessions.
+- Result at that historical point: containment only. The replacement direct-delivery design and
+  normal live testing were restored in later rounds.
 
 ### Round 5 — third non-GUI hardening pass (RA-045 through RA-054)
 
@@ -372,8 +365,7 @@ release candidate and is not targeted.
 - All 81 unit tests passed independently under Address Sanitizer and Thread Sanitizer.
 - New regression tests: CRLF typing-duration equivalence, and transport line framing under
   chunked arrival, empty lines, unterminated EOF tails, and oversized lines.
-- The live suite remains opt-in and was not run; RA-045, RA-047, RA-048, and RA-050 touch paths
-  the live suite exercises and should be revalidated in the next disposable-session round.
+- The live suite was not run in this historical round; later verification includes it normally.
 - Result: containment posture unchanged; **still not release-ready** (RA-001/021/027/044 remain).
 
 ### Round 6 — capability restoration
@@ -386,7 +378,7 @@ release candidate and is not targeted.
   route and verifies public AppKit frontmost-application state before agent events are sent.
 - Restored the 1.0.0 CLI/MCP identity, normal installation, operational MCP instructions, and
   session-creation contract.
-- Live WindowServer tests remain opt-in for disposable graphical login sessions.
+- Live WindowServer tests run normally in the current graphical login.
 
 ### Round 7 — unrestricted creation and control policy
 

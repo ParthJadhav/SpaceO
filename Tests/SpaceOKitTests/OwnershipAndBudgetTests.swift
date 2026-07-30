@@ -4,10 +4,7 @@ import AppKit
 import Darwin
 @testable import SpaceOKit
 
-/// Regressions for SPAO-125 (exclusive process ownership) and SPAO-128 (resource budgets).
-///
-/// Both are about refusing something *before* it mutates state, so every test here asserts on a
-/// refusal that happened early rather than on a cleanup that happened late.
+/// Regressions for exclusive process ownership and runtime geometry/accounting.
 final class OwnershipAndBudgetTests: XCTestCase {
 
     override func setUp() {
@@ -143,7 +140,7 @@ final class OwnershipAndBudgetTests: XCTestCase {
         XCTAssertTrue(live.isAlive, "the live process must be untouched")
     }
 
-    // MARK: - SPAO-128: geometry admission
+    // MARK: - Runtime geometry
 
     func testDefaultBudgetAcceptsTheStandardDisplay() {
         let budget = ResourceBudget.default
@@ -151,27 +148,10 @@ final class OwnershipAndBudgetTests: XCTestCase {
                                                         capacity: 1))
     }
 
-    func testDisplayEdgeBeyondTheBudgetIsRefusedWithNumbers() {
-        let budget = ResourceBudget.default
-        let oversized = CGSize(width: CGFloat(budget.maximumDisplayEdge + 1), height: 1080)
-        XCTAssertThrowsError(try budget.validateDisplaySize(oversized, capacity: 1)) { error in
-            let message = error.localizedDescription
-            XCTAssertTrue(message.contains("\(budget.maximumDisplayEdge)"),
-                          "the refusal must state the limit: \(message)")
-            XCTAssertTrue(message.contains("SPACEO_UNSAFE_RESOURCE_LIMITS"),
-                          "the refusal must state the recovery path: \(message)")
-        }
-    }
-
-    /// UInt32 was the only previous bound, which is no bound at all: 4294967295x4294967295 is
-    /// representable and would ask the WindowServer for eighteen exabytes of framebuffer.
-    func testUInt32RepresentableGeometryIsNotAutomaticallyAcceptable() {
+    func testGeometryThatOverflowsProcessArithmeticIsRejected() {
         let budget = ResourceBudget.default
         let absurd = CGSize(width: CGFloat(UInt32.max), height: CGFloat(UInt32.max))
         XCTAssertThrowsError(try budget.validateDisplaySize(absurd, capacity: 1))
-        XCTAssertThrowsError(try ResourceBudget.unsafeOperator.validateDisplaySize(absurd,
-                                                                                   capacity: 1),
-                             "even the operator escape hatch stays inside representable, sane values")
     }
 
     func testFractionalAndNonFiniteGeometryIsRefused() {
@@ -186,31 +166,22 @@ final class OwnershipAndBudgetTests: XCTestCase {
         }
     }
 
-    /// The "successful allocation an agent can do nothing with" case: arbitrary density on a
-    /// fixed display used to produce zero-area tiles and still report success.
-    func testDensityThatWouldProduceUnusableTilesIsRefused() {
+    func testAnyPositivePixelTileWithinLayoutBoundsIsAccepted() {
         let budget = ResourceBudget.default
-        let display = CGSize(width: 1920, height: 1080)
-        XCTAssertNoThrow(try budget.validateDisplaySize(display, capacity: 4))
-        XCTAssertThrowsError(try budget.validateDisplaySize(display, capacity: 64)) { error in
-            let message = error.localizedDescription
-            XCTAssertTrue(message.contains("\(Int(budget.minimumTileSize.width))"),
-                          "the refusal must state the minimum tile: \(message)")
-        }
+        XCTAssertNoThrow(try budget.validateDisplaySize(
+            CGSize(width: 8, height: 8), capacity: 64))
     }
 
-    func testTileMinimumIsAppliedAtItsExactBoundary() throws {
+    func testZeroAreaTileAndUnboundedMaterializationAreRejected() throws {
         let budget = ResourceBudget.default
-        // Two columns, one row: each tile is exactly the minimum width.
-        let exact = CGSize(width: budget.minimumTileSize.width * 2,
-                           height: budget.minimumTileSize.height)
-        XCTAssertNoThrow(try budget.validateDisplaySize(exact, capacity: 2))
-
-        let onePixelShort = CGSize(width: exact.width - 2, height: exact.height)
-        XCTAssertThrowsError(try budget.validateDisplaySize(onePixelShort, capacity: 2))
+        XCTAssertThrowsError(try budget.validateDisplaySize(
+            CGSize(width: 1, height: 1), capacity: 2))
+        XCTAssertThrowsError(try budget.validateDisplaySize(
+            CGSize(width: 1920, height: 1080),
+            capacity: TileLayout.maximumCapacity + 1))
     }
 
-    // MARK: - SPAO-128: usage admission
+    // MARK: - Unrestricted usage accounting
 
     private func usage(sessions: Int = 0, displays: Int = 0, pixels: Int = 0,
                        creations: Int = 0) -> ResourceBudget.Usage {
@@ -219,82 +190,28 @@ final class OwnershipAndBudgetTests: XCTestCase {
                              creationsInLastMinute: creations)
     }
 
-    func testSessionCeilingIsEnforcedAndReportsUsage() {
+    func testSessionAndDisplayCountsHaveNoPolicyCeiling() {
         let budget = ResourceBudget.default
         XCTAssertNoThrow(try budget.admitSession(
-            usage: usage(sessions: budget.maximumSessions - 1)))
-        XCTAssertThrowsError(try budget.admitSession(
-            usage: usage(sessions: budget.maximumSessions))) { error in
-            let message = error.localizedDescription
-            XCTAssertTrue(message.contains("\(budget.maximumSessions)"), message)
-            XCTAssertTrue(message.contains("destroy a session"), message)
-        }
-    }
-
-    func testDisplayCeilingIsEnforcedAtItsBoundary() {
-        let budget = ResourceBudget.default
+            usage: usage(sessions: 1_000_000, displays: 1_000_000)))
         let size = CGSize(width: 1920, height: 1080)
         XCTAssertNoThrow(try budget.admitDisplay(
-            size: size, capacity: 1, usage: usage(displays: budget.maximumDisplays - 1)))
-        XCTAssertThrowsError(try budget.admitDisplay(
-            size: size, capacity: 1, usage: usage(displays: budget.maximumDisplays)))
-    }
-
-    func testTotalFramebufferPixelsAreEnforcedAcrossDisplays() {
-        let budget = ResourceBudget.default
-        let size = CGSize(width: 4096, height: 4096)
-        let added = 4096 * 4096
-        XCTAssertNoThrow(try budget.admitDisplay(
             size: size, capacity: 1,
-            usage: usage(pixels: budget.maximumTotalPixels - added)))
-        XCTAssertThrowsError(try budget.admitDisplay(
-            size: size, capacity: 1,
-            usage: usage(pixels: budget.maximumTotalPixels - added + 1))) { error in
-            XCTAssertTrue(error.localizedDescription.contains("framebuffer pixels"),
-                          error.localizedDescription)
-        }
+            usage: usage(sessions: 1_000_000,
+                         displays: 1_000_000,
+                         pixels: 1_000_000_000,
+                         creations: 1_000_000)))
     }
 
-    /// A crash-looping agent can stay under every standing limit while still churning the
-    /// WindowServer, so the rate limit is a separate gate.
-    func testCreationRateIsEnforcedIndependentlyOfStandingLimits() {
-        let budget = ResourceBudget.default
-        let size = CGSize(width: 1920, height: 1080)
-        let atRate = usage(sessions: 0, displays: 0, pixels: 0,
-                           creations: budget.maximumCreationsPerMinute)
-        XCTAssertThrowsError(try budget.admitDisplay(size: size, capacity: 1, usage: atRate)) { error in
-            let message = error.localizedDescription
-            XCTAssertTrue(message.contains("per minute"), message)
-            XCTAssertTrue(message.contains("loop"),
-                          "the remedy should point at the actual cause: \(message)")
-        }
-    }
-
-    func testUnsafeOperatorModeRaisesLimitsAndSaysSo() {
-        let unsafeBudget = ResourceBudget.unsafeOperator
-        XCTAssertTrue(unsafeBudget.isUnsafe)
-        XCTAssertGreaterThan(unsafeBudget.maximumDisplays, ResourceBudget.default.maximumDisplays)
-        XCTAssertThrowsError(try unsafeBudget.admitSession(
-            usage: usage(sessions: unsafeBudget.maximumSessions))) { error in
-            XCTAssertTrue(error.localizedDescription.contains("already the unsafe operator budget"),
-                          "an operator at the unsafe ceiling must not be told to set the flag again")
-        }
-    }
-
-    func testUnsafeModeComesFromTheEnvironmentNotFromARequest() {
+    func testEnvironmentCannotChangeRuntimeAdmission() {
         XCTAssertEqual(ResourceBudget.fromEnvironment([:]), .default)
-        XCTAssertEqual(ResourceBudget.fromEnvironment(["SPACEO_UNSAFE_RESOURCE_LIMITS": "0"]),
-                       .default)
-        XCTAssertEqual(ResourceBudget.fromEnvironment(["SPACEO_UNSAFE_RESOURCE_LIMITS": "1"]),
-                       .unsafeOperator)
-        XCTAssertEqual(ResourceBudget.fromEnvironment(["SPACEO_UNSAFE_RESOURCE_LIMITS": "TRUE"]),
-                       .unsafeOperator)
+        XCTAssertEqual(ResourceBudget.fromEnvironment(["IGNORED_SETTING": "1"]), .default)
+        XCTAssertFalse(ResourceBudget.fromEnvironment().isUnsafe)
     }
 
-    // MARK: - SPAO-128: the pool refuses before it allocates
+    // MARK: - Pool allocation
 
-    /// A stage factory that records calls and always refuses. If admission runs in the right
-    /// order, an over-budget allocation never reaches it.
+    /// A stage factory that records calls and always returns a technical allocation error.
     private final class RecordingStageFactory {
         let lock = NSLock()
         private var calls = 0
@@ -306,24 +223,7 @@ final class OwnershipAndBudgetTests: XCTestCase {
         }
     }
 
-    func testAdmissionRunsBeforeAnyStageIsConstructed() {
-        let factory = RecordingStageFactory()
-        var budget = ResourceBudget.default
-        budget.maximumDisplays = 0
-        let pool = DisplayPool(sessionsPerDisplay: 1,
-                               displaySize: CGSize(width: 1920, height: 1080),
-                               budget: budget,
-                               stageFactory: factory.make)
-
-        XCTAssertThrowsError(try pool.allocate()) { error in
-            XCTAssertTrue(error.localizedDescription.contains("virtual displays"),
-                          error.localizedDescription)
-        }
-        XCTAssertEqual(factory.callCount, 0,
-                       "the WindowServer must never be asked for a display we would refuse")
-    }
-
-    func testAdmissionPassesThroughToTheFactoryWhenWithinBudget() {
+    func testValidAllocationPassesThroughToTheFactory() {
         let factory = RecordingStageFactory()
         let pool = DisplayPool(sessionsPerDisplay: 1,
                                displaySize: CGSize(width: 1920, height: 1080),
@@ -336,30 +236,26 @@ final class OwnershipAndBudgetTests: XCTestCase {
         XCTAssertEqual(factory.callCount, 1)
     }
 
-    /// Concurrent `session.create` calls must not each see room and collectively overshoot.
-    func testConcurrentAllocationsAllRefuseUnderAZeroBudget() {
+    func testConcurrentAllocationsAllReachTheAllocator() {
         let factory = RecordingStageFactory()
-        var budget = ResourceBudget.default
-        budget.maximumDisplays = 0
         let pool = DisplayPool(sessionsPerDisplay: 1,
                                displaySize: CGSize(width: 1920, height: 1080),
-                               budget: budget,
+                               budget: .default,
                                stageFactory: factory.make)
 
-        let refusals = NSCountedSet()
-        let refusalLock = NSLock()
+        let failures = NSCountedSet()
+        let failureLock = NSLock()
         DispatchQueue.concurrentPerform(iterations: 64) { _ in
             do {
                 _ = try pool.allocate()
-                refusalLock.withLock { refusals.add("admitted") }
+                failureLock.withLock { failures.add("allocated") }
             } catch {
-                refusalLock.withLock { refusals.add("refused") }
+                failureLock.withLock { failures.add("factory-error") }
             }
         }
-        XCTAssertEqual(refusals.count(for: "refused"), 64)
-        XCTAssertEqual(refusals.count(for: "admitted"), 0)
-        XCTAssertEqual(factory.callCount, 0,
-                       "no thread may slip past admission while another is inside it")
+        XCTAssertEqual(failures.count(for: "factory-error"), 64)
+        XCTAssertEqual(failures.count(for: "allocated"), 0)
+        XCTAssertEqual(factory.callCount, 64)
         XCTAssertEqual(pool.usage().displays, 0)
     }
 
@@ -383,10 +279,8 @@ final class OwnershipAndBudgetTests: XCTestCase {
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(4))
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(0))
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(TileLayout.maximumCapacity + 1))
-        XCTAssertThrowsError(try pool.setSessionsPerDisplay(48),
-                             "48 tiles on a 1920x1080 display is smaller than any usable window")
-        XCTAssertEqual(pool.sessionsPerDisplay, 4,
-                       "a refused density must not have been applied")
+        XCTAssertNoThrow(try pool.setSessionsPerDisplay(48))
+        XCTAssertEqual(pool.sessionsPerDisplay, 48)
     }
 
     // MARK: - SPAO-128: tile lookup stays bounded

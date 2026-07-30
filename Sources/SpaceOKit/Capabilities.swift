@@ -17,25 +17,15 @@ public struct Capabilities: Sendable {
         public let unavailableReason: String?
     }
 
-    public struct PrivateAPIHost: Sendable, Equatable {
-        public let operatingSystemVersion: String
-        public let darwinBuild: String
-        public let architecture: String
-        public let tupleDescription: String
-        public let registryEntryCount: Int
-        public let qualifiedCapabilities: [String]
-    }
-
     public let items: [Item]
     public let missingSymbols: [String]
-    public let privateAPIHost: PrivateAPIHost
 
     public init() {
         var found: [Item] = []
 
         let privateCaps: [(SPOCapability, String)] = [
             (.virtualDisplay,     "CGVirtualDisplay classes"),
-            (.focusWithoutRaise,  "SLPSPostEventRecordTo with public-route restoration"),
+            (.focusWithoutRaise,  "removed incompatible private focus-record path"),
             (.spaceQuery,         "SkyLight space graph and window geometry calls"),
             (.perPIDEvents,       "per-process events (CGEventPostToPid)"),
             (.axWindowID,         "AX element -> window id (_AXUIElementGetWindow)"),
@@ -61,29 +51,12 @@ public struct Capabilities: Sendable {
 
         self.items = found
         self.missingSymbols = SPOMissingSymbols()
-
-        let host = SPOCurrentHostTuple()
-        let registry = SPOQualifiedHostRegistry()
-        self.privateAPIHost = PrivateAPIHost(
-            operatingSystemVersion:
-                "\(host.operatingSystemMajor).\(host.operatingSystemMinor)."
-                    + "\(host.operatingSystemPatch)",
-            darwinBuild: host.darwinBuild,
-            architecture: host.architecture,
-            tupleDescription: SPOHostTupleDescription(host),
-            registryEntryCount: registry.count,
-            qualifiedCapabilities: privateCaps.compactMap { cap, _ in
-                SPOHostIsQualifiedForCapability(cap, host, registry)
-                    ? SPOCapabilityName(cap)
-                    : nil
-            }
-        )
     }
 
     /// True when SpaceO can create and drive a session (capture excluded).
     ///
-    /// Private focus priming is optional: `InputRouter.prepareForInput` deliberately falls back
-    /// to direct per-PID delivery when the focus-record ABI has not been independently qualified.
+    /// Private focus priming is optional: `InputRouter.prepareForInput` can use direct per-PID
+    /// delivery when the focus-record API is unavailable.
     public var canDrive: Bool {
         builtWithARC
             && required.allSatisfy { name in
@@ -133,19 +106,7 @@ public struct Capabilities: Sendable {
 
     /// Human-readable report used by `spaceo doctor`.
     public var report: String {
-        var lines = [
-            "  private API host  : \(privateAPIHost.tupleDescription)",
-            "  qualified entries: \(privateAPIHost.registryEntryCount)",
-        ]
-        if privateAPIHost.qualifiedCapabilities.isEmpty {
-            lines.append("  qualified surfaces: none")
-        } else {
-            lines.append(
-                "  qualified surfaces: "
-                    + privateAPIHost.qualifiedCapabilities.joined(separator: ", ")
-            )
-        }
-        lines.append("")
+        var lines: [String] = []
         for item in items {
             lines.append("  \(item.available ? "ok  " : "MISS") \(item.name.padding(toLength: 22, withPad: " ", startingAt: 0)) \(item.detail)")
             if let reason = item.unavailableReason {

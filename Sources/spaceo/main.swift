@@ -268,7 +268,6 @@ Controller create: --controller-id ID   --controller-label LABEL
 Session mutations: --lease UUID
 Global: --session ID   --socket PATH   --json
 Env:    SPACEO_SOCKET   SPACEO_SESSIONS_PER_DISPLAY   SPACEO_DISPLAY_SIZE (WxH)
-        SPACEO_UNSAFE_RESOURCE_LIMITS=1  raise the display/session budgets (see `doctor`)
 """
 
 // MARK: - Dispatch
@@ -469,17 +468,6 @@ case "doctor":
             "canDrive": capabilities.canDrive,
             "canCapture": capabilities.canCapture,
             "builtWithARC": capabilities.builtWithARC,
-            "privateAPIHost": [
-                "operatingSystemVersion":
-                    capabilities.privateAPIHost.operatingSystemVersion,
-                "darwinBuild": capabilities.privateAPIHost.darwinBuild,
-                "architecture": capabilities.privateAPIHost.architecture,
-                "tuple": capabilities.privateAPIHost.tupleDescription,
-                "registryEntryCount":
-                    capabilities.privateAPIHost.registryEntryCount,
-                "qualifiedCapabilities":
-                    capabilities.privateAPIHost.qualifiedCapabilities,
-            ],
             "daemon": ["socket": socketPath, "running": daemonIsRunning],
             "displays": [
                 "spaceO": attachedSpaceODisplays,
@@ -511,19 +499,7 @@ case "doctor":
             print("  orphaned displays  : "
                   + orphanedDisplayIDs.map(String.init).joined(separator: ", "))
         }
-        let doctorBudget = ResourceBudget.fromEnvironment()
-        let budgetParts: [String] = [
-            "\(doctorBudget.maximumSessions) session(s)",
-            "\(doctorBudget.maximumDisplays) display(s)",
-            "\(doctorBudget.maximumTotalPixels) pixel(s)",
-            "\(doctorBudget.maximumCreationsPerMinute) new display(s)/min",
-            "min tile \(Int(doctorBudget.minimumTileSize.width))x\(Int(doctorBudget.minimumTileSize.height))",
-        ]
-        print("  resource budget    : " + budgetParts.joined(separator: ", "))
-        if doctorBudget.isUnsafe {
-            print("  budget mode        : UNSAFE (SPACEO_UNSAFE_RESOURCE_LIMITS is set); "
-                  + "a runaway caller can destabilise this login session")
-        }
+        print("  resource policy    : no product limits; runtime geometry checks only")
     }
     exit(capabilities.canDrive ? 0 : 1)
 
@@ -572,9 +548,7 @@ case "daemon":
         displaySize = TileLayout.displaySize(forCapacity: perDisplay)
     }
 
-    // Refuse unsafe geometry here, at the command line, rather than at the first session.create.
-    // A daemon that starts and then fails every allocation is a worse experience than one that
-    // never starts and says why.
+    // Validate technical geometry before starting the daemon.
     do {
         _ = try budget.validateDisplaySize(displaySize, capacity: perDisplay)
     } catch {

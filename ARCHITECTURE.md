@@ -88,23 +88,11 @@ caller does not pin a size, the CLI grows the display to match the requested den
 keeps one empty display warm for its lifetime so rapid agent churn reuses a stable framebuffer;
 excess empty displays from a larger peak are retired after a grace period.
 
-**Admission — `ResourceBudget`.** A framebuffer is composited every frame, out of GPU and wired
-memory, in the *user's own* graphical login session. So `allocate()` admits against a budget
-before a `Stage` is ever constructed, under the same lock as the allocation it guards — checking
-and then creating in two steps is a race in which two concurrent `session.create` calls both see
-room. The gates are: live sessions, attached displays, total framebuffer pixels and bytes,
-displays created per rolling minute (a crash-loop can churn the WindowServer while staying under
-every standing limit), and a minimum usable tile — a "successful" allocation that hands an agent a
-40x30 tile is a bug that reports success. Refusals carry the requested value, the limit, current
-usage, and a remedy. `pool` and `doctor` print usage against the limits so an operator sees the
-approach, not just the wall.
-
-`SPACEO_UNSAFE_RESOURCE_LIMITS=1` selects a much higher operator budget. It is an environment
-variable, not a request field: raising this must be a decision by whoever starts the daemon, never
-something an agent can ask for mid-conversation. It is still bounded — by representable platform
-values and by what a tile needs to be usable — because "unlimited" would only move the crash.
-Capacity is likewise bounded by `TileLayout.maximumCapacity`, so the materialised layout cannot
-scale with a caller-supplied integer; per-tile lookup stays O(1) and allocation-free.
+**Runtime geometry — `ResourceBudget`.** `allocate()` does not impose product-policy ceilings on
+sessions, displays, framebuffer totals, or creation rate. It validates positive whole-pixel
+geometry representable by Swift and CoreGraphics. `pool` and `doctor` report current usage.
+Capacity remains bounded by `TileLayout.maximumCapacity` because the public full-layout API
+materializes an array; per-tile lookup stays O(1) and allocation-free.
 
 ### 3.1 Stage — `VirtualDisplay`
 

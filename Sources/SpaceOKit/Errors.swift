@@ -38,8 +38,7 @@ public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatab
         case .unavailable(let cap):
             return """
             unavailable on this host: \(cap)
-              The private implementation is either not evidence-qualified for this exact host \
-            tuple or its underlying class/symbol is unavailable.
+              The current macOS runtime does not provide a required class or symbol.
               Run `spaceo doctor` for the full report.
             """
         case .accessibilityDenied:

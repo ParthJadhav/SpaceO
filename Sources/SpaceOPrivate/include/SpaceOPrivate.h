@@ -2,9 +2,8 @@
 //  SpaceOPrivate.h
 //  The one place in SpaceO that touches private macOS API.
 //
-//  Every private operation is admitted only for an exact, evidence-backed host tuple before
-//  its resolved symbol, Objective-C surface, or assumed record layout can be used. Symbol
-//  presence alone is never compatibility evidence.
+//  Private operations are available when their runtime symbol or Objective-C surface exists.
+//  Callers still receive explicit unavailable errors when the current macOS build lacks an API.
 //
 #ifndef SPACEO_PRIVATE_H
 #define SPACEO_PRIVATE_H
@@ -15,12 +14,12 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-#pragma mark - Capability gate
+#pragma mark - Runtime capabilities
 
 typedef NS_ENUM(NSInteger, SPOCapability) {
     /// CGVirtualDisplay + descriptor/mode/settings classes (the agent's stage).
     SPOCapabilityVirtualDisplay = 0,
-    /// SLPSPostEventRecordTo — flip input routing without raising a window.
+    /// Removed private focus-record path; direct per-PID delivery remains available.
     SPOCapabilityFocusWithoutRaise,
     /// SLSCopyManagedDisplaySpaces & friends — read the Space graph.
     SPOCapabilitySpaceQuery,
@@ -31,72 +30,12 @@ typedef NS_ENUM(NSInteger, SPOCapability) {
     SPOCapabilityCount
 };
 
-/// One exact ABI/behavior host: macOS version, Darwin build, and process architecture.
-///
-/// `evidenceReference` belongs on registry entries, not the observed runtime tuple. A registry
-/// entry without a durable disposable-login evidence reference is deliberately ignored.
-@interface SPOHostTuple : NSObject
-
-- (instancetype)initWithOperatingSystemMajor:(NSInteger)major
-                                       minor:(NSInteger)minor
-                                       patch:(NSInteger)patch
-                                 darwinBuild:(NSString *)darwinBuild
-                                architecture:(NSString *)architecture
-                           evidenceReference:(nullable NSString *)evidenceReference
-    NS_DESIGNATED_INITIALIZER;
-- (instancetype)init NS_UNAVAILABLE;
-
-@property (nonatomic, readonly) NSInteger operatingSystemMajor;
-@property (nonatomic, readonly) NSInteger operatingSystemMinor;
-@property (nonatomic, readonly) NSInteger operatingSystemPatch;
-@property (nonatomic, copy, readonly) NSString *darwinBuild;
-@property (nonatomic, copy, readonly) NSString *architecture;
-@property (nonatomic, copy, readonly, nullable) NSString *evidenceReference;
-
-@end
-
-/// Qualification is capability-specific. Evidence for one private layout must never unlock
-/// another layout on the same host tuple.
-@interface SPOHostQualification : NSObject
-
-- (instancetype)initWithCapability:(SPOCapability)capability
-                              host:(SPOHostTuple *)host NS_DESIGNATED_INITIALIZER;
-- (instancetype)init NS_UNAVAILABLE;
-
-@property (nonatomic, readonly) SPOCapability capability;
-@property (nonatomic, strong, readonly) SPOHostTuple *host;
-
-@end
-
-/// The observed runtime tuple. A tuple is descriptive, not proof of compatibility.
-SPOHostTuple *SPOCurrentHostTuple(void);
-NSString *SPOHostTupleDescription(SPOHostTuple *host);
-
-/// Evidence-backed entries compiled into this release. This intentionally returns an empty
-/// array until disposable-login validation artifacts exist for a specific capability and tuple.
-NSArray<SPOHostQualification *> *SPOQualifiedHostRegistry(void);
-
-/// Pure compatibility functions exposed so exact-match and fail-closed behavior can be tested
-/// with injected tuples without invoking any private API.
-BOOL SPOHostIsQualifiedForCapability(
-    SPOCapability cap,
-    SPOHostTuple *host,
-    NSArray<SPOHostQualification *> *registry
-);
-BOOL SPOCapabilityAllowedForHost(
-    SPOCapability cap,
-    SPOHostTuple *host,
-    NSArray<SPOHostQualification *> *registry,
-    BOOL requiredBehaviorPresent
-);
-
-/// YES only when both the exact host tuple is evidence-qualified for this capability and every
-/// required symbol/class is present. Symbol presence alone can never make this return YES.
+/// YES when the runtime surface is available. The removed focus-record capability stays NO.
 BOOL SPOCapabilityAvailable(SPOCapability cap);
 NSString *SPOCapabilityName(SPOCapability cap);
-/// Nil when available; otherwise a user-facing host-qualification or symbol/class reason.
+/// Nil when available; otherwise a user-facing runtime reason.
 NSString *_Nullable SPOCapabilityUnavailableReason(SPOCapability cap);
-/// Names of every symbol we wanted but could not resolve. Empty does not imply ABI compatibility.
+/// Names of every symbol or class we wanted but could not resolve.
 NSArray<NSString *> *SPOMissingSymbols(void);
 
 /// Whether this translation unit was compiled with ARC.
@@ -187,8 +126,8 @@ uint32_t SPOWindowIDForAXElement(AXUIElementRef element);
 
 #pragma mark - Per-process event delivery
 
-/// Post through the resolved per-PID event symbol only after exact host qualification.
-/// Returns NO without posting when the host or symbol is not admitted.
+/// Post through the resolved per-PID event symbol.
+/// Returns NO without posting when the symbol is unavailable.
 BOOL SPOPostEventToPID(pid_t pid, CGEventRef event);
 
 NS_ASSUME_NONNULL_END

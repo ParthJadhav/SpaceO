@@ -49,8 +49,8 @@ Three tiers. Unit tests remain non-mutating; the live target runs without an ack
 
 1. **Unit** — pure logic, no system state: capability gating, parking geometry, AX tree
    serialization, coordinate mapping. Must pass on any machine.
-2. **Integration** — real WindowServer via `make test-live`, gated only by capabilities/TCC and
-   skipped with a clear message when a required grant or app is missing.
+2. **Integration** — real WindowServer via `make test-live`; missing runtime APIs, TCC grants, or
+   target applications are reported as technical prerequisites.
 3. **Invariant** — the one that matters. Records frontmost app + cursor position, runs a full
    agent workflow against TextEdit, asserts both unchanged and the capture non-blank.
 
@@ -63,7 +63,7 @@ Every test that creates system state does teardown in `defer` and verifies remov
 
 | Risk | Handling |
 |---|---|
-| Private API vanishes in a macOS update | Every symbol behind `dlsym` + `Capabilities` gate; fail closed with a readable error, never crash |
+| Private API vanishes in a macOS update | Every symbol is discovered through `dlsym`; an affected operation returns a readable unavailable error, never a fabricated result |
 | TCC not granted in the test runner | Integration tests skip with instructions, unit tests still run |
 | Apps reject per-PID input | Delivery is attempted for every target; failures are observed rather than pre-blocked |
 | Chromium drops synthetic mouse events | Prefer a loopback DevTools endpoint; fall back to unrestricted per-PID delivery |

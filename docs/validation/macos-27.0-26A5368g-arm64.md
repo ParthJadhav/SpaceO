@@ -1,16 +1,16 @@
-# macOS 27.0 build 26A5368g arm64 qualification
+# macOS 27.0 build 26A5368g arm64 validation record
 
 ## Scope
 
-This artifact qualifies only these private surfaces on the exact tuple below:
+This artifact records a successful exercise of these private surfaces on the host below:
 
 - `virtual-display`
 - `space-query`
 - `per-pid-events`
 - `ax-window-id`
 
-It does **not** qualify `focus-without-raise`. SpaceO uses direct per-PID delivery without the
-private focus-record transaction on this host.
+`focus-without-raise` was not used. SpaceO used direct per-PID delivery without the removed
+private focus-record transaction.
 
 ## Host and source
 
@@ -47,8 +47,9 @@ Verified locally on 2026-07-29 with the release build:
 
 Only one virtual display was created during this verification.
 
-## Limitations
+## Interpretation
 
-This is an exact development-build qualification, not a compatibility claim for another macOS
-version or Darwin build. The hard-coded `SLPSPostEventRecordTo` focus records remain unavailable.
-An OS update fails closed until a new exact tuple is recorded.
+This is a validation record, not a host allowlist or admission gate. Other macOS versions,
+Darwin builds, architectures, and graphical logins use the same runtime class/symbol discovery.
+The hard-coded `SLPSPostEventRecordTo` focus records remain unavailable because that incompatible
+path was removed.

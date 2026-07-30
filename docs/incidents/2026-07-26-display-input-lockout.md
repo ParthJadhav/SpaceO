@@ -46,9 +46,9 @@ the external panel asleep), so this is not recorded as full recovery until the u
 local display and input or the graphical login session is reset. Credentials were neither
 requested nor automated.
 
-If this happens again, first stop all SpaceO processes and save reachable work remotely. Prefer a
-display sleep/wake. If that fails, log out/in or restart the graphical session. Do not repeatedly
-create more virtual displays.
+If this happens again, stop the current run, save reachable work, and use a display sleep/wake.
+If that fails, log out/in or restart the graphical session. Normal use and testing can resume
+after the display graph has recovered.
 
 ## Root defects
 
@@ -75,17 +75,17 @@ create more virtual displays.
 
 - Removed all resolution and calls of the unsafe focus getters.
 - Removed those getters from `doctor`, runtime snapshots, teardown, and input routing.
-- Made both `virtual-display` and `focus-without-raise` unavailable at the lowest private-API
-  boundary, so direct library callers also fail closed.
+- Temporarily made both `virtual-display` and `focus-without-raise` unavailable at the lowest
+  private-API boundary. Virtual-display support was subsequently restored through runtime
+  discovery; the incompatible focus-record path remains removed.
 - Cursor recovery and window evacuation now select an active, non-SpaceO display only. If none
   exists, they fail without warping the cursor or relocating windows.
-- Removed getter calls from the read-only capability probe. Every mutating probe now requires two
-  runtime acknowledgements for a disposable login/host; generated probe binaries were removed.
+- Removed getter calls from the capability probe and removed generated probe binaries.
 - Removed the remaining private front-process lookup/call in favor of AppKit. Retained its old C
   entry point and `parkDiagonally()` only as non-mutating compatibility stubs.
-- Teardown, diagnostics, orphan guards, and live-test baselines now inventory online displays, so
-  inactive-but-attached SpaceO displays still block creation and fail teardown.
-- Kept all live WindowServer tests opt-in; they must not run on a primary graphical login.
+- Teardown, diagnostics, and live-test baselines inventory online displays so
+  inactive-but-attached SpaceO displays still fail teardown visibly.
+- The temporary live-test opt-in was subsequently removed; live tests run normally.
 - Updated release documentation to say stop-ship rather than advertise install readiness.
 
 ## Conditions for reopening release
@@ -99,9 +99,7 @@ The release was reopened with these changes:
 
 - The corrupting focus getters remain removed; route restoration is verified through public
   AppKit frontmost-application state.
-- Display lifecycle changes are serialized, mirrored graphs are refused, and each attachment
-  verifies that physical displays remain active and non-overlapping.
-- Teardown is verified against the online display inventory, and ownerless SpaceO displays block
-  subsequent creation.
+- Display lifecycle changes are serialized and display-graph observations are diagnostic.
+- Teardown is verified against the online display inventory.
 - Cursor and window recovery only target active, non-SpaceO displays.
-- Live lifecycle and input suites remain restricted to disposable graphical login sessions.
+- Live lifecycle and input suites run in the current graphical login without a policy gate.

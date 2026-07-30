@@ -19,8 +19,8 @@ jobs:
           node --check scripts/mcp-smoke.mjs
           bash scripts/release.sh check
           bash scripts/release.sh dry-run
-      - name: Unit tests
-        run: swift test --filter UnitTests
+      - name: Tests
+        run: swift test
       - name: Release build
         run: swift build -c release
       - name: MCP black-box smoke test
