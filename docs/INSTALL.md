@@ -205,14 +205,8 @@ Artifacts are written under `.release/VERSION/` as a DMG, checksum, and detached
 signature. `make verify-distribution ARTIFACT=...` requires all three and repeats the final
 integrity and trust checks without publishing.
 
-The `Signed release candidate and publication` GitHub Actions workflow first calls the separate
-`Live qualification` workflow on a self-hosted runner labelled `spaceo-live-qualified`. The
-`live-qualification` environment must supply `SPACEO_QUALIFIED_HOST=1` and
-`SPACEO_DISPOSABLE_LOGIN=1`; repository configuration must independently enforce any desired
-reviewers or protection. Candidate packaging cannot start until the live record for its exact tag
-commit is downloaded and verified.
-
-The `candidate` job then uses the same release script. Hosted build and release jobs select Xcode
+The `Signed release candidate and publication` GitHub Actions workflow uses the same release
+script. Hosted build and release jobs select Xcode
 26.0.1 / Swift 6.2 explicitly and fail before tests if the runner no longer provides that exact
 compatible toolchain. Candidate creation requires these repository or `release`
 protected-environment secrets:

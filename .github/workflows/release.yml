@@ -15,15 +15,7 @@ permissions:
   contents: read
 
 jobs:
-  live-qualification:
-    permissions:
-      contents: read
-    uses: ./.github/workflows/live-qualification.yml
-    with:
-      release_ref: ${{ github.event_name == 'push' && github.ref || format('refs/tags/{0}', inputs.release_tag) }}
-
   candidate:
-    needs: live-qualification
     # macos-15 is an Apple Silicon image; the script also fails if the architecture drifts.
     runs-on: macos-15
     timeout-minutes: 45
@@ -132,7 +124,6 @@ jobs:
           NOTARY_KEY_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
           SPACEO_NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
           SPACEO_NOTARY_ISSUER: ${{ secrets.NOTARY_API_ISSUER_ID }}
-          SPACEO_LIVE_QUALIFICATION_RECORD: ${{ runner.temp }}/spaceo-live-qualification/spaceo-live-qualification.txt
           SPACEO_RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
           SPACEO_RELEASE_TAG_OBJECT: ${{ steps.source.outputs.tag_object }}
           SPACEO_RELEASE_WORKFLOW_REPOSITORY: ${{ github.repository }}
@@ -177,13 +168,11 @@ jobs:
           artifact="$base.dmg"
           checksum="$base.sha256"
           checksum_signature="$checksum.sig"
-          live_record="$base.live-qualification.txt"
           candidate_record="$base.candidate.txt"
           candidate_signature="$candidate_record.sig"
           test -f "$artifact"
           test -f "$checksum"
           test -f "$checksum_signature"
-          test -f "$live_record"
           test -f "$candidate_record"
           test -f "$candidate_signature"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -200,7 +189,6 @@ jobs:
             ${{ steps.package.outputs.base }}.dmg
             ${{ steps.package.outputs.base }}.sha256
             ${{ steps.package.outputs.base }}.sha256.sig
-            ${{ steps.package.outputs.base }}.live-qualification.txt
             ${{ steps.package.outputs.base }}.candidate.txt
             ${{ steps.package.outputs.base }}.candidate.txt.sig
           if-no-files-found: error
@@ -288,7 +276,6 @@ jobs:
             "$base.dmg" \
             "$base.sha256" \
             "$base.sha256.sig" \
-            "$base.live-qualification.txt" \
             "$base.candidate.txt" \
             "$base.candidate.txt.sig" \
             --verify-tag \

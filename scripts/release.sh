@@ -25,7 +25,6 @@ NOTARY_PROFILE="${SPACEO_NOTARY_PROFILE:-}"
 NOTARY_KEY="${SPACEO_NOTARY_KEY:-}"
 NOTARY_KEY_ID="${SPACEO_NOTARY_KEY_ID:-}"
 NOTARY_ISSUER="${SPACEO_NOTARY_ISSUER:-}"
-LIVE_QUALIFICATION_RECORD="${SPACEO_LIVE_QUALIFICATION_RECORD:-}"
 RELEASE_COMMIT="${SPACEO_RELEASE_COMMIT:-}"
 RELEASE_TAG_OBJECT="${SPACEO_RELEASE_TAG_OBJECT:-}"
 RELEASE_WORKFLOW_REPOSITORY="${SPACEO_RELEASE_WORKFLOW_REPOSITORY:-}"
@@ -516,11 +515,9 @@ verify_candidate_record() {
     local artifact_name="$base_name.dmg"
     local checksum_name="$base_name.sha256"
     local checksum_signature_name="$base_name.sha256.sig"
-    local live_record_name="$base_name.live-qualification.txt"
     local artifact
     local checksum
     local checksum_signature
-    local retained_live_record
 
     [[ -f "$candidate_record" ]] || fail "candidate record does not exist: $candidate_record"
     candidate_record="$(cd "$(dirname "$candidate_record")" && pwd)/$(basename "$candidate_record")"
@@ -530,8 +527,8 @@ verify_candidate_record() {
 
     # Authenticate provenance before trusting any filenames or digests stored in the record.
     assert_candidate_signature "$candidate_record"
-    [[ "$(awk 'END { print NR }' "$candidate_record")" -eq 19 ]] \
-        || fail "candidate record must contain exactly the 19 version-one fields"
+    [[ "$(awk 'END { print NR }' "$candidate_record")" -eq 17 ]] \
+        || fail "candidate record must contain exactly the 17 version-one fields"
     [[ "$(candidate_value "$candidate_record" format)" == "spaceo-release-candidate-v1" ]] \
         || fail "unsupported release candidate record format"
     [[ "$(candidate_value "$candidate_record" version)" == "$VERSION" ]] \
@@ -546,8 +543,6 @@ verify_candidate_record() {
         || fail "candidate record names an unexpected checksum"
     [[ "$(candidate_value "$candidate_record" checksum_signature)" == "$checksum_signature_name" ]] \
         || fail "candidate record names an unexpected checksum signature"
-    [[ "$(candidate_value "$candidate_record" live_qualification_record)" == "$live_record_name" ]] \
-        || fail "candidate record names an unexpected live qualification record"
     [[ "$(candidate_value "$candidate_record" safe_verification)" == "passed" ]] \
         || fail "candidate record does not attest passing safe verification"
     [[ "$(candidate_value "$candidate_record" distribution_verification)" == "passed" ]] \
@@ -609,11 +604,8 @@ verify_candidate_record() {
     artifact="$candidate_dir/$artifact_name"
     checksum="$candidate_dir/$checksum_name"
     checksum_signature="$candidate_dir/$checksum_signature_name"
-    retained_live_record="$candidate_dir/$live_record_name"
     [[ -f "$artifact" && -f "$checksum" && -f "$checksum_signature" ]] \
         || fail "candidate bundle is missing a required distribution file"
-    [[ -f "$retained_live_record" ]] \
-        || fail "candidate bundle is missing its retained live qualification record"
     [[ "$(file_sha256 "$artifact")" == \
         "$(candidate_value "$candidate_record" artifact_sha256)" ]] \
         || fail "candidate artifact does not match its signed candidate record"
@@ -623,11 +615,7 @@ verify_candidate_record() {
     [[ "$(file_sha256 "$checksum_signature")" == \
         "$(candidate_value "$candidate_record" checksum_signature_sha256)" ]] \
         || fail "candidate checksum signature does not match its signed candidate record"
-    [[ "$(file_sha256 "$retained_live_record")" == \
-        "$(candidate_value "$candidate_record" live_qualification_record_sha256)" ]] \
-        || fail "live qualification evidence does not match its signed candidate record"
 
-    "$REPOSITORY_ROOT/scripts/test.sh" verify-live-record "$retained_live_record"
     verify_distribution "$artifact"
     echo "verified immutable SpaceO $VERSION release candidate: $candidate_record"
 }
@@ -641,14 +629,11 @@ create_candidate() {
     local artifact="$output_dir/$base_name.dmg"
     local checksum="$output_dir/$base_name.sha256"
     local checksum_signature="$output_dir/$base_name.sha256.sig"
-    local retained_live_record="$output_dir/$base_name.live-qualification.txt"
     local candidate_record="$output_dir/$base_name.candidate.txt"
     local candidate_signature="$candidate_record.sig"
-    local working_live_record="$WORK_DIR/$base_name.live-qualification.txt"
     local working_candidate_record="$WORK_DIR/$base_name.candidate.txt"
     local working_candidate_signature="$working_candidate_record.sig"
 
-    cp "$LIVE_QUALIFICATION_RECORD" "$working_live_record"
     {
         echo "format=spaceo-release-candidate-v1"
         echo "version=$VERSION"
@@ -662,8 +647,6 @@ create_candidate() {
         echo "checksum_sha256=$(file_sha256 "$checksum")"
         echo "checksum_signature=$(basename "$checksum_signature")"
         echo "checksum_signature_sha256=$(file_sha256 "$checksum_signature")"
-        echo "live_qualification_record=$(basename "$retained_live_record")"
-        echo "live_qualification_record_sha256=$(file_sha256 "$working_live_record")"
         echo "safe_verification=passed"
         echo "distribution_verification=passed"
         echo "workflow_repository=$RELEASE_WORKFLOW_REPOSITORY"
@@ -679,8 +662,7 @@ create_candidate() {
         "$working_candidate_record"
     assert_candidate_signature "$working_candidate_record"
 
-    rm -f "$retained_live_record" "$candidate_record" "$candidate_signature"
-    mv "$working_live_record" "$retained_live_record"
+    rm -f "$candidate_record" "$candidate_signature"
     mv "$working_candidate_record" "$candidate_record"
     mv "$working_candidate_signature" "$candidate_signature"
     verify_candidate_record "$candidate_record"

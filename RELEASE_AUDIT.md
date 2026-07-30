@@ -442,6 +442,13 @@ release candidate and is not targeted.
   release-security policy tests, workflow YAML parsing, and the non-mutating release check and
   dry run. The live suite was not executed as part of this change; 20 integration tests are
   discovered and no longer gated.
+- The release-candidate work merged after Round 9 reinstated the shell-side live gates, the
+  `Live qualification` workflow, and a `live_qualification_record` field in the signed candidate
+  record. Round 9 was reapplied on top of it: the candidate record is now 17 fields, candidate
+  creation and verification no longer read or retain a live record, and the workflow no longer
+  publishes one. `IntegrationTests` had no Swift-side opt-in during that window, so a bare
+  `swift test` would have run the live suite unguarded; that inconsistency is resolved by
+  removing the shell gates rather than restoring the skip.
 - Display lifecycle serialization, teardown verification against the online display inventory,
   and cursor/window recovery onto active non-SpaceO displays are unchanged. Removing the
   admission ceilings and graph refusals reopens the creation path implicated in root defect 1 of

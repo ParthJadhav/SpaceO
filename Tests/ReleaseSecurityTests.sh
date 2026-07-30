@@ -34,8 +34,6 @@ assert_contains "$RELEASE_WORKFLOW" "persist-credentials: false"
 assert_contains "$RELEASE_WORKFLOW" 'release_ref="refs/tags/$SPACEO_RELEASE_TAG"'
 assert_contains "$RELEASE_WORKFLOW" 'show-ref --verify --quiet "$release_ref"'
 assert_contains "$RELEASE_WORKFLOW" 'merge-base --is-ancestor "$release_commit" "$default_branch_commit"'
-assert_contains "$RELEASE_WORKFLOW" 'needs: live-qualification'
-assert_contains "$RELEASE_WORKFLOW" 'SPACEO_LIVE_QUALIFICATION_RECORD:'
 assert_contains "$RELEASE_WORKFLOW" 'environment: release-publication'
 assert_contains "$RELEASE_WORKFLOW" 'needs: candidate'
 assert_contains "$RELEASE_WORKFLOW" 'artifact-ids: ${{ needs.candidate.outputs.artifact_id }}'
@@ -72,7 +70,6 @@ assert_contains "$RELEASE_SCRIPT" "PUBLISHER_TEAM_ID=\"$PUBLISHER_TEAM_ID\""
 assert_contains "$RELEASE_SCRIPT" 'certificate leaf[subject.OU]'
 assert_contains "$RELEASE_SCRIPT" 'CHECKSUM_IDENTIFIER="dev.spaceo.release-checksum"'
 assert_contains "$RELEASE_SCRIPT" 'CANDIDATE_IDENTIFIER="dev.spaceo.release-candidate"'
-assert_contains "$RELEASE_SCRIPT" 'scripts/test.sh" verify-live-record'
 assert_contains "$RELEASE_SCRIPT" 'scripts/test.sh" safe'
 
 TEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-release-security.XXXXXX")"
@@ -278,25 +275,9 @@ TEST_RELEASE_VERSION="$version" \
     || fail "the authenticated publisher artifact did not preserve version verification"
 
 base_name="SpaceO-$version-macOS-arm64"
-live_record="$FIXTURE_DIR/$base_name.live-qualification.txt"
 candidate_record="$FIXTURE_DIR/$base_name.candidate.txt"
 candidate_signature="$candidate_record.sig"
 commit="$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)"
-cat > "$live_record" <<EOF
-format=spaceo-live-qualification-v1
-commit=$commit
-platform=Darwin
-os_version=fixture
-os_build=fixture
-architecture=arm64
-qualified_host_attested=1
-disposable_login_attested=1
-console_user_matches_runner=1
-integration_tests_discovered=1
-integration_tests_executed=1
-integration_tests_skipped=0
-status=passed
-EOF
 cat > "$candidate_record" <<EOF
 format=spaceo-release-candidate-v1
 version=$version
@@ -310,8 +291,6 @@ checksum=$(basename "$checksum")
 checksum_sha256=$(shasum -a 256 "$checksum" | awk '{ print $1 }')
 checksum_signature=$(basename "$signature")
 checksum_signature_sha256=$(shasum -a 256 "$signature" | awk '{ print $1 }')
-live_qualification_record=$(basename "$live_record")
-live_qualification_record_sha256=$(shasum -a 256 "$live_record" | awk '{ print $1 }')
 safe_verification=passed
 distribution_verification=passed
 workflow_repository=fixture/SpaceO
