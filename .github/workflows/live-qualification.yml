@@ -27,7 +27,7 @@ jobs:
     env:
       SPACEO_QUALIFICATION_REF: ${{ inputs.release_ref || format('refs/tags/{0}', inputs.release_tag) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ inputs.release_ref || format('refs/tags/{0}', inputs.release_tag) }}
           fetch-depth: 0
@@ -58,7 +58,7 @@ jobs:
 
       - name: Retain qualification record and test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         with:
           name: SpaceO-live-qualification
           path: |

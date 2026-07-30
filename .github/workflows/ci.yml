@@ -17,7 +17,7 @@ jobs:
       SPACEO_REQUIRED_XCODE_VERSION: "26.0.1"
       SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Require pinned release toolchain
         run: bash scripts/check-swift-toolchain.sh
       - name: Release configuration dry run
