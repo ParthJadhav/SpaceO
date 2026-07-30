@@ -12,13 +12,19 @@ jobs:
     # SpaceO ships for Apple Silicon. The versioned label avoids macos-latest architecture drift.
     runs-on: macos-15
     timeout-minutes: 15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.0.1.app/Contents/Developer
+      SPACEO_REQUIRED_XCODE_VERSION: "26.0.1"
+      SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
     steps:
       - uses: actions/checkout@v4
+      - name: Require pinned release toolchain
+        run: bash scripts/check-swift-toolchain.sh
       - name: Release configuration dry run
         run: |
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
-          bash -n scripts/make-viewer-app.sh scripts/release.sh scripts/test.sh
+          bash -n scripts/check-swift-toolchain.sh scripts/make-viewer-app.sh scripts/release.sh scripts/test.sh
           node --check scripts/mcp-smoke.mjs
           bash scripts/release.sh check
           bash scripts/release.sh dry-run

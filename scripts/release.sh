@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, sign, notarize, staple, and verify the public SpaceO macOS distribution.
+# Build, sign, notarize, staple, and verify a SpaceO macOS release candidate.
 #
 # Publication is deliberately credential-gated. Supply SPACEO_CODESIGN_IDENTITY plus either:
 #   - SPACEO_NOTARY_PROFILE (an existing keychain profile chosen by the releaser), or
@@ -16,6 +16,7 @@ PUBLISHER_TEAM_ID="75LRT8TRQY"
 CLI_IDENTIFIER="dev.spaceo.cli"
 VIEWER_IDENTIFIER="dev.spaceo.viewer"
 CHECKSUM_IDENTIFIER="dev.spaceo.release-checksum"
+CANDIDATE_IDENTIFIER="dev.spaceo.release-candidate"
 SWIFT="${SWIFT:-swift}"
 NODE="${NODE:-node}"
 RELEASE_ROOT="${SPACEO_RELEASE_DIR:-$REPOSITORY_ROOT/.release}"
@@ -24,6 +25,12 @@ NOTARY_PROFILE="${SPACEO_NOTARY_PROFILE:-}"
 NOTARY_KEY="${SPACEO_NOTARY_KEY:-}"
 NOTARY_KEY_ID="${SPACEO_NOTARY_KEY_ID:-}"
 NOTARY_ISSUER="${SPACEO_NOTARY_ISSUER:-}"
+LIVE_QUALIFICATION_RECORD="${SPACEO_LIVE_QUALIFICATION_RECORD:-}"
+RELEASE_COMMIT="${SPACEO_RELEASE_COMMIT:-}"
+RELEASE_TAG_OBJECT="${SPACEO_RELEASE_TAG_OBJECT:-}"
+RELEASE_WORKFLOW_REPOSITORY="${SPACEO_RELEASE_WORKFLOW_REPOSITORY:-}"
+RELEASE_WORKFLOW_RUN_ID="${SPACEO_RELEASE_WORKFLOW_RUN_ID:-}"
+RELEASE_WORKFLOW_RUN_ATTEMPT="${SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT:-}"
 NOTARY_ARGS=()
 ACTIVE_MOUNT=""
 WORK_DIR=""
@@ -51,12 +58,17 @@ Commands:
   check       Validate version consistency and required local tooling.
   dry-run     Show the versioned release plan and credential blockers; mutate nothing.
   preflight   Validate the Developer ID identity and deliberate notary credentials.
-  package     Build, test, sign, notarize, staple, and verify the release DMG.
+  package     Verify live qualification, then build, sign, notarize, staple, and verify.
+  candidate   Package and retain a signed provenance and verification record.
   verify      Authenticate and re-run checksum, staple, Gatekeeper, and version checks.
+  verify-candidate
+              Authenticate candidate provenance and re-verify its exact distribution.
 
-`package` and `preflight` fail closed unless SPACEO_CODESIGN_IDENTITY is an installed
-SpaceO publisher identity and one supported notary credential set is supplied. `verify`
-requires the adjacent publisher-signed .sha256 and .sha256.sig files.
+`package`, `candidate`, and `preflight` fail closed unless SPACEO_CODESIGN_IDENTITY is
+an installed SpaceO publisher identity and one supported notary credential set is
+supplied. `verify` requires the adjacent publisher-signed .sha256 and .sha256.sig
+files. `candidate` also requires immutable tag/workflow provenance in SPACEO_RELEASE_*
+and `verify-candidate` requires the resulting .candidate.txt path.
 USAGE
 }
 
@@ -258,6 +270,43 @@ assert_checksum_signature() {
         || fail "checksum is not signed by SpaceO publisher team $PUBLISHER_TEAM_ID"
 }
 
+assert_candidate_signature() {
+    local candidate_record="$1"
+    local signature="$candidate_record.sig"
+    local details
+    [[ -f "$signature" ]] || fail "candidate record signature does not exist: $signature"
+    codesign \
+        --verify \
+        --detached "$signature" \
+        --strict \
+        --verbose=2 \
+        -R "$(publisher_requirement "$CANDIDATE_IDENTIFIER")" \
+        "$candidate_record"
+    details="$(codesign --display --detached "$signature" --verbose=4 "$candidate_record" 2>&1)"
+    grep -F "Identifier=$CANDIDATE_IDENTIFIER" <<<"$details" >/dev/null \
+        || fail "candidate record signature has an unexpected identifier"
+    grep -F "Authority=Developer ID Application:" <<<"$details" >/dev/null \
+        || fail "candidate record is not signed by a Developer ID Application identity"
+    grep -F "Timestamp=" <<<"$details" >/dev/null \
+        || fail "candidate record signature has no secure timestamp"
+    grep -F "TeamIdentifier=$PUBLISHER_TEAM_ID" <<<"$details" >/dev/null \
+        || fail "candidate record is not signed by SpaceO publisher team $PUBLISHER_TEAM_ID"
+}
+
+file_sha256() {
+    shasum -a 256 "$1" | awk '{ print $1 }'
+}
+
+candidate_value() {
+    local record="$1"
+    local key="$2"
+    local matches
+    matches="$(grep -E "^${key}=" "$record" || true)"
+    [[ "$(printf '%s\n' "$matches" | grep -c . || true)" -eq 1 ]] \
+        || fail "candidate record must contain exactly one $key field"
+    printf '%s\n' "${matches#*=}"
+}
+
 verify_checksum_contents() {
     local artifact="$1"
     local checksum="$2"
@@ -433,6 +482,213 @@ package_distribution() {
     echo "checksum signature: $checksum_signature"
 }
 
+require_candidate_provenance() {
+    [[ "${SPACEO_RELEASE_TAG:-}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || fail "candidate creation requires SPACEO_RELEASE_TAG=vMAJOR.MINOR.PATCH"
+    [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] \
+        || fail "candidate creation requires a full lowercase SPACEO_RELEASE_COMMIT"
+    [[ "$RELEASE_TAG_OBJECT" =~ ^[0-9a-f]{40,64}$ ]] \
+        || fail "candidate creation requires a full lowercase SPACEO_RELEASE_TAG_OBJECT"
+    [[ "$RELEASE_WORKFLOW_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+        || fail "candidate creation requires SPACEO_RELEASE_WORKFLOW_REPOSITORY=owner/repository"
+    [[ "$RELEASE_WORKFLOW_RUN_ID" =~ ^[1-9][0-9]*$ ]] \
+        || fail "candidate creation requires a numeric SPACEO_RELEASE_WORKFLOW_RUN_ID"
+    [[ "$RELEASE_WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] \
+        || fail "candidate creation requires a numeric SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT"
+
+    require_command git
+    local release_ref="refs/tags/$SPACEO_RELEASE_TAG"
+    git -C "$REPOSITORY_ROOT" show-ref --verify --quiet "$release_ref" \
+        || fail "candidate source tag does not exist: $release_ref"
+    [[ "$(git -C "$REPOSITORY_ROOT" rev-parse "HEAD^{commit}")" == "$RELEASE_COMMIT" ]] \
+        || fail "candidate commit does not match the checked-out source"
+    [[ "$(git -C "$REPOSITORY_ROOT" rev-parse "$release_ref^{commit}")" == "$RELEASE_COMMIT" ]] \
+        || fail "candidate tag does not resolve to SPACEO_RELEASE_COMMIT"
+    [[ "$(git -C "$REPOSITORY_ROOT" rev-parse "$release_ref")" == "$RELEASE_TAG_OBJECT" ]] \
+        || fail "candidate tag object does not match SPACEO_RELEASE_TAG_OBJECT"
+}
+
+verify_candidate_record() {
+    local candidate_record="$1"
+    local candidate_dir
+    local base_name="SpaceO-$VERSION-macOS-arm64"
+    local expected_record="$base_name.candidate.txt"
+    local artifact_name="$base_name.dmg"
+    local checksum_name="$base_name.sha256"
+    local checksum_signature_name="$base_name.sha256.sig"
+    local live_record_name="$base_name.live-qualification.txt"
+    local artifact
+    local checksum
+    local checksum_signature
+    local retained_live_record
+
+    [[ -f "$candidate_record" ]] || fail "candidate record does not exist: $candidate_record"
+    candidate_record="$(cd "$(dirname "$candidate_record")" && pwd)/$(basename "$candidate_record")"
+    candidate_dir="$(dirname "$candidate_record")"
+    [[ "$(basename "$candidate_record")" == "$expected_record" ]] \
+        || fail "candidate record must be named $expected_record"
+
+    # Authenticate provenance before trusting any filenames or digests stored in the record.
+    assert_candidate_signature "$candidate_record"
+    [[ "$(awk 'END { print NR }' "$candidate_record")" -eq 19 ]] \
+        || fail "candidate record must contain exactly the 19 version-one fields"
+    [[ "$(candidate_value "$candidate_record" format)" == "spaceo-release-candidate-v1" ]] \
+        || fail "unsupported release candidate record format"
+    [[ "$(candidate_value "$candidate_record" version)" == "$VERSION" ]] \
+        || fail "candidate record version does not match VERSION"
+    [[ "$(candidate_value "$candidate_record" architecture)" == "arm64" ]] \
+        || fail "candidate record architecture is not arm64"
+    [[ "$(candidate_value "$candidate_record" tag)" == "v$VERSION" ]] \
+        || fail "candidate record tag does not match VERSION"
+    [[ "$(candidate_value "$candidate_record" artifact)" == "$artifact_name" ]] \
+        || fail "candidate record names an unexpected distribution artifact"
+    [[ "$(candidate_value "$candidate_record" checksum)" == "$checksum_name" ]] \
+        || fail "candidate record names an unexpected checksum"
+    [[ "$(candidate_value "$candidate_record" checksum_signature)" == "$checksum_signature_name" ]] \
+        || fail "candidate record names an unexpected checksum signature"
+    [[ "$(candidate_value "$candidate_record" live_qualification_record)" == "$live_record_name" ]] \
+        || fail "candidate record names an unexpected live qualification record"
+    [[ "$(candidate_value "$candidate_record" safe_verification)" == "passed" ]] \
+        || fail "candidate record does not attest passing safe verification"
+    [[ "$(candidate_value "$candidate_record" distribution_verification)" == "passed" ]] \
+        || fail "candidate record does not attest passing distribution verification"
+
+    local recorded_commit recorded_tag_object
+    recorded_commit="$(candidate_value "$candidate_record" commit)"
+    recorded_tag_object="$(candidate_value "$candidate_record" tag_object)"
+    [[ "$recorded_commit" =~ ^[0-9a-f]{40,64}$ ]] \
+        || fail "candidate record contains an invalid commit"
+    [[ "$recorded_tag_object" =~ ^[0-9a-f]{40,64}$ ]] \
+        || fail "candidate record contains an invalid tag object"
+    [[ "$(candidate_value "$candidate_record" workflow_repository)" =~ \
+        ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+        || fail "candidate record contains an invalid workflow repository"
+    [[ "$(candidate_value "$candidate_record" workflow_run_id)" =~ ^[1-9][0-9]*$ ]] \
+        || fail "candidate record contains an invalid workflow run ID"
+    [[ "$(candidate_value "$candidate_record" workflow_run_attempt)" =~ ^[1-9][0-9]*$ ]] \
+        || fail "candidate record contains an invalid workflow run attempt"
+
+    require_command git
+    local release_ref="refs/tags/v$VERSION"
+    git -C "$REPOSITORY_ROOT" show-ref --verify --quiet "$release_ref" \
+        || fail "candidate verification requires the immutable source tag $release_ref"
+    [[ "$(git -C "$REPOSITORY_ROOT" rev-parse "HEAD^{commit}")" == "$recorded_commit" ]] \
+        || fail "candidate record commit does not match the checked-out source"
+    [[ "$(git -C "$REPOSITORY_ROOT" rev-parse "$release_ref^{commit}")" == "$recorded_commit" ]] \
+        || fail "candidate record commit does not match the release tag"
+    [[ "$(git -C "$REPOSITORY_ROOT" rev-parse "$release_ref")" == "$recorded_tag_object" ]] \
+        || fail "candidate record tag object does not match the release tag"
+    if [[ -n "${SPACEO_RELEASE_TAG:-}" ]]; then
+        [[ "$(candidate_value "$candidate_record" tag)" == "$SPACEO_RELEASE_TAG" ]] \
+            || fail "candidate record does not match SPACEO_RELEASE_TAG"
+    fi
+    if [[ -n "$RELEASE_COMMIT" ]]; then
+        [[ "$recorded_commit" == "$RELEASE_COMMIT" ]] \
+            || fail "candidate record does not match SPACEO_RELEASE_COMMIT"
+    fi
+    if [[ -n "$RELEASE_TAG_OBJECT" ]]; then
+        [[ "$recorded_tag_object" == "$RELEASE_TAG_OBJECT" ]] \
+            || fail "candidate record does not match SPACEO_RELEASE_TAG_OBJECT"
+    fi
+    if [[ -n "$RELEASE_WORKFLOW_REPOSITORY" ]]; then
+        [[ "$(candidate_value "$candidate_record" workflow_repository)" == \
+            "$RELEASE_WORKFLOW_REPOSITORY" ]] \
+            || fail "candidate record does not match SPACEO_RELEASE_WORKFLOW_REPOSITORY"
+    fi
+    if [[ -n "$RELEASE_WORKFLOW_RUN_ID" ]]; then
+        [[ "$(candidate_value "$candidate_record" workflow_run_id)" == \
+            "$RELEASE_WORKFLOW_RUN_ID" ]] \
+            || fail "candidate record does not match SPACEO_RELEASE_WORKFLOW_RUN_ID"
+    fi
+    if [[ -n "$RELEASE_WORKFLOW_RUN_ATTEMPT" ]]; then
+        [[ "$(candidate_value "$candidate_record" workflow_run_attempt)" == \
+            "$RELEASE_WORKFLOW_RUN_ATTEMPT" ]] \
+            || fail "candidate record does not match SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT"
+    fi
+
+    artifact="$candidate_dir/$artifact_name"
+    checksum="$candidate_dir/$checksum_name"
+    checksum_signature="$candidate_dir/$checksum_signature_name"
+    retained_live_record="$candidate_dir/$live_record_name"
+    [[ -f "$artifact" && -f "$checksum" && -f "$checksum_signature" ]] \
+        || fail "candidate bundle is missing a required distribution file"
+    [[ -f "$retained_live_record" ]] \
+        || fail "candidate bundle is missing its retained live qualification record"
+    [[ "$(file_sha256 "$artifact")" == \
+        "$(candidate_value "$candidate_record" artifact_sha256)" ]] \
+        || fail "candidate artifact does not match its signed candidate record"
+    [[ "$(file_sha256 "$checksum")" == \
+        "$(candidate_value "$candidate_record" checksum_sha256)" ]] \
+        || fail "candidate checksum does not match its signed candidate record"
+    [[ "$(file_sha256 "$checksum_signature")" == \
+        "$(candidate_value "$candidate_record" checksum_signature_sha256)" ]] \
+        || fail "candidate checksum signature does not match its signed candidate record"
+    [[ "$(file_sha256 "$retained_live_record")" == \
+        "$(candidate_value "$candidate_record" live_qualification_record_sha256)" ]] \
+        || fail "live qualification evidence does not match its signed candidate record"
+
+    "$REPOSITORY_ROOT/scripts/test.sh" verify-live-record "$retained_live_record"
+    verify_distribution "$artifact"
+    echo "verified immutable SpaceO $VERSION release candidate: $candidate_record"
+}
+
+create_candidate() {
+    require_candidate_provenance
+    package_distribution
+
+    local base_name="SpaceO-$VERSION-macOS-arm64"
+    local output_dir="$RELEASE_ROOT/$VERSION"
+    local artifact="$output_dir/$base_name.dmg"
+    local checksum="$output_dir/$base_name.sha256"
+    local checksum_signature="$output_dir/$base_name.sha256.sig"
+    local retained_live_record="$output_dir/$base_name.live-qualification.txt"
+    local candidate_record="$output_dir/$base_name.candidate.txt"
+    local candidate_signature="$candidate_record.sig"
+    local working_live_record="$WORK_DIR/$base_name.live-qualification.txt"
+    local working_candidate_record="$WORK_DIR/$base_name.candidate.txt"
+    local working_candidate_signature="$working_candidate_record.sig"
+
+    cp "$LIVE_QUALIFICATION_RECORD" "$working_live_record"
+    {
+        echo "format=spaceo-release-candidate-v1"
+        echo "version=$VERSION"
+        echo "architecture=arm64"
+        echo "tag=$SPACEO_RELEASE_TAG"
+        echo "tag_object=$RELEASE_TAG_OBJECT"
+        echo "commit=$RELEASE_COMMIT"
+        echo "artifact=$(basename "$artifact")"
+        echo "artifact_sha256=$(file_sha256 "$artifact")"
+        echo "checksum=$(basename "$checksum")"
+        echo "checksum_sha256=$(file_sha256 "$checksum")"
+        echo "checksum_signature=$(basename "$checksum_signature")"
+        echo "checksum_signature_sha256=$(file_sha256 "$checksum_signature")"
+        echo "live_qualification_record=$(basename "$retained_live_record")"
+        echo "live_qualification_record_sha256=$(file_sha256 "$working_live_record")"
+        echo "safe_verification=passed"
+        echo "distribution_verification=passed"
+        echo "workflow_repository=$RELEASE_WORKFLOW_REPOSITORY"
+        echo "workflow_run_id=$RELEASE_WORKFLOW_RUN_ID"
+        echo "workflow_run_attempt=$RELEASE_WORKFLOW_RUN_ATTEMPT"
+    } > "$working_candidate_record"
+    codesign \
+        --force \
+        --identifier "$CANDIDATE_IDENTIFIER" \
+        --detached "$working_candidate_signature" \
+        --timestamp \
+        --sign "$SIGNING_IDENTITY" \
+        "$working_candidate_record"
+    assert_candidate_signature "$working_candidate_record"
+
+    rm -f "$retained_live_record" "$candidate_record" "$candidate_signature"
+    mv "$working_live_record" "$retained_live_record"
+    mv "$working_candidate_record" "$candidate_record"
+    mv "$working_candidate_signature" "$candidate_signature"
+    verify_candidate_record "$candidate_record"
+
+    echo "candidate record   : $candidate_record"
+    echo "candidate signature: $candidate_signature"
+}
+
 command="${1:-help}"
 case "$command" in
     check)
@@ -459,10 +715,18 @@ case "$command" in
     package)
         package_distribution
         ;;
+    candidate)
+        create_candidate
+        ;;
     verify)
         check_common
         [[ -n "${2:-}" ]] || fail "verify requires a .dmg path"
         verify_distribution "$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"
+        ;;
+    verify-candidate)
+        check_common
+        [[ -n "${2:-}" ]] || fail "verify-candidate requires a .candidate.txt path"
+        verify_candidate_record "$2"
         ;;
     help|-h|--help)
         usage

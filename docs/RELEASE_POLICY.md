@@ -65,6 +65,11 @@ date, and results. At minimum it must show:
 A skip, unknown required safety result, unexplained diagnostic, user-display disturbance, or
 qualification performed only by the implementer blocks public approval until independently
 resolved. Existing records under `docs/validation/` do not qualify a new artifact automatically.
+The automated commit-bound live record is a packaging prerequisite and is retained inside the
+candidate bundle, but it does not by itself prove that an independent person exercised the final
+DMG. That person must download the immutable candidate produced by the workflow, verify its
+candidate record and distribution, complete the intended-distribution checks above, and retain or
+immutably link that result before approving publication.
 
 ## Public-release approval gates
 
@@ -83,11 +88,22 @@ The release owner must record a go/no-go decision only after all of the followin
 - rollback/uninstall artifacts and instructions are available; and
 - the release owner explicitly approves publication after reviewing the evidence.
 
-Tag creation is the publication trigger in the current workflow, so approval must be recorded
-before pushing the tag. The protected `release` environment should require an authorized reviewer
-where repository settings support that control. The credentialed workflow must fail closed; a
-maintainer must not bypass a failed gate by uploading locally built artifacts or instructing users
-to disable Gatekeeper or SIP.
+Tag creation starts candidate construction; it is not permission to publish. The credentialed
+`candidate` job signs, notarizes, staples, verifies, and uploads one immutable GitHub Actions
+artifact. That bundle contains the DMG, its signed checksum, the retained commit-bound live record,
+and a Developer-ID-signed candidate record binding their digests to the exact commit, tag object,
+workflow repository, run, and attempt.
+
+The separate `publication` job is gated by the protected `release-publication` environment and
+must require an authorized reviewer in repository settings. It starts only after the candidate
+artifact exists, downloads that artifact by immutable artifact ID, authenticates and repeats its
+distribution verification, rechecks that the remote tag has not moved, and publishes those exact
+files without rebuilding or using signing/notarization credentials. The existing `release`
+environment may independently protect candidate signing credentials. Environment protection and
+secrets are repository configuration, not claims made by this repository.
+
+A maintainer must not bypass a failed gate by uploading locally built artifacts, rebuilding after
+approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 

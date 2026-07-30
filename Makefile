@@ -4,7 +4,8 @@ SWIFT ?= swift
 NODE ?= node
 
 .PHONY: build release test test-live verify-release install uninstall viewer \
-	release-check release-dry-run release-preflight release-package verify-distribution
+		release-check release-dry-run release-preflight release-package verify-distribution \
+		verify-release-candidate
 
 build:
 	$(SWIFT) build
@@ -51,3 +52,10 @@ verify-distribution:
 		exit 2; \
 	}
 	bash scripts/release.sh verify "$(ARTIFACT)"
+
+verify-release-candidate:
+	@test -n "$(CANDIDATE)" || { \
+		echo "usage: make verify-release-candidate CANDIDATE=.release/VERSION/SpaceO-VERSION-macOS-arm64.candidate.txt" >&2; \
+		exit 2; \
+	}
+	bash scripts/release.sh verify-candidate "$(CANDIDATE)"
