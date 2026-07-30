@@ -3,9 +3,10 @@
 ## Status
 
 Resolved. Ownerless displays were removed without deleting data or terminating the user's
-application sessions. Virtual-display support remains available, but the first productionization
-milestone reinstated bounded resource admission and fail-closed display-graph checks before and
-after every attachment.
+application sessions. The unconditional virtual-display and focus capability blocks were removed
+on 2026-07-27 after the lifecycle and input-route fixes were accepted. Bounded resource admission
+and fail-closed display-graph checks were briefly reinstated and then removed again on 2026-07-30
+by owner decision; the input-route and teardown fixes below remain in production.
 
 ## User-visible impact
 
@@ -90,16 +91,17 @@ after the display graph has recovered.
 
 ## Conditions for reopening release
 
-> **Updated 2026-07-30:** Display creation is bounded again. Mirroring, inactive or absent user
-> displays, framebuffer overlap, unreadable bounds, and ownerless SpaceO displays block creation;
-> the post-attach check removes a new display if attachment degrades the graph.
+> **Superseded 2026-07-30:** The owner directed removal of the product restrictions around display
+> creation and live testing. The safeguards below remain the historical incident response, not
+> current runtime policy. Current code reports display-graph anomalies without blocking creation,
+> imposes no resource ceilings, does not install a cursor fence, and permits control of physical
+> and virtual displays.
 
 The release was reopened with these changes:
 
 - The corrupting focus getters remain removed; route restoration is verified through public
   AppKit frontmost-application state.
-- Display lifecycle changes are serialized and hazardous display-graph observations block
-  attachment.
+- Display lifecycle changes are serialized and display-graph observations are diagnostic.
 - Teardown is verified against the online display inventory.
 - Cursor and window recovery only target active, non-SpaceO displays.
 - Live lifecycle and input suites run in the current graphical login without a policy gate.

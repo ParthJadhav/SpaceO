@@ -95,10 +95,9 @@ the auto-started daemon reads it:
 The MCP server starts the shared daemon on demand, so every agent on the machine pools the same
 agent displays instead of each spinning up its own.
 
-`spaceo doctor` and `spaceo pool` report current usage and the active resource budget. SpaceO
-validates display geometry and packing density before calling CoreGraphics, and refuses allocation
-when the bounded session, display, framebuffer, tile-size, creation-rate, or display-graph safety
-limits would be exceeded.
+`spaceo doctor` and `spaceo pool` report current display and session usage. SpaceO accepts any
+positive, technically representable display geometry and packing density; allocation failures
+from CoreGraphics or WindowServer are returned to the caller.
 
 Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`,
 `spaceo_session_heartbeat`, `spaceo_open_app`, `spaceo_read_screen`, `spaceo_click`,
@@ -155,10 +154,10 @@ display 35  2560x1600 at (1920,0)  3/4 tiles used  spaces=118
 
 Each session gets a non-overlapping tile and can only see and screenshot its own. `spaceo pool
 set N` changes the density for displays created afterwards — existing ones keep their layout,
-because re-tiling under a running agent would move its windows out from under it. Density and
-display size must fit the active resource budget and leave each tile at least 640×480 by default.
-If you do not pin `--display-size`, the daemon grows the framebuffer for the requested density
-until a budget limit is reached.
+because re-tiling under a running agent would move its windows out from under it. Any positive
+density is accepted. If you do not pin `--display-size`, the daemon grows the framebuffer for the
+requested density; if you do pin it, SpaceO honors the requested size even when the resulting
+tiles are very small.
 
 ## Requirements and support status
 
@@ -204,8 +203,8 @@ make verify-release
 `doctor` reports virtual-display, input-routing, capture, permission, and display-graph state. It
 never calls the incompatible private key/typing-focus getters.
 
-If `doctor` reports **orphaned displays**, new display creation is blocked until the display graph
-recovers. Stop retrying creation and reset the graphical login state as described by the diagnostic.
+If `doctor` reports **orphaned displays**, creation is still allowed. Treat the report as evidence
+that the current graphical login session may need a reset rather than as a software lockout.
 
 ## Viewer app
 
@@ -320,23 +319,18 @@ The default suite includes deterministic unit, recovery, persistence, concurrenc
 host-compatibility coverage. It explicitly excludes `IntegrationTests`: ordinary local and CI
 tests never create virtual displays, launch GUI applications, or send input.
 
-The live qualification target creates real virtual displays and drives installed applications.
-Run it only on an Apple Silicon host reserved for qualification, inside a disposable active GUI
-login with Accessibility and Screen Recording already granted:
+The live target creates real virtual displays and drives installed applications. It runs in the
+current graphical login and needs Accessibility and Screen Recording granted, with no opt-in
+environment variables:
 
 ```bash
-SPACEO_LIVE_QUALIFICATION=1 \
-SPACEO_QUALIFIED_HOST=1 \
-SPACEO_DISPOSABLE_LOGIN=1 \
 make test-live
 ```
 
 The live suite asserts the isolation invariant end-to-end, proves DOM clicks actually reach a
 Chromium page, exercises simultaneous displays, and fails if a test leaks a virtual display.
-The qualification command records the commit, platform prerequisites, discovered/executed counts,
-and result in `.build/spaceo-live-qualification.txt`. Any skipped test—including a missing runtime
-API, TCC grant, or installed application—fails qualification. A direct unqualified Swift test
-invocation skips this class without touching the live host; such skips are never release evidence.
+Tests report a skip only when an unavoidable technical prerequisite such as a required runtime
+API, TCC grant, or installed application is unavailable.
 
 ## Project policies
 
@@ -358,8 +352,8 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 
 | | |
 |---|---|
-| headless displays | bounded admission plus pre/post-attach display-graph safety checks |
-| tiling | budgeted density with minimum usable tiles, per-tile capture, spill when full |
+| headless displays | enabled without a pool count cap or display-graph preflight refusal |
+| tiling | any positive density, non-overlapping tiles, per-tile capture, spill when full |
 | Spaces | each display owns its own; windows placed there stay composited |
 | launch | isolated new application instances placed into the session tile |
 | late windows | watched and re-parked into the owning tile |
@@ -391,9 +385,9 @@ Known boundaries:
   while the physical displays were mirrored at high refresh left phantom virtual displays in
   the login session and left both physical displays online but inactive. A display sleep/wake
   removed the ownerless display IDs. The lifecycle remains serialized, one empty daemon display
-  is kept warm instead of churned, and resource admission limits display count, framebuffer
-  memory, and creation churn. Creation now refuses mirrored, inactive, overlapping, unreadable, or
-  ownerless display graphs and rolls back a new display if the post-attach graph is hazardous.
+  is kept warm instead of churned, and detach failures plus mirror/orphan/user-display state are
+  reported. By owner decision, those observations no longer refuse or roll back display creation,
+  and pointer fencing is absent rather than a creation precondition.
 - **Private API risk.** `dlsym` detects a missing name, not a changed calling convention or
   behavior. SpaceO avoids the corrupting private getters, verifies restoration through public
   AppKit state, and reports when a required class or symbol is absent.

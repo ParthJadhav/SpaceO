@@ -269,22 +269,20 @@ Status definitions:
 - Verification: `testSingleTileLookupDoesNotMaterializeAnUnboundedLayout` passes at a capacity of
   1,000,000,000, and `make verify-release` passes with 80 non-GUI tests plus the release MCP smoke.
 
-### SPAO-117 — Separate safe tests from explicit live qualification
+### SPAO-117 — Separate safe tests from live WindowServer tests
 
 - Priority: P0
 - Status: Done
-- Evidence: Running live WindowServer tests by default can mutate the user's display graph, launch
-  applications, and send input on an unqualified login; treating prerequisite skips as success
-  also produces invalid release evidence.
-- Impact: Ordinary development must stay safe while release qualification must execute every live
-  test under explicit, auditable host and login opt-ins.
+- Evidence: Running live WindowServer tests by default mutates the user's display graph, launches
+  applications, and sends input during ordinary development and CI.
+- Impact: `make test` must stay non-mutating while live coverage stays one command away.
 - Fix:
   - `make test` and CI use `scripts/test.sh safe` and exclude `IntegrationTests`.
-  - `make test-live` requires the live, qualified-host, and disposable-login opt-ins.
-  - Live qualification fails on any skipped test and emits an exact-commit record.
+  - `make test-live` runs `IntegrationTests` in the current graphical login with no opt-in
+    environment variables, host attestation, or qualification record.
 - Acceptance:
   - Safe tests never create displays, launch GUI applications, or send input.
-  - Missing APIs, TCC grants, applications, or test execution fail live qualification.
+  - Live tests skip only on an unmet technical prerequisite.
   - Teardown still verifies that no virtual display leaked.
 
 ### SPAO-118 — Make isolation verdicts truthful about unobservable input routes
@@ -469,19 +467,21 @@ Status definitions:
   - Add deterministic oversized, moved-after-placement, and notification-during-sweep regressions.
   - Janitor shutdown leaves no task, app, or display behind.
 
-### SPAO-128 — Enforce bounded WindowServer resource admission
+### SPAO-128 — Remove bounded WindowServer resource admission
 
 - Priority: P0
 - Status: Done
-- Evidence: Unbounded session, display, framebuffer, and creation churn can destabilize the user's
-  graphical login even when individual values are technically representable.
-- Impact: A retrying or oversized workload could reach WindowServer before SpaceO refused it.
-- Fix: Enforce finite default limits before stage construction and provide one higher, still-bounded
-  process-start operator budget that never bypasses display-graph safety.
+- Evidence: Bounded session, display, framebuffer, tile-size and creation-rate ceilings refused
+  workloads the platform would have accepted, and the display-graph preflight blocked creation
+  outright on a mirrored desk setup.
+- Impact: By owner decision SpaceO imposes no product-policy ceilings; CoreGraphics and
+  WindowServer failures are surfaced to the caller instead.
+- Fix: Removed the finite ceilings, the `SPACEO_UNSAFE_RESOURCE_LIMITS` operator budget, and the
+  pre/post-attach display-graph refusal and rollback.
 - Acceptance:
-  - Bound sessions, displays, framebuffer totals, edge size, tile size, and creation rate.
-  - Failed or rolled-back attachment attempts consume the rolling creation budget.
-  - Report usage against limits and clearly identify the bounded operator mode.
+  - Any positive, representable geometry and density reaches the platform API.
+  - Mirror, orphan, overlap, and physical-display state never blocks `session create`.
+  - Usage is still reported; teardown is still verified.
 
 ### SPAO-129 — Restore the user input route after every partial focus failure
 
@@ -588,9 +588,8 @@ Status definitions:
 
 ## Completed automated verification
 
-- 279 deterministic tests pass, including display-graph hazard classification, bounded resource
-  admission, and constant-space large-density tile lookup, without invoking live WindowServer
-  tests.
+- 274 deterministic tests pass, including unrestricted geometry/density admission and
+  constant-space large-density tile lookup, without invoking live WindowServer tests.
 - Clean debug build passes.
 - Release build and the 12-tool MCP protocol/validation/mutation-safety smoke pass.
 - Regression coverage exists for transport double-start, doctor/version JSON, bounded display

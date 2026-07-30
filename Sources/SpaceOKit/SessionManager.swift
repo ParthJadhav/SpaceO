@@ -1354,23 +1354,21 @@ public actor SessionManager {
         }
     }
 
-    /// The `pool` message: what is allocated, and how close it is to refusal.
+    /// The `pool` message: what is currently allocated.
     static func poolSummary(displays: Int,
                             sessions: Int,
                             perDisplay: Int,
                             usage: ResourceBudget.Usage,
                             budget: ResourceBudget) -> String {
         var lines = ["\(displays) display(s), \(sessions) session(s), \(perDisplay) per display"]
+        _ = budget
         let parts = [
-            "sessions \(usage.sessions)/\(budget.maximumSessions)",
-            "displays \(usage.displays)/\(budget.maximumDisplays)",
-            "pixels \(usage.pixels)/\(budget.maximumTotalPixels)",
-            "new displays this minute \(usage.creationsInLastMinute)/\(budget.maximumCreationsPerMinute)",
+            "sessions \(usage.sessions)",
+            "displays \(usage.displays)",
+            "pixels \(usage.pixels)",
+            "new displays this minute \(usage.creationsInLastMinute)",
         ]
-        lines.append("  budget: " + parts.joined(separator: ", "))
-        if budget.isUnsafe {
-            lines.append("  (bounded operator override is active)")
-        }
+        lines.append("  usage: " + parts.joined(separator: ", "))
         return lines.joined(separator: "\n")
     }
 

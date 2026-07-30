@@ -5,9 +5,8 @@ import CoreGraphics
 
 /// Tests that touch the real WindowServer.
 ///
-/// Discovery is inert unless all three live-qualification opt-ins are present. The qualification
-/// runner treats every skip as a failure, because missing TCC grants or applications are unmet
-/// release prerequisites rather than evidence. Every test asserts in `tearDown` that it left no
+/// These skip (rather than fail) when the host lacks the TCC grants, so the suite stays honest
+/// on a machine that has not been set up. Every test asserts in `tearDown` that it left no
 /// phantom display behind — a leaked virtual monitor is a user-visible defect, not a detail.
 final class IntegrationTests: XCTestCase {
 
@@ -15,16 +14,6 @@ final class IntegrationTests: XCTestCase {
     private var hasDisplayBaseline = false
 
     override func setUpWithError() throws {
-        let environment = ProcessInfo.processInfo.environment
-        try XCTSkipUnless(
-            environment["SPACEO_LIVE_QUALIFICATION"] == "1"
-                && environment["SPACEO_QUALIFIED_HOST"] == "1"
-                && environment["SPACEO_DISPOSABLE_LOGIN"] == "1",
-            """
-            Live integration tests are disabled. Use scripts/test.sh live from an explicitly \
-            qualified host and disposable macOS login.
-            """
-        )
         let capabilities = Capabilities()
         try XCTSkipUnless(capabilities.canDrive, """
             SpaceO cannot drive sessions on this host:

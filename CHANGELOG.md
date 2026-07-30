@@ -10,10 +10,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 - MIT open-source license.
 - Responsible-disclosure, security-boundary, support, and release-governance policies.
-- Bounded session, display, framebuffer, tile-size, and creation-rate admission with fail-closed
-  display-graph checks before and after virtual-display attachment.
-- Explicit safe and live test runners; live qualification records the exact commit and fails on
-  missing prerequisites or skipped integration tests.
+- Separate safe and live test runners: `make test` excludes `IntegrationTests`, `make test-live`
+  runs them against the real WindowServer with no opt-in environment variables.
 - Fail-closed Developer ID DMG packaging, notarization, stapling, checksum signing, and
   distribution verification automation.
 - Installation, upgrade, rollback, and uninstall guidance for verified release artifacts.
@@ -22,7 +20,7 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 - Public release now requires independent qualification of the exact signed artifact and explicit
   approval after all security and display-safety gates pass.
-- Release packaging requires a passing live qualification record for the exact `arm64` commit.
+- Release packaging fails closed outside `arm64`.
 
 `VERSION` currently contains `1.0.0`, but that number is not a claim that 1.0.0 has been publicly
 released. This section remains unreleased until the gates in

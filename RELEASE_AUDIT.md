@@ -1,8 +1,8 @@
 # SpaceO Release Audit
 
 This is the defect log for the end-to-end release-hardening pass started on 2026-07-26.
-Rounds 1–7 preserve the historical containment and policy record. Round 8 records the current
-bounded resource, display-graph, and explicit live-qualification posture.
+Rounds 1–8 preserve the historical containment and policy record. Round 9 records the current
+unrestricted creation, control, and live-testing posture.
 
 ## Environment
 
@@ -194,7 +194,7 @@ release candidate and is not targeted.
 ### RA-006, RA-010, and RA-011 — unsafe defaults and unbounded work
 
 - `make test` and CI run deterministic coverage without WindowServer, application, or input
-  mutation. `make test-live` requires three explicit qualification opt-ins and fails on skips.
+  mutation. `make test-live` runs the same suite against the real WindowServer on demand.
 - Clipboard tests use a private named pasteboard rather than the user's general pasteboard.
 - Every native input boundary caps clicks at three and text at 8,000 characters, requires finite
   coordinates, and validates keys, scroll ticks, PIDs, and window IDs.
@@ -405,6 +405,10 @@ release candidate and is not targeted.
 
 ### Round 8 — bounded production admission and release qualification
 
+> **Superseded by Round 9.** The admission ceilings, display-graph refusals, and live-qualification
+> gates described here were removed on 2026-07-30 by owner decision. The entry is retained as the
+> historical record of what was tried.
+
 - Restored finite session, display, aggregate framebuffer, minimum-tile, per-edge, and rolling
   creation-rate limits. A process-start operator override raises but never removes those limits.
 - Creation now fails closed for mirrored, inactive, overlapping, unreadable, or ownerless display
@@ -418,3 +422,27 @@ release candidate and is not targeted.
 - Release automation remains implemented but externally unqualified: signing, notarization,
   independent exact-artifact qualification, repository environment protection, and publication
   have not been performed by this integration.
+
+### Round 9 — removal of admission ceilings and live-test gates
+
+- Removed the pre-attach and post-attach display-graph refusals and the rollback of a newly
+  attached display. Mirroring, inactive or absent user displays, framebuffer overlap, unreadable
+  bounds, and ownerless SpaceO displays are reported by `doctor` and never block creation.
+- Removed the finite session, display, framebuffer pixel/byte, per-edge, minimum-tile, and
+  creation-rate ceilings, along with the `SPACEO_UNSAFE_RESOURCE_LIMITS` operator budget. Only
+  structural geometry validity remains: positive, finite, whole-pixel, UInt32-representable
+  dimensions and a layout-representable density.
+- Removed the `SPACEO_LIVE_QUALIFICATION`, `SPACEO_QUALIFIED_HOST`, and `SPACEO_DISPOSABLE_LOGIN`
+  opt-ins and the console-user attestation. `make test-live` runs `IntegrationTests` in the
+  current graphical login; `make test` still excludes them.
+- Removed the commit-bound live qualification record, its emission and verification in
+  `scripts/test.sh`, the `require_live_qualification` gate in `scripts/release.sh`, the
+  `Live qualification` workflow, and the release workflow's dependency on it.
+- Re-verified: 274 deterministic tests, clean debug and optimized builds, the 13-tool MCP smoke,
+  release-security policy tests, workflow YAML parsing, and the non-mutating release check and
+  dry run. The live suite was not executed as part of this change; 20 integration tests are
+  discovered and no longer gated.
+- Display lifecycle serialization, teardown verification against the online display inventory,
+  and cursor/window recovery onto active non-SpaceO displays are unchanged. Removing the
+  admission ceilings and graph refusals reopens the creation path implicated in root defect 1 of
+  the 2026-07-26 incident; this was an explicit owner decision.

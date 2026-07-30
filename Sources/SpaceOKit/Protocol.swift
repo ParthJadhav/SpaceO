@@ -180,7 +180,7 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var minimumTileWidth: Int
     public var minimumTileHeight: Int
     public var maximumDisplayEdge: Int
-    /// Whether the higher, still-bounded process-start operator budget is active.
+    /// Retained for wire compatibility; unrestricted runtime operation reports `false`.
     public var unsafeOperatorMode: Bool
 
     public init(_ budget: ResourceBudget) {

@@ -36,7 +36,7 @@ release.
 
 A validation record is evidence, not a permanent host allowlist. Conversely, runtime discovery
 does not make an untested host a supported release target. Expanding support to another
-architecture requires its own build, signed-artifact verification, live qualification record,
+architecture requires its own build, signed-artifact verification, live qualification,
 support-policy update, and maintainer approval. A universal DMG may be introduced only after both
 slices and the combined artifact are independently verified.
 

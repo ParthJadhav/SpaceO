@@ -135,12 +135,10 @@ public final class DisplayPool {
                                 usage: usageLocked())
 
         nextDisplayNumber = nextDisplayNumber == Int.max ? 1 : nextDisplayNumber + 1
-        // Count the attempt before crossing into the factory. A failed or rolled-back attach still
-        // churned the WindowServer and must consume the rolling rate budget.
-        recentCreations.append(Date())
         let stage = try stageFactory("SpaceO display \(nextDisplayNumber)",
                                      dimensions.width, dimensions.height, hiDPI)
         AgentActivity.claim(spaces: stage.spaces)
+        recentCreations.append(Date())
 
         let occupancy = Occupancy(stage: stage,
                                   capacity: sessionsPerDisplay,

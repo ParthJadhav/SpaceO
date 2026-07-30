@@ -32,14 +32,12 @@ Run the deterministic suite with:
 make test
 ```
 
-Run the focused WindowServer suite only on a reserved Apple Silicon qualification host, in a
-disposable active GUI login with the required TCC grants:
+Run the focused WindowServer suite with:
 
 ```bash
-SPACEO_LIVE_QUALIFICATION=1 \
-SPACEO_QUALIFIED_HOST=1 \
-SPACEO_DISPOSABLE_LOGIN=1 \
 make test-live
 ```
 
-Live qualification fails when a technical prerequisite is missing or any discovered test skips.
+Live tests run in the current graphical login. A case may skip only when a technical prerequisite
+such as an absent API, missing TCC grant, or unavailable target application prevents the tested
+operation.
