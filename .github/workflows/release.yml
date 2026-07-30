@@ -1,4 +1,4 @@
-name: Signed release
+name: Signed release candidate and publication
 
 on:
   push:
@@ -22,15 +22,28 @@ jobs:
     with:
       release_ref: ${{ github.event_name == 'push' && github.ref || format('refs/tags/{0}', inputs.release_tag) }}
 
-  distribution:
+  candidate:
     needs: live-qualification
     # macos-15 is an Apple Silicon image; the script also fails if the architecture drifts.
     runs-on: macos-15
     timeout-minutes: 45
+    # This existing credential boundary may protect signing/notarization. Publication has its own
+    # post-artifact environment below and receives none of these secrets.
     environment: release
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      tag: ${{ steps.source.outputs.tag }}
+      tag_object: ${{ steps.source.outputs.tag_object }}
+      commit: ${{ steps.source.outputs.commit }}
+      candidate_name: ${{ steps.package.outputs.candidate_name }}
+      artifact_id: ${{ steps.retain.outputs.artifact-id }}
+      artifact_digest: ${{ steps.retain.outputs.artifact-digest }}
     env:
+      DEVELOPER_DIR: /Applications/Xcode_26.0.1.app/Contents/Developer
+      SPACEO_REQUIRED_XCODE_VERSION: "26.0.1"
+      SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
       SPACEO_RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +54,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
+
+      - name: Require pinned release toolchain
+        run: bash scripts/check-swift-toolchain.sh
 
       - name: Validate immutable release source
         id: source
@@ -74,7 +90,9 @@ jobs:
             echo "error: release commit is not contained in $GITHUB_DEFAULT_BRANCH" >&2
             exit 1
           }
+          echo "tag=$SPACEO_RELEASE_TAG" >> "$GITHUB_OUTPUT"
           echo "tag_object=$release_tag_object" >> "$GITHUB_OUTPUT"
+          echo "commit=$release_commit" >> "$GITHUB_OUTPUT"
 
       - name: Validate release policy, tag, and repository version
         run: |
@@ -116,7 +134,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build, sign, notarize, staple, and verify
+      - name: Build and qualify immutable release candidate
         id: package
         env:
           CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
@@ -126,6 +144,11 @@ jobs:
           SPACEO_NOTARY_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
           SPACEO_NOTARY_ISSUER: ${{ secrets.NOTARY_API_ISSUER_ID }}
           SPACEO_LIVE_QUALIFICATION_RECORD: ${{ runner.temp }}/spaceo-live-qualification/spaceo-live-qualification.txt
+          SPACEO_RELEASE_COMMIT: ${{ steps.source.outputs.commit }}
+          SPACEO_RELEASE_TAG_OBJECT: ${{ steps.source.outputs.tag_object }}
+          SPACEO_RELEASE_WORKFLOW_REPOSITORY: ${{ github.repository }}
+          SPACEO_RELEASE_WORKFLOW_RUN_ID: ${{ github.run_id }}
+          SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           certificate_path="$RUNNER_TEMP/spaceo-developer-id.p12"
@@ -157,46 +180,128 @@ jobs:
             -k "$keychain_password" \
             "$keychain_path" >/dev/null
 
-          SPACEO_NOTARY_KEY="$notary_key_path" bash scripts/release.sh package
+          SPACEO_NOTARY_KEY="$notary_key_path" bash scripts/release.sh candidate
 
           version="$(tr -d '\r\n' < VERSION)"
           architecture="$(uname -m)"
-          artifact=".release/$version/SpaceO-$version-macOS-$architecture.dmg"
-          checksum=".release/$version/SpaceO-$version-macOS-$architecture.sha256"
-          signature="$checksum.sig"
-          [[ -f "$artifact" && -f "$checksum" && -f "$signature" ]]
+          base=".release/$version/SpaceO-$version-macOS-$architecture"
+          artifact="$base.dmg"
+          checksum="$base.sha256"
+          checksum_signature="$checksum.sig"
+          live_record="$base.live-qualification.txt"
+          candidate_record="$base.candidate.txt"
+          candidate_signature="$candidate_record.sig"
+          test -f "$artifact"
+          test -f "$checksum"
+          test -f "$checksum_signature"
+          test -f "$live_record"
+          test -f "$candidate_record"
+          test -f "$candidate_signature"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
-          echo "signature=$signature" >> "$GITHUB_OUTPUT"
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "candidate_name=SpaceO-candidate-$version-${{ steps.source.outputs.tag_object }}-${{ github.run_id }}-${{ github.run_attempt }}" \
+            >> "$GITHUB_OUTPUT"
 
-      - name: Retain verified workflow artifacts
+      - name: Retain immutable candidate and verification metadata
+        id: retain
         uses: actions/upload-artifact@v4
         with:
-          name: SpaceO-${{ steps.package.outputs.version }}-macOS
+          name: ${{ steps.package.outputs.candidate_name }}
           path: |
-            ${{ steps.package.outputs.artifact }}
-            ${{ steps.package.outputs.checksum }}
-            ${{ steps.package.outputs.signature }}
+            ${{ steps.package.outputs.base }}.dmg
+            ${{ steps.package.outputs.base }}.sha256
+            ${{ steps.package.outputs.base }}.sha256.sig
+            ${{ steps.package.outputs.base }}.live-qualification.txt
+            ${{ steps.package.outputs.base }}.candidate.txt
+            ${{ steps.package.outputs.base }}.candidate.txt.sig
           if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 90
 
-      - name: Publish tagged release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  publication:
+    needs: candidate
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    timeout-minutes: 20
+    # Configure required reviewers on this environment. Approval occurs only after the immutable
+    # candidate artifact exists, and this job never receives signing or notarization credentials.
+    environment: release-publication
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.0.1.app/Contents/Developer
+      SPACEO_REQUIRED_XCODE_VERSION: "26.0.1"
+      SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
+      SPACEO_RELEASE_TAG: ${{ needs.candidate.outputs.tag }}
+      SPACEO_RELEASE_COMMIT: ${{ needs.candidate.outputs.commit }}
+      SPACEO_RELEASE_TAG_OBJECT: ${{ needs.candidate.outputs.tag_object }}
+      SPACEO_RELEASE_WORKFLOW_REPOSITORY: ${{ github.repository }}
+      SPACEO_RELEASE_WORKFLOW_RUN_ID: ${{ github.run_id }}
+      SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.candidate.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Require pinned release toolchain
+        run: bash scripts/check-swift-toolchain.sh
+
+      - name: Revalidate immutable publication source
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_TAG_OBJECT: ${{ steps.source.outputs.tag_object }}
         run: |
+          set -euo pipefail
+          release_ref="refs/tags/$SPACEO_RELEASE_TAG"
+          test "$(git rev-parse "HEAD^{commit}")" = "$SPACEO_RELEASE_COMMIT"
+          test "$(git rev-parse "$release_ref^{commit}")" = "$SPACEO_RELEASE_COMMIT"
+          test "$(git rev-parse "$release_ref")" = "$SPACEO_RELEASE_TAG_OBJECT"
           remote_tag_object="$(
-            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq .object.sha
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$SPACEO_RELEASE_TAG" --jq .object.sha
           )"
-          [[ "$remote_tag_object" == "$EXPECTED_TAG_OBJECT" ]] || {
-            echo "error: release tag moved after source validation" >&2
+          test "$remote_tag_object" = "$SPACEO_RELEASE_TAG_OBJECT"
+
+      - name: Download exact immutable candidate by artifact ID
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact_id }}
+          path: ${{ runner.temp }}/spaceo-release-candidate
+
+      - name: Independently verify retained candidate
+        env:
+          EXPECTED_ARTIFACT_DIGEST: ${{ needs.candidate.outputs.artifact_digest }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          bash Tests/ReleaseSecurityTests.sh
+          version="$(tr -d '\r\n' < VERSION)"
+          candidate_record="$RUNNER_TEMP/spaceo-release-candidate/SpaceO-$version-macOS-arm64.candidate.txt"
+          bash scripts/release.sh verify-candidate "$candidate_record"
+
+      - name: Publish already-qualified candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          remote_tag_object="$(
+            gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$SPACEO_RELEASE_TAG" --jq .object.sha
+          )"
+          [[ "$remote_tag_object" == "$SPACEO_RELEASE_TAG_OBJECT" ]] || {
+            echo "error: release tag moved after candidate qualification" >&2
             exit 1
           }
-          gh release create "$GITHUB_REF_NAME" \
-            "${{ steps.package.outputs.artifact }}" \
-            "${{ steps.package.outputs.checksum }}" \
-            "${{ steps.package.outputs.signature }}" \
+          version="$(tr -d '\r\n' < VERSION)"
+          base="$RUNNER_TEMP/spaceo-release-candidate/SpaceO-$version-macOS-arm64"
+          gh release create "$SPACEO_RELEASE_TAG" \
+            "$base.dmg" \
+            "$base.sha256" \
+            "$base.sha256.sig" \
+            "$base.live-qualification.txt" \
+            "$base.candidate.txt" \
+            "$base.candidate.txt.sig" \
             --verify-tag \
             --generate-notes \
-            --title "SpaceO ${{ steps.package.outputs.version }}"
+            --title "SpaceO $version"

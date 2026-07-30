@@ -219,13 +219,16 @@ Artifacts are written under `.release/VERSION/` as a DMG, checksum, and detached
 signature. `make verify-distribution ARTIFACT=...` requires all three and repeats the final
 integrity and trust checks without publishing.
 
-The `Signed release` GitHub Actions workflow first calls the separate `Live qualification`
-workflow on a self-hosted runner labelled `spaceo-live-qualified`. The `live-qualification`
-environment must supply `SPACEO_QUALIFIED_HOST=1` and `SPACEO_DISPOSABLE_LOGIN=1`; repository
-configuration must independently enforce any desired reviewers or protection. The packaging job
-cannot start until the live record for its exact tag commit is downloaded and verified.
+The `Signed release candidate and publication` GitHub Actions workflow first calls the separate
+`Live qualification` workflow on a self-hosted runner labelled `spaceo-live-qualified`. The
+`live-qualification` environment must supply `SPACEO_QUALIFIED_HOST=1` and
+`SPACEO_DISPOSABLE_LOGIN=1`; repository configuration must independently enforce any desired
+reviewers or protection. Candidate packaging cannot start until the live record for its exact tag
+commit is downloaded and verified.
 
-The packaging job then uses the same release script. It requires these repository or
+The `candidate` job then uses the same release script. Hosted build and release jobs select Xcode
+26.0.1 / Swift 6.2 explicitly and fail before tests if the runner no longer provides that exact
+compatible toolchain. Candidate creation requires these repository or `release`
 protected-environment secrets:
 
 - `DEVELOPER_ID_APPLICATION_P12_BASE64`
@@ -235,12 +238,27 @@ protected-environment secrets:
 - `NOTARY_API_KEY_ID`
 - `NOTARY_API_ISSUER_ID`
 
-The workflow imports credentials into an ephemeral keychain, removes the temporary key and
-certificate files on exit, and reaches the GitHub release publication step only after the full
-package verification succeeds. Tag pushes publish. A manual dispatch validates its source under
-`refs/tags/`, rejects branches and commits not contained in the default branch, packages the
-explicit tag, and only retains the verified workflow artifacts.
+The workflow imports credentials into an ephemeral keychain and removes the temporary key and
+certificate files on exit. After full verification it uploads an immutable candidate artifact
+containing the DMG, checksum and detached signature, retained live record, and a signed
+`.candidate.txt` record. That record binds every retained file digest to the version, arm64
+architecture, commit, tag object, repository, workflow run, and attempt. A manual dispatch
+validates its source under `refs/tags/`, rejects branches and commits not contained in the default
+branch, packages the explicit tag, and stops after retaining this candidate.
 
-Because a tag push is the publication trigger, record the independent qualification and explicit
-release-owner approval before pushing the tag. A successful workflow proves its automated gates;
-it does not retroactively supply missing human qualification.
+A tag push also creates a waiting `publication` job. Before approving its protected
+`release-publication` environment, an independent reviewer must download that exact candidate,
+run:
+
+```bash
+make verify-release-candidate \
+  CANDIDATE=/path/to/SpaceO-VERSION-macOS-arm64.candidate.txt
+```
+
+and complete and retain the intended-distribution qualification required by the release policy.
+The automated commit-bound live record in the bundle remains required, but does not substitute for
+that post-artifact human qualification. After approval, the publication job downloads the
+candidate by immutable artifact ID, re-authenticates the signed candidate metadata, repeats the
+fresh-mount distribution checks, and verifies the remote tag object before publishing those exact
+files. It has no signing or notarization secrets and performs no build. Configure required
+reviewers on `release-publication`; the repository cannot configure or attest that protection.
