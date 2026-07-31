@@ -170,6 +170,7 @@ public struct DurableSessionApp: Codable, Sendable, Equatable {
     public var url: URL
     public var devToolsPort: Int?
     public var temporaryProfile: URL?
+    public var temporaryControlRoot: URL?
 
     public init(
         identity: ProcessIdentity,
@@ -178,7 +179,8 @@ public struct DurableSessionApp: Codable, Sendable, Equatable {
         name: String,
         url: URL,
         devToolsPort: Int? = nil,
-        temporaryProfile: URL? = nil
+        temporaryProfile: URL? = nil,
+        temporaryControlRoot: URL? = nil
     ) {
         self.identity = identity
         self.provenance = provenance
@@ -187,6 +189,7 @@ public struct DurableSessionApp: Codable, Sendable, Equatable {
         self.url = url
         self.devToolsPort = devToolsPort
         self.temporaryProfile = temporaryProfile
+        self.temporaryControlRoot = temporaryControlRoot
     }
 }
 
@@ -666,10 +669,16 @@ public final class SessionStore: @unchecked Sendable {
                     throw SessionStoreError.invalidLedger(
                         "session '\(id)' contains a non-file temporary profile URL")
                 }
-                if app.provenance == .adopted,
-                   app.devToolsPort != nil || app.temporaryProfile != nil {
+                if let root = app.temporaryControlRoot, !root.isFileURL {
                     throw SessionStoreError.invalidLedger(
-                        "adopted app \(app.identity) cannot own launch-only browser state")
+                        "session '\(id)' contains a non-file temporary control root URL")
+                }
+                if app.provenance == .adopted,
+                   app.devToolsPort != nil
+                    || app.temporaryProfile != nil
+                    || app.temporaryControlRoot != nil {
+                    throw SessionStoreError.invalidLedger(
+                        "adopted app \(app.identity) cannot own launch-only private state")
                 }
             }
         }

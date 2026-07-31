@@ -172,11 +172,13 @@ let app = try await session.launch(app: appURL, opening: [fileURL])   // placed 
 - Some apps activate themselves regardless of `activates = false` (Electron shells calling
   `NSApp.activate`). SpaceO cannot prevent that, so it hands the user's frontmost app straight
   back and reports that it had to — a blip rather than a state change.
-- Electron renderer control is not treated as Chromium browser control by default. On the
-  verification host, a private-profile Cursor launch with remote debugging creates no window
-  while backgrounded; foregrounding it creates the renderer but violates the invariant above.
-  The conformance harness therefore records SPAO-179 as blocked instead of accepting a
-  successful-return/no-effect pointer action.
+- Electron renderer control is not treated as Chromium browser control by default. A
+  private-profile Cursor launch with remote debugging creates no window while backgrounded, and
+  foregrounding it to obtain one violates the invariant above. VS Code-family bundles instead
+  receive a per-launch semantic editor adapter from a private temporary extension directory. The
+  adapter never activates the app, authenticates over a private Unix socket, and declares scroll
+  success only when the editor's visible range changes. The MCP conformance harness separately
+  requires rendered pixels to change.
 
 ### 3.3 Input — `InputRouter`
 
@@ -217,6 +219,25 @@ synthetic event, but SpaceO does not turn that prior expectation into an admissi
 Input priming still captures and restores the user's route when possible. Priming is best-effort:
 an unavailable focus route does not block direct per-PID delivery and is not treated as a
 display- or application-class restriction.
+
+### 3.3a VS Code-family Electron editors
+
+VS Code-family Electron editors ignore background synthetic wheel events, and their macOS
+accessibility tree exposes only a 1×1 screen-reader proxy rather than a settable editor scroll
+area. `AppLauncher` recognizes the exact VS Code bundle shape and supplies an isolated
+`--extensions-dir` containing SpaceO's embedded semantic adapter. The adapter listens on a
+per-launch `0600` Unix socket beneath a `0700` temporary root and accepts a live-memory-only
+token. It calls VS Code's `editorScroll` command and returns the editor's visible ranges before
+and after the command.
+
+`SessionManager` uses this channel only for an exact owned process with one represented window,
+no modifiers, no horizontal delta, and a point whose AX ancestry contains the code-editor marker
+in that exact window. The adapter also requires exactly one visible active editor, avoiding a
+split-pane request scrolling the wrong editor. `ElectronEditorBridge` independently validates
+socket type, ownership and permissions, bounds messages to 16 KiB, and refuses a response without
+a real visible-range change. The temporary root is durably recorded for crash cleanup, but the
+credential is never written to the session journal. Non-VS Code Electron renderers and hover/drag
+remain on the ordinary per-PID path and are not claimed as effect-confirmed.
 
 ### 3.3b Web content — `ChromiumBridge`
 

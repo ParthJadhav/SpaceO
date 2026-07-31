@@ -65,6 +65,9 @@ final class SessionStoreTests: XCTestCase {
             devToolsPort: 49_123,
             temporaryProfile: URL(
                 fileURLWithPath: "/private/tmp/spaceo-browser-test-profile",
+                isDirectory: true),
+            temporaryControlRoot: URL(
+                fileURLWithPath: "/private/tmp/spaceo-e-test-control",
                 isDirectory: true))
         let owned = DurableSessionRecord(
             id: "\(sessionPrefix)-1",

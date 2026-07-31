@@ -520,7 +520,8 @@ public actor SessionManager {
                         name: app.name,
                         url: app.url,
                         devToolsPort: app.devToolsPort,
-                        temporaryProfile: app.temporaryProfile)
+                        temporaryProfile: app.temporaryProfile,
+                        temporaryControlRoot: app.temporaryControlRoot)
                 }
                 .sorted {
                     if $0.identity.pid != $1.identity.pid {
@@ -1296,8 +1297,38 @@ public actor SessionManager {
                 switch request.cmd {
                 case "scroll":
                     let dy = request.dy ?? 0
-                    try InputRouter.scroll(window, at: at, dx: request.dx ?? 0, dy: dy,
-                                           ticks: request.ticks ?? 1, modifiers: modifiers)
+                    let dx = request.dx ?? 0
+                    let ticks = request.ticks ?? 1
+                    if let editorBridge = session.electronEditorBridge(for: window) {
+                        guard modifiers.isEmpty else {
+                            throw SpaceOError.badRequest(
+                                "modifier-held Electron editor scrolling is unsupported")
+                        }
+                        guard dx == 0 else {
+                            throw SpaceOError.unsupportedTarget(
+                                "the semantic Electron editor channel currently supports "
+                                    + "vertical scrolling only")
+                        }
+                        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+                        let global = try InputRouter.globalPoint(
+                            at, in: window, bounds: bounds, what: "scroll")
+                        guard AX.textEditor(
+                            at: global,
+                            in: window.pid,
+                            windowID: window.windowID) != nil else {
+                            throw SpaceOError.unsupportedTarget(
+                                "the Electron control point is not inside the active text editor")
+                        }
+                        try await editorBridge.scroll(deltaY: Int(dy), pages: ticks)
+                    } else {
+                        try InputRouter.scroll(
+                            window,
+                            at: at,
+                            dx: dx,
+                            dy: dy,
+                            ticks: ticks,
+                            modifiers: modifiers)
+                    }
                 case "move":
                     try InputRouter.move(window, to: at, modifiers: modifiers)
                 default:

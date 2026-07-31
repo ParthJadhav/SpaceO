@@ -2,6 +2,16 @@ import Foundation
 import AppKit
 import CoreGraphics
 
+/// Private, per-launch control endpoint for a VS Code-family Electron renderer.
+///
+/// The token is intentionally live-memory-only. The root is persisted separately so crash
+/// recovery can remove it after terminating an owned survivor without writing the credential
+/// to the session journal.
+public struct ElectronControlEndpoint: Sendable, Equatable {
+    public let socket: URL
+    public let token: String
+}
+
 /// An application SpaceO started (or adopted) on behalf of an agent.
 public struct LaunchedApp: Sendable, Equatable {
     public let pid: pid_t
@@ -20,6 +30,10 @@ public struct LaunchedApp: Sendable, Equatable {
     public var devToolsPort: Int?
     /// Private Chromium profile created for this app. Removed after the process exits.
     public var temporaryProfile: URL?
+    /// Semantic renderer channel for a VS Code-family Electron app SpaceO launched.
+    public var electronControl: ElectronControlEndpoint? = nil
+    /// Private extension/socket root. Unlike the token, this is safe to persist for cleanup.
+    public var temporaryControlRoot: URL? = nil
 }
 
 /// Starts applications without activating them.
@@ -27,6 +41,12 @@ public struct LaunchedApp: Sendable, Equatable {
 /// `activates = false` is what keeps the menu bar with the user. Combined with immediate
 /// relocation onto the stage, the app never meaningfully appears on the user's screen.
 public enum AppLauncher {
+
+    private struct PreparedElectronControl {
+        let root: URL
+        let extensionsDirectory: URL
+        let endpoint: ElectronControlEndpoint
+    }
 
     /// Launch `appURL` (optionally opening `files`) and place all its windows in `region`.
     ///
@@ -77,6 +97,8 @@ public enum AppLauncher {
         // so we are not attaching to — or disturbing — the user's own browser and its cookies.
         var devToolsPort: Int?
         var temporaryProfile: URL?
+        var electronControl: ElectronControlEndpoint?
+        var temporaryControlRoot: URL?
         if isChromiumFamily(appURL) {
             let profile = FileManager.default.temporaryDirectory
                 .appendingPathComponent("spaceo-browser-\(getpid())-\(UUID().uuidString)",
@@ -102,6 +124,26 @@ public enum AppLauncher {
                 "--disable-session-crashed-bubble",
             ]
             temporaryProfile = profile
+        } else if isVSCodeElectronFamily(appURL) {
+            let prepared: PreparedElectronControl
+            do {
+                prepared = try prepareElectronControl()
+            } catch {
+                throw SpaceOError.launchFailed(
+                    "could not prepare the private Electron controller: "
+                        + error.localizedDescription)
+            }
+            configuration.arguments = [
+                "--extensions-dir=\(prepared.extensionsDirectory.path)",
+            ]
+            var environment = ProcessInfo.processInfo.environment
+            environment[ElectronControlAssets.socketEnvironmentKey] =
+                prepared.endpoint.socket.path
+            environment[ElectronControlAssets.tokenEnvironmentKey] =
+                prepared.endpoint.token
+            configuration.environment = environment
+            electronControl = prepared.endpoint
+            temporaryControlRoot = prepared.root
         }
 
         // Two independent tests for "this process is not ours", because the PID snapshot alone
@@ -123,12 +165,14 @@ public enum AppLauncher {
             }
         } catch {
             removeTemporaryProfile(at: temporaryProfile)
+            removeTemporaryControlRoot(at: temporaryControlRoot)
             throw SpaceOError.launchFailed("\(appURL.lastPathComponent): \(error.localizedDescription)")
         }
 
         let pid = runningApp.processIdentifier
         guard let identity = ProcessIdentity.current(of: pid) else {
             removeTemporaryProfile(at: temporaryProfile)
+            removeTemporaryControlRoot(at: temporaryControlRoot)
             throw SpaceOError.launchFailed(
                 "\(appURL.lastPathComponent) exited before SpaceO could identify it")
         }
@@ -140,6 +184,7 @@ public enum AppLauncher {
             && identity.startedAtMicroseconds < requestedAtMicroseconds
         if existing.contains(pid) || predatesRequest {
             removeTemporaryProfile(at: temporaryProfile)
+            removeTemporaryControlRoot(at: temporaryControlRoot)
             throw SpaceOError.launchFailed(
                 "\(appURL.lastPathComponent) is already running as pid \(pid); macOS reused that "
                 + "process instead of starting a new one. SpaceO will not move a running app's "
@@ -155,7 +200,9 @@ public enum AppLauncher {
             url: appURL,
             startedByUs: true,
             devToolsPort: nil,
-            temporaryProfile: temporaryProfile)
+            temporaryProfile: temporaryProfile,
+            electronControl: electronControl,
+            temporaryControlRoot: temporaryControlRoot)
 
         do {
             // This callback is the WAL commit boundary. It runs immediately after SpaceO has an
@@ -249,29 +296,39 @@ public enum AppLauncher {
         }
     }
 
-    /// Remove the private browser profile after its process is gone.
+    /// Remove private browser/Electron control resources after the process is gone.
     ///
     /// The parent and prefix checks are deliberate: cleanup must never turn an unexpected path
     /// into a recursive delete outside SpaceO's own temporary directory.
     @discardableResult
     public static func cleanupTemporaryProfile(for app: LaunchedApp) -> Bool {
         guard !app.identity.isAlive else { return false }
-        return removeTemporaryProfile(at: app.temporaryProfile)
+        let removedProfile = removeTemporaryProfile(at: app.temporaryProfile)
+        let removedControl = removeTemporaryControlRoot(at: app.temporaryControlRoot)
+        return removedProfile && removedControl
     }
 
     /// A force-termination request is asynchronous. Retain cleanup responsibility briefly
-    /// instead of either deleting a live browser's profile or forgetting the directory forever.
+    /// instead of deleting live process state or forgetting private directories forever.
     public static func cleanupTemporaryProfileEventually(for app: LaunchedApp) {
-        guard !cleanupTemporaryProfile(for: app),
-              let profile = app.temporaryProfile else { return }
-        scheduleTemporaryProfileCleanup(identity: app.identity, profile: profile)
+        guard app.temporaryProfile != nil || app.temporaryControlRoot != nil else { return }
+        guard !cleanupTemporaryProfile(for: app) else { return }
+        scheduleTemporaryResourceCleanup(
+            identity: app.identity,
+            profile: app.temporaryProfile,
+            controlRoot: app.temporaryControlRoot)
     }
 
-    private static func scheduleTemporaryProfileCleanup(identity: ProcessIdentity, profile: URL) {
+    private static func scheduleTemporaryResourceCleanup(
+        identity: ProcessIdentity,
+        profile: URL?,
+        controlRoot: URL?
+    ) {
         Task.detached(priority: .utility) {
             for _ in 0..<300 {
                 guard identity.isAlive else {
                     _ = removeTemporaryProfile(at: profile)
+                    _ = removeTemporaryControlRoot(at: controlRoot)
                     return
                 }
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -291,6 +348,25 @@ public enum AppLauncher {
         guard FileManager.default.fileExists(atPath: profile.path) else { return true }
         do {
             try FileManager.default.removeItem(at: profile)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    static func removeTemporaryControlRoot(at candidate: URL?) -> Bool {
+        guard let candidate else { return true }
+        let root = candidate.standardizedFileURL
+        let temporary = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .standardizedFileURL
+        guard root.deletingLastPathComponent() == temporary,
+              root.lastPathComponent.hasPrefix("spaceo-e-") else {
+            return false
+        }
+        guard FileManager.default.fileExists(atPath: root.path) else { return true }
+        do {
+            try FileManager.default.removeItem(at: root)
             return true
         } catch {
             return false
@@ -355,6 +431,72 @@ public enum AppLauncher {
             return true
         }
         return false
+    }
+
+    /// VS Code-family Electron bundles have a stable semantic extension API that can scroll an
+    /// editor without synthesising input or activating the application.
+    ///
+    /// Do not classify arbitrary Electron shells here: loading a VS Code extension into an app
+    /// that merely happens to ship Electron would be both ineffective and an unsafe assumption.
+    public static func isVSCodeElectronFamily(_ appURL: URL) -> Bool {
+        let resources = appURL.appendingPathComponent("Contents/Resources/app")
+        let framework = appURL.appendingPathComponent(
+            "Contents/Frameworks/Electron Framework.framework")
+        return FileManager.default.fileExists(atPath: framework.path)
+            && FileManager.default.fileExists(
+                atPath: resources.appendingPathComponent("out/cli.js").path)
+            && FileManager.default.fileExists(
+                atPath: resources.appendingPathComponent("product.json").path)
+    }
+
+    private static func prepareElectronControl() throws -> PreparedElectronControl {
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            .prefix(16)
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent(
+                "spaceo-e-\(getpid())-\(suffix)",
+                isDirectory: true)
+        let extensions = root.appendingPathComponent("extensions", isDirectory: true)
+        let extensionDirectory = extensions.appendingPathComponent(
+            ElectronControlAssets.extensionDirectoryName,
+            isDirectory: true)
+        let socket = root.appendingPathComponent("control.sock")
+        guard socket.path.utf8.count < 100 else {
+            throw SpaceOError.launchFailed("private Electron control path is too long")
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: root,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700])
+            try FileManager.default.createDirectory(
+                at: extensionDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            let package = extensionDirectory.appendingPathComponent("package.json")
+            let script = extensionDirectory.appendingPathComponent("extension.js")
+            try ElectronControlAssets.packageJSON.write(
+                to: package, atomically: true, encoding: .utf8)
+            try ElectronControlAssets.extensionJavaScript.write(
+                to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: package.path)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: script.path)
+        } catch {
+            _ = removeTemporaryControlRoot(at: root)
+            throw error
+        }
+
+        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        return PreparedElectronControl(
+            root: root,
+            extensionsDirectory: extensions,
+            endpoint: ElectronControlEndpoint(socket: socket, token: token))
     }
 
     private static func runningInstances(of appURL: URL) -> Set<pid_t> {

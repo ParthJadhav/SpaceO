@@ -236,14 +236,37 @@ public enum Transport {
     // MARK: - Client
 
     public static func send(_ request: Request, to path: String, timeout: TimeInterval = 60) throws -> Response {
+        let payload = try Wire.encoder.encode(request)
+        guard payload.count <= 1_048_576 else {
+            throw TransportError.malformed("request exceeds the 1 MiB wire limit")
+        }
+        let response = try sendLinePayload(
+            payload,
+            to: path,
+            timeout: timeout,
+            maximumRequestBytes: 1_048_576,
+            maximumResponseBytes: 8 * 1_048_576)
+        return try Wire.decoder.decode(Response.self, from: response)
+    }
+
+    /// Bounded one-request/one-response Unix-socket exchange shared by the daemon wire protocol
+    /// and private semantic renderer adapters.
+    static func sendLinePayload(
+        _ unframedPayload: Data,
+        to path: String,
+        timeout: TimeInterval,
+        maximumRequestBytes: Int,
+        maximumResponseBytes: Int
+    ) throws -> Data {
         guard timeout.isFinite, timeout > 0, timeout <= 3_600 else {
             throw TransportError.socketFailed(
                 "timeout must be a finite value greater than zero and at most 3600 seconds")
         }
-        var payload = try Wire.encoder.encode(request)
-        guard payload.count <= 1_048_576 else {
-            throw TransportError.malformed("request exceeds the 1 MiB wire limit")
+        guard maximumRequestBytes > 0, maximumResponseBytes > 0,
+              unframedPayload.count <= maximumRequestBytes else {
+            throw TransportError.malformed("request exceeds its wire limit")
         }
+        var payload = unframedPayload
         payload.append(0x0A)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -288,12 +311,12 @@ public enum Transport {
             &+ UInt64(timeout * 1_000_000_000)
         guard let line = readLine(
             from: fd,
-            maximumBytes: 8 * 1_048_576,
+            maximumBytes: maximumResponseBytes,
             deadlineUptimeNanoseconds: deadline) else {
             throw TransportError.socketFailed(
-                "daemon closed the connection, timed out, or exceeded the response limit")
+                "peer closed the connection, timed out, or exceeded the response limit")
         }
-        return try Wire.decoder.decode(Response.self, from: Data(line.utf8))
+        return Data(line.utf8)
     }
 
     // MARK: - Framing

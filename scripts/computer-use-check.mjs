@@ -9,7 +9,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { writeFileSync, existsSync } from "node:fs";
+import { writeFileSync, existsSync, unlinkSync } from "node:fs";
 
 const argv = process.argv.slice(2);
 const binary = argv.find((a) => !a.startsWith("--")) ?? `${process.env.HOME}/.local/bin/spaceo`;
@@ -108,7 +108,10 @@ writeFileSync(pageFixture, `<!doctype html><meta charset="utf-8"><title>SpaceO C
  render();
 </script>`);
 
-const electronFixture = "/tmp/spaceo-cu-electron.txt";
+// Cursor persists an editor's visible range by file URL across launches. A fixed fixture can
+// therefore reopen at the bottom and make a valid downward-scroll effect impossible to observe.
+// Give every harness process a fresh document identity so the initial viewport is deterministic.
+const electronFixture = `/tmp/spaceo-cu-electron-${process.pid}.txt`;
 writeFileSync(
   electronFixture,
   `${Array.from({ length: 400 }, (_, i) =>
@@ -288,10 +291,9 @@ async function electronSuite() {
     step("[electron] window renders on the virtual display",
          shot.ok && /rendered=true/.test(shot.text), shot.text);
 
-    // Cursor's editor is renderer content. A successful return is not evidence; compare the
-    // rendered window before and after the wheel event. Until Electron has a private CDP
-    // endpoint this is a release blocker, not a passing "honest refusal": the product cannot
-    // claim pointer parity merely because it admitted that the action had no effect.
+    // Cursor's editor is renderer content. A successful return is not evidence: the private
+    // semantic adapter verifies a visible-range change itself, and the harness independently
+    // compares rendered pixels before and after the request.
     const before = await call("spaceo_screenshot", { session: s });
     const scrolled = await call("spaceo_scroll",
       { session: s, x: 500, y: 400, dy: -1600, ticks: 4, web: true });
@@ -303,7 +305,7 @@ async function electronSuite() {
       step("[electron] pointer scroll changes renderer pixels", true,
            "confirmed by a before/after screenshot difference");
     } else {
-      blocked("[electron] pointer scroll has no safe renderer channel (SPAO-179)",
+      blocked("[electron] renderer scroll has no confirmed safe effect (SPAO-179)",
               scrolled.ok ? "no observable renderer effect" : scrolled.text);
     }
 
@@ -338,6 +340,7 @@ try {
 } finally {
   server.stdin.end();
   await new Promise((r) => server.once("exit", r));
+  try { unlinkSync(electronFixture); } catch {}
   const failed = results.filter((r) => r.status === "fail");
   const blockers = results.filter((r) => r.status === "blocked");
   const passed = results.filter((r) => r.status === "pass");

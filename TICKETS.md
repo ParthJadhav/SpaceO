@@ -874,35 +874,42 @@ Status definitions:
   and names the alternatives (screenshot, or scroll and read again).
 - Verification: the native suite asserts that a clipped read discloses the clipping.
 
-### SPAO-179 — Electron apps have no pointer channel that works
+### SPAO-179 — Electron renderer scrolling has no safe channel
 
 - Priority: P1
-- Status: Open
-- Evidence: Measured against Cursor on the agent display: the accessibility tree is readable
-  (119 outline lines in the latest run) and the window renders, but there is no scroll area with a settable scroll
-  bar, and SpaceO only supplies `--remote-debugging-port` to applications it launches *as
-  browsers* — so an Electron app gets neither the accessibility path nor the DevTools path.
-  `spaceo scroll` now refuses honestly rather than reporting a success that moved nothing.
-  A private-profile remote-debugging experiment reached a DevTools endpoint, but every
-  non-activating launch path produced no AX window. Allowing normal foreground activation
-  produced a window and renderer target, but visibly stole the user's route and is therefore not
-  an acceptable SpaceO implementation.
-- Impact: Electron is one of the three application classes the README claims to exercise, and
-  scrolling, hovering and dragging are unavailable in all of it. Since Electron *is* Chromium,
-  the channel that works for browsers should be reachable here too.
-- Acceptance:
-  - Launch Electron applications with a DevTools port and a private user-data directory, or
-    document why a given app cannot accept one.
-  - Bind to the correct renderer target rather than the first one listed.
-  - Extend `scripts/computer-use-check.mjs --suite=electron` to assert scroll and hover effects
-    the way the web suite does, rather than accepting an honest refusal.
-- Current gate: the Electron suite compares screenshots before and after scroll. It exits with
-  blocker status (`2`) when Cursor has no safe renderer channel; it will pass automatically once
-  an observable effect is delivered without an isolation breach.
+- Status: Done (vertical VS Code-family editor scrolling)
+- Evidence: Cursor's editor has no settable AX scroll area and ignores background synthetic wheel
+  input. A private-profile DevTools launch reached an endpoint but produced no AX window unless
+  Cursor was foregrounded, which visibly stole the user's route and was rejected. Screen-reader
+  mode exposed richer AX text ranges, but per-PID keys, selected-range mutation, and
+  `AXScrollToVisible` all produced byte-identical screenshots.
+- Fix:
+  - Exact VS Code-family bundles receive a private, per-launch extension directory containing a
+    small semantic adapter. It invokes the editor's own `editorScroll` command without activating
+    the app or moving the physical pointer.
+  - A random live-memory-only token authenticates a bounded protocol over a `0600` Unix socket in
+    a `0700` temporary root. The socket's type, owner and permissions are checked on every call.
+  - Routing fails closed unless the process has one represented window, exactly one visible
+    active editor, and the requested point's AX ancestry identifies a code editor in that exact
+    window. Only unmodified vertical scroll is admitted.
+  - The adapter reports visible ranges before and after; unchanged ranges are an error. The MCP
+    conformance test independently requires a before/after screenshot difference.
+  - The credential is never persisted. Only the temporary root is journaled so orderly and crash
+    recovery cleanup can remove it safely after the owned process exits.
+- Verification: The production release binary passed the real MCP Electron suite 8/8 against
+  Cursor: launch, readable AX tree, rendered window, observable editor scroll, isolation, and
+  clean teardown. The full native/web/Electron matrix passes 25/25. Physical cursor coordinates
+  and the user's frontmost application were unchanged across the semantic scroll.
+- Remaining scope: Split editors, arbitrary Electron shells, horizontal or modifier-held editor
+  scrolling, renderer hover, and renderer drag do not use this VS Code semantic path and remain
+  unconfirmed; this ticket closes the scrolling release blocker without claiming generic pointer
+  parity.
 
 ## Completed automated verification
 
-- 303 deterministic tests pass, including the agent pointer surface, capture coordinate space,
+- 308 deterministic tests pass, including the semantic Electron adapter and scoped cleanup,
+  agent pointer surface,
+  capture coordinate space,
   unrestricted geometry/density admission and constant-space large-density tile lookup, without
   invoking live WindowServer tests.
 - Clean debug build passes with no warnings.
@@ -911,9 +918,9 @@ Status definitions:
   application classes — native AppKit (TextEdit), Chromium web content (Google Chrome), and
   Electron (Cursor). Where an action has an observable effect the suite asserts the *effect*:
   native scroll is checked by comparing screenshots, and every web action is checked against page
-  state the fixture encodes in its window title. The latest full run passes 24/25 steps and
-  records the Electron pointer channel as the sole blocker instead of laundering its honest
-  refusal into a pass.
+  state the fixture encodes in its window title. Cursor editor scroll requires both an adapter
+  visible-range delta and an independent screenshot difference. The latest full run passes all
+  25 steps.
   Run it with `node scripts/computer-use-check.mjs [--suite=native|web|electron|all]`.
   It found SPAO-172 through SPAO-178, none of which any unit test or the protocol smoke saw.
 - Regression coverage exists for transport double-start, doctor/version JSON, bounded display

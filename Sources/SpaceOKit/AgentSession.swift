@@ -111,6 +111,8 @@ public final class AgentSession {
 
     /// DevTools bridges for Chromium browsers this session launched, keyed by pid.
     private var bridges: [pid_t: ChromiumBridge] = [:]
+    /// Semantic renderer bridges for VS Code-family Electron apps, keyed by exact owned pid.
+    private var electronEditorBridges: [pid_t: ElectronEditorBridge] = [:]
 
     /// Watchers that pull late-appearing windows (dialogs, prompts, extra documents) into our
     /// tile. Without these an app's second window lands on the user's screen.
@@ -413,6 +415,15 @@ public final class AgentSession {
                 bridges[app.pid] = bridge
             }
         }
+        if let endpoint = app.electronControl {
+            let bridge = ElectronEditorBridge(endpoint: endpoint)
+            // Retain the bridge even if startup misses this readiness window. Falling back to a
+            // synthetic wheel would reintroduce false-success behavior for a renderer we know
+            // needs the semantic channel; a later action can either connect after startup or
+            // fail closed with the socket error.
+            _ = await bridge.waitUntilReady()
+            electronEditorBridges[app.pid] = bridge
+        }
         // Browser startup can activate late, after its DevTools endpoint and restore prompt
         // appear. Recheck after the full launch sequence, not only after the first window.
         if let userRoute, InputRouter.currentRouteTargets(app.pid) {
@@ -453,6 +464,16 @@ public final class AgentSession {
     }
 
     public var hasWebBridge: Bool { !bridges.isEmpty }
+
+    /// Return an Electron editor bridge only when the target process has one represented window.
+    ///
+    /// VS Code runs one extension host per window. The private adapter deliberately binds one
+    /// socket, so routing a multi-window process by pid could scroll a different document. Fail
+    /// closed until a window-specific registration protocol exists.
+    public func electronEditorBridge(for window: WindowRef) -> ElectronEditorBridge? {
+        guard windows.filter({ $0.pid == window.pid }).count == 1 else { return nil }
+        return electronEditorBridges[window.pid]
+    }
 
     /// Adopt a process the user points us at.
     ///
@@ -511,6 +532,7 @@ public final class AgentSession {
         if let bridge = bridges.removeValue(forKey: app.pid) {
             Task { await bridge.detach() }
         }
+        electronEditorBridges.removeValue(forKey: app.pid)
         for old in stale {
             ProcessOwnership.release(old.identity)
             AppLauncher.cleanupTemporaryProfileEventually(for: old)
@@ -527,6 +549,7 @@ public final class AgentSession {
         if let bridge = bridges.removeValue(forKey: pid) {
             Task { await bridge.detach() }
         }
+        electronEditorBridges.removeValue(forKey: pid)
         for app in apps where app.pid == pid { ProcessOwnership.release(app.identity) }
         apps.removeAll { $0.pid == pid }
         windows.removeAll { $0.pid == pid }
@@ -892,6 +915,7 @@ public final class AgentSession {
             if let bridge = bridges.removeValue(forKey: app.pid) {
                 Task { await bridge.detach() }
             }
+            electronEditorBridges.removeValue(forKey: app.pid)
         }
         apps = pending
         let survivingPIDs = Set(pending.map(\.pid))
@@ -905,6 +929,7 @@ public final class AgentSession {
             watchers.removeAll()
             for bridge in bridges.values { Task { await bridge.detach() } }
             bridges.removeAll()
+            electronEditorBridges.removeAll()
             windows.removeAll()
         }
 

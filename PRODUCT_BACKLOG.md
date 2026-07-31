@@ -611,8 +611,9 @@ user's whole machine in a bad state.
 - Evidence: `scripts/computer-use-check.mjs` now drives the release binary through its real MCP
   stdio transport against TextEdit, Google Chrome, and Cursor. It uses screenshot differences,
   page-title state, isolation audits, and explicit refusal checks rather than successful return
-  values. The latest matrix passes 24/25 checks and reports Electron renderer pointer control as
-  blocked (SPAO-179). Slider, multi-select, context-menu, and CI publication coverage remain.
+  values. The latest matrix passes all 25 checks, including a Cursor editor scroll confirmed both
+  by its semantic visible-range delta and an independent screenshot difference. Slider,
+  multi-select, context-menu, and CI publication coverage remain.
 - Impact: Without an end-to-end conformance harness, parity regressions land silently and "supports
   computer-use" stays an assertion rather than a measurement.
 - Acceptance:

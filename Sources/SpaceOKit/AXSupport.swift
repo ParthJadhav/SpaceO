@@ -146,6 +146,38 @@ public enum AX {
         return deepestScrollArea(in: window, containing: point)
     }
 
+    /// Whether a point is inside a semantic code editor in one exact application window.
+    ///
+    /// Chromium exposes Monaco's editor surface as an `AXCodeStyleGroup` ancestor of the element
+    /// under the point. The editor's separate AXTextArea is a 1×1 screen-reader proxy, so using
+    /// its frame would reject the entire visible editor. Routing every point in the window to
+    /// `activeTextEditor` would be worse: a wheel over the sidebar or terminal would move the
+    /// document. Walk the hit-test ancestry and require both the code marker and exact window.
+    public static func textEditor(
+        at point: CGPoint,
+        in pid: pid_t,
+        windowID: CGWindowID
+    ) -> AXUIElement? {
+        guard var current = element(at: point, in: pid) else { return nil }
+        var seen = Set<CFHashCode>()
+        var editor: AXUIElement?
+        for _ in 0..<32 {
+            guard seen.insert(CFHash(current)).inserted else { return nil }
+            if role(current) == kAXTextAreaRole as String
+                || string(current, kAXSubroleAttribute as String) == "AXCodeStyleGroup" {
+                editor = current
+            }
+            if role(current) == kAXWindowRole as String {
+                return self.windowID(current) == windowID ? editor : nil
+            }
+            guard let parent = element(current, kAXParentAttribute as String) else {
+                return nil
+            }
+            current = parent
+        }
+        return nil
+    }
+
     /// Deepest scroll area whose frame contains the point, so nested scrollers resolve to the
     /// inner one — which is what the wheel would have hit.
     private static func deepestScrollArea(

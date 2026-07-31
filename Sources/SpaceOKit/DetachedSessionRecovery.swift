@@ -538,6 +538,7 @@ public struct DetachedSessionRecovery: Sendable {
             url: durable.url,
             startedByUs: durable.provenance == .launched,
             devToolsPort: durable.devToolsPort,
-            temporaryProfile: durable.temporaryProfile)
+            temporaryProfile: durable.temporaryProfile,
+            temporaryControlRoot: durable.temporaryControlRoot)
     }
 }

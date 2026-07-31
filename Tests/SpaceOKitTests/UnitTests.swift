@@ -661,6 +661,32 @@ final class UnitTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: profile.path))
     }
 
+    func testTemporaryElectronControlCleanupIsScopedAndEffective() throws {
+        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
+            .appendingPathComponent("spaceo-e-test-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        try "private".write(
+            to: root.appendingPathComponent("extension.js"),
+            atomically: true,
+            encoding: .utf8)
+
+        let app = LaunchedApp(
+            pid: 999_999,
+            identity: ProcessIdentity(pid: 999_999, startedAtMicroseconds: 1),
+            bundleIdentifier: "test",
+            name: "test",
+            url: URL(fileURLWithPath: "/Applications/Test.app"),
+            startedByUs: true,
+            devToolsPort: nil,
+            temporaryProfile: nil,
+            temporaryControlRoot: root)
+        XCTAssertTrue(AppLauncher.cleanupTemporaryProfile(for: app))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
+
+        let unrelated = URL(fileURLWithPath: "/tmp/not-spaceo-\(UUID().uuidString)")
+        XCTAssertFalse(AppLauncher.removeTemporaryControlRoot(at: unrelated))
+    }
+
     // MARK: - Blame attribution
     //
     // An isolation check that flags the user's own mouse movement as an agent breach cries wolf,

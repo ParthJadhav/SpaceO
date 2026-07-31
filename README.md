@@ -380,19 +380,20 @@ App classes actually exercised, by `scripts/computer-use-check.mjs` driving the 
 | screenshot | yes | yes | yes |
 | click | accessibility press; a coordinate click with no element under it is reported unconfirmed | yes, via DevTools | accessibility press only |
 | type / keys | yes | yes | posted through AX/per-PID paths; not yet effect-asserted |
-| scroll | yes, via the accessibility scroll bar | yes, via DevTools | **no** — see SPAO-179 |
-| hover / drag | posted, unconfirmed | yes, via DevTools | **no** — see SPAO-179 |
+| scroll | yes, via the accessibility scroll bar | yes, via DevTools | yes for VS Code-family editors, via a private semantic adapter |
+| hover / drag | posted, unconfirmed | yes, via DevTools | no confirmed renderer channel |
 
-The Electron pointer gap is reported rather than hidden: an action that could not be confirmed
-does not become a conformance pass merely because the refusal was honest.
+Electron effects are reported rather than inferred: the editor adapter compares semantic visible
+ranges, and the conformance harness independently compares rendered pixels. An action that could
+not be confirmed does not become a pass merely because the request returned successfully.
 
 ```bash
 make computer-use-check
 ```
 
 The harness exits `0` only when every exercised capability passes, `1` for a regression, and `2`
-when the run is otherwise healthy but a documented product blocker remains. On the current
-verification host Electron pointer control produces exit `2` for SPAO-179.
+when the run is otherwise healthy but a documented product blocker remains. The current
+native/web/Electron matrix passes all 25 exercised checks.
 
 Known boundaries:
 
@@ -405,11 +406,14 @@ Known boundaries:
 - **Self-activating apps.** Some Electron shells activate themselves despite `activates=false`.
   SpaceO hands focus straight back and reports that it had to, so the theft is a blip rather
   than a state change — but there is a visible moment.
-- **Electron renderer input.** Cursor renders and exposes an accessibility outline on the agent
-  display, but its editor has no settable AX scroll area and ignores synthetic wheel delivery.
-  Giving it a private DevTools profile makes background launch create no window; allowing
-  foreground activation creates one but violates SpaceO's desktop-isolation promise. SPAO-179
-  remains a release blocker until there is a renderer channel that preserves that promise.
+- **Electron renderer input.** Cursor's editor has no settable AX scroll area and ignores
+  synthetic background wheel delivery. For VS Code-family bundles, SpaceO loads a private,
+  per-launch semantic adapter from a `0700` temporary root and uses the editor's own scroll
+  command. Requests are authenticated over a `0600` Unix socket, require the point to hit the
+  exact editor/window with one visible editor, and pass only after the editor reports a
+  visible-range change. This path does not activate the app or move the physical pointer. Split
+  editors, other Electron shells, horizontal or modifier-held editor scrolling, hover, and drag
+  still have no confirmed renderer channel.
 - **Cmd-Tab, the Dock, and notifications** still show agent apps. Not solvable on-host.
 - **SIGKILL leaks apps.** A daemon killed with `-9` cannot quit the apps it started; displays
   normally follow process lifetime, while `SIGTERM`, Ctrl-C, and `spaceo daemon stop` perform
