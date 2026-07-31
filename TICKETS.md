@@ -288,8 +288,8 @@ Status definitions:
 ### SPAO-118 — Make isolation verdicts truthful about unobservable input routes
 
 - Priority: P0
-- Status: Open
-- Evidence: `IsolationSnapshot.capture` duplicates AppKit's frontmost PID into the
+- Status: Done
+- Original problem: `IsolationSnapshot.capture` duplicated AppKit's frontmost PID into the
   `windowServerFrontPID` field and hard-codes `keyFocusPID` and `typingFocusPID` to zero after the
   unsafe private getters were removed. CLI/MCP still report “isolation intact” and “the user was
   not disturbed,” while the product invariant explicitly includes keyboard focus.
@@ -302,12 +302,14 @@ Status definitions:
   - Human, JSON, and MCP output expose per-check coverage and failures consistently.
   - Regression tests prove unknown route fields cannot serialize as fully intact, and product
     documentation matches the runtime semantics.
+- Verification: `IsolationCoverageTests` proves live input-route dimensions remain unknown,
+  verdicts stay partial, and CLI/MCP output never claims intact or undisturbed coverage.
 
 ### SPAO-119 — Define and implement abandoned-session recovery
 
 - Priority: P1
-- Status: Open
-- Evidence: `SessionManager` stores sessions without owner, lease, last-activity, or expiry state.
+- Status: Done
+- Original problem: `SessionManager` stored sessions without owner, lease, last-activity, or expiry state.
   Cleanup happens only through explicit destroy, while MCP auto-starts a shared daemon and the
   architecture promises a janitor that “reaps dead sessions” but no such lifecycle exists.
 - Impact: A crashed client or missed destroy leaves invisible applications, occupied tiles, and a
@@ -317,6 +319,9 @@ Status definitions:
   - Expose owner, age, last activity, and reclaimable state in session list and Viewer.
   - Reclaim abandoned launched applications after a grace period without terminating adopted apps.
   - Cover client disappearance, dead launched apps, adopted apps, and daemon restart in tests.
+- Verification: controller, reclamation, persistence, detached-recovery, recovery-coordinator,
+  and daemon-restart integration suites cover owner metadata, leases, fencing, grace, retry, and
+  launched-versus-adopted cleanup.
 
 ### SPAO-120 — Put the attention-isolation boundary in first-run documentation
 
@@ -342,8 +347,8 @@ Status definitions:
 ### SPAO-121 — Refresh Viewer geometry when a display changes in place
 
 - Priority: P1
-- Status: Open
-- Evidence: `ViewerModel.refresh` rebuilds display bounds every two seconds, but stream restart and
+- Status: Done
+- Original problem: `ViewerModel.refresh` rebuilt display bounds every two seconds, but stream restart and
   `input.display` updates occur only when `selectedID` changes. A physical display can keep its ID
   while its resolution, scaling, rotation, or origin changes.
 - Impact: Viewer can render or target a selected display with stale geometry, so a click may land
@@ -353,12 +358,14 @@ Status definitions:
   - Atomically refresh stream configuration and input mapping, disabling Control and clearing
     stale drag/key targets during the transition.
   - Add pure model coverage for bounds/origin changes and a live mapping check.
+- Verification: `testSameIDGeometryChangeAtomicallyResetsInputAndRestartsStream` and viewport
+  mapping tests cover stable-ID bounds/origin changes.
 
 ### SPAO-122 — Add recoverable Viewer stream and permission states
 
 - Priority: P2
-- Status: Open
-- Evidence: Stream failure leaves `streamError`, but the two-second refresh and toolbar Refresh
+- Status: Done
+- Original problem: Stream failure left `streamError`, but the two-second refresh and toolbar Refresh
   only rescan displays/permissions/sessions; neither retries the selected stream. The banner has
   no Retry action, and granting Screen Recording can leave the Viewer at “no stream” until the
   selection changes or the app relaunches. Overlapping unstructured restart tasks can also
@@ -375,12 +382,14 @@ Status definitions:
   - Disable or clearly block Control when stream/Accessibility prerequisites are unavailable.
   - Add model tests for grant-after-denial, transient stop, retry, selection change, removal, and
     reverse-order completion of two starts.
+- Verification: `ViewerStreamLifecycleTests` covers every listed state and reverse-order start;
+  native bug-bash verification passed Retry/Refresh, physical/virtual streaming, and removal.
 
 ### SPAO-123 — Provide a keyboard- and VoiceOver-accessible exit from Viewer Control
 
 - Priority: P1
-- Status: Open
-- Evidence: With Control enabled, `VMSurfaceView` becomes first responder and intentionally
+- Status: Done
+- Original problem: With Control enabled, `VMSurfaceView` became first responder and intentionally
   forwards every key equivalent. It exposes no accessibility role/label/value and there is no
   Viewer-owned keyboard command to disable Control. This revisits SPAO-105's accepted
   all-shortcuts-forwarded decision.
@@ -391,12 +400,14 @@ Status definitions:
   - Expose the remote surface and Control state with appropriate accessibility semantics.
   - Announce entry/exit and blocked permission states without relying on color.
   - Add keyboard and accessibility regression coverage for enabling and escaping Control.
+- Verification: `ViewerAccessibilityTests` covers the reserved Control-Command-Escape lifecycle,
+  VoiceOver-visible role/value/help, announcements, held-key release, and near-miss forwarding.
 
 ### SPAO-124 — Serialize in-flight session operations against destroy and shutdown
 
 - Priority: P0
-- Status: Open
-- Evidence: `SessionManager.execute` suspends during `session.launch`; actor reentrancy then permits
+- Status: Done
+- Original problem: `SessionManager.execute` suspended during `session.launch`; actor reentrancy then permitted
   destroy/shutdown to remove the session before launch resumes and registers its application.
   A Swift 6 strict-concurrency build fails at `SessionManager.swift:253` because sending `session`
   risks data races.
@@ -408,12 +419,13 @@ Status definitions:
   - No command returns success after its session was destroyed.
   - Deterministic tests race launch with destroy and shutdown and leave zero apps/displays.
   - The package passes Swift 6 strict-concurrency compilation.
+- Verification: `SessionLifecycleRaceTests` and strict-concurrency warnings-as-errors builds pass.
 
 ### SPAO-125 — Restore exclusive PID ownership for launch and adoption
 
 - Priority: P1
-- Status: Open
-- Evidence: Reopening RA-015: `AppLauncher.launch` detects a pre-existing PID and marks it
+- Status: Done
+- Original problem: Reopening RA-015: `AppLauncher.launch` detected a pre-existing PID and marked it
   `startedByUs: false` but still relocates all its windows. `SessionManager` adopts a PID without
   checking whether another session already owns it. Process identity is stored as a reusable PID,
   so a later unrelated application can also inherit a stale session's capture, AX, input, and
@@ -429,12 +441,14 @@ Status definitions:
   - Ownership is released on destroy and failed launch/adoption.
   - Unit coverage exercises PID reuse, snapshot/open races, and duplicate adoption;
     live verification proves user windows remain untouched.
+- Verification: ownership/budget and live integration suites cover substitution, duplicate claims,
+  exact process identity, PID reuse, failed ownership, and release.
 
 ### SPAO-126 — Return truthful structured teardown results
 
 - Priority: P1
-- Status: Open
-- Evidence: Reopening RA-024: `AgentSession.destroy` returns no result and clears ownership after
+- Status: Done
+- Original problem: Reopening RA-024: `AgentSession.destroy` returned no result and cleared ownership after
   best-effort termination. `destroyAll` records failed display IDs, but daemon stop and destroy-all
   still return `ok: true`, and the CLI daemon exits status 0 unconditionally.
 - Impact: Automation is told cleanup succeeded while applications or virtual displays may remain,
@@ -444,12 +458,14 @@ Status definitions:
   - Cleanup ownership is retained while resources remain.
   - CLI/MCP fail when cleanup is incomplete and expose retry/recovery guidance.
   - Injected app/display teardown failures have deterministic regression coverage.
+- Verification: `TeardownFailureTests` and recovery integration tests cover surviving apps,
+  attached displays, retryable ownership, structured CLI/MCP failure, and successful cleanup.
 
 ### SPAO-127 — Implement and independently verify the runtime janitor
 
 - Priority: P1
-- Status: Open
-- Evidence: The architecture promises a periodic janitor, but runtime sweeps occur only on
+- Status: Done
+- Original problem: The architecture promised a periodic janitor, but runtime sweeps occurred only on
   explicit commands. The late-window integration test manually invokes `sweepStrayWindows`, so it
   does not prove AX observer delivery, and observer-registration results are ignored. A
   notification arriving while a sweep lock is held is dropped, accepted window IDs are never
@@ -466,6 +482,8 @@ Status definitions:
   - Verify late-window containment without manually sweeping.
   - Add deterministic oversized, moved-after-placement, and notification-during-sweep regressions.
   - Janitor shutdown leaves no task, app, or display behind.
+- Verification: `JanitorAndControlTests`, reclamation tests, and
+  `testWindowWatcherContainsLateWindowsWithoutBeingSweptByHand` cover these paths.
 
 ### SPAO-128 — Remove bounded WindowServer resource admission
 
@@ -486,8 +504,8 @@ Status definitions:
 ### SPAO-129 — Restore the user input route after every partial focus failure
 
 - Priority: P1
-- Status: Open
-- Evidence: The private pointer-focus sequence posts several event records and can fail after the
+- Status: Done
+- Original problem: The private pointer-focus sequence posted several event records and could fail after the
   first record has already changed routing. `InputRouter.beginPointerInput` catches that failure
   and returns `nil`, discarding the route captured before mutation, so the click's deferred restore
   has nothing to restore.
@@ -499,12 +517,14 @@ Status definitions:
   - Fail the input operation when restoration cannot be verified and surface actionable recovery.
   - Add injected-shim tests for failure after each private record and assert restoration and
     post-condition verification.
+- Verification: `FocusRecoveryTests` injects failure after every record and covers successful,
+  failed, and unverifiable restoration without sending input after unsafe recovery.
 
 ### SPAO-130 — Bind accessibility element indices to the requested window generation
 
 - Priority: P1
-- Status: Open
-- Evidence: `AXSnapshot` carries a PID but no window identity, `AgentSession` keeps one
+- Status: Done
+- Original problem: `AXSnapshot` carried a PID but no window identity, `AgentSession` kept one
   session-wide `lastSnapshot`, and native indexed clicks resolve `request.window` but then look up
   the cached element without passing that window.
 - Impact: An indexed click addressed to window B can press a stale control from window or
@@ -514,12 +534,14 @@ Status definitions:
   - Refuse element lookup unless the cache matches the currently resolved live window.
   - Invalidate the cache on window/app refresh, close, replacement, and relevant UI mutations.
   - A two-window regression proves an index from A is refused when the caller targets B.
+- Verification: `AXSnapshotGenerationTests` covers cross-window refusal, invalidation, and
+  superseded traversal generations.
 
 ### SPAO-131 — Bound accessibility traversal by total time, work, and allocation
 
 - Priority: P1
-- Status: Open
-- Evidence: A screen read synchronously walks up to 1,500 AX nodes inside the serialized
+- Status: Done
+- Original problem: A screen read synchronously walked up to 1,500 AX nodes inside the serialized
   `SessionManager` actor with many IPC calls per node and no aggregate deadline or cancellation.
   Child arrays are copied and bridged in full before the node cap, and iteration continues after
   the budget has been reached.
@@ -532,12 +554,14 @@ Status definitions:
     when any budget is exhausted.
   - Isolate or bound descendant AX calls so one provider cannot hold the session actor indefinitely.
   - Delayed-provider and oversized-child tests prove bounded recovery and no full-array copy.
+- Verification: `AXTraversalTests` covers deadline, cancellation, call/node/allocation budgets,
+  paged children, provider timeouts, and immediate exhaustion.
 
 ### SPAO-132 — Bind Chromium automation to the intended page with bounded responses
 
 - Priority: P1
-- Status: Open
-- Evidence: `ChromiumBridge.targets` buffers the complete `/json/list` response before checking
+- Status: Done
+- Original problem: `ChromiumBridge.targets` buffered the complete `/json/list` response before checking
   its 1 MiB limit, and `attachToFrontTarget` connects to `found.first` although target-list order
   is not a proven front-page or session-intent contract.
 - Impact: A broken local DevTools endpoint can pressure daemon memory, while multiple page targets
@@ -548,12 +572,14 @@ Status definitions:
   - Fail closed when the intended target cannot be identified; never use list order as authority.
   - Local fake-endpoint and multi-target tests cover oversized bodies, ordering changes, closure,
     navigation, and target replacement.
+- Verification: `ChromiumBridgeTests` covers streaming size refusal, loopback binding, ambiguous
+  and unknown targets, explicit target identity, and closed/unbound commands.
 
 ### SPAO-133 — Preserve the user's clipboard on production copy and cut paths
 
 - Priority: P1
-- Status: Open
-- Evidence: `PasteboardGuard` is used only by tests/demo; production command-key delivery posts
+- Status: Done
+- Original problem: `PasteboardGuard` was used only by tests/demo; production command-key delivery posted
   copy and cut directly. Its snapshot implementation also materializes all items/types without
   limits and can overwrite a newer user clipboard change after an asynchronous guarded action.
 - Impact: Agent actions can destroy the user's clipboard contents; future guard wiring can hang or
@@ -565,12 +591,16 @@ Status definitions:
     unrelated user change.
   - Tests cover native/web copy and cut, empty and multi-item pasteboards, oversized/lazy
     providers, timeout, and a concurrent user copy.
+- Resolution/verification: native and DevTools Command-C/Command-X routes now fail closed because
+  macOS offers no atomic restore that cannot overwrite a newer user copy. `PasteboardGuard` is
+  bounded for controlled flows, and `PasteboardGuardProductionTests` covers native/web refusal,
+  limits, lazy providers, timeout, and concurrent clipboard changes.
 
 ### SPAO-134 — Make Viewer Control transitions generation-safe and self-excluding
 
 - Priority: P1
-- Status: Open
-- Evidence: Viewer input is validated only before enqueue; queued delivery does not recheck
+- Status: Done
+- Original problem: Viewer input was validated only before enqueue; queued delivery did not recheck
   Control or display state, while disable/selection cleanup waits behind older work. Viewer hit
   testing also does not exclude its own PID, so viewing a physical display containing Viewer can
   select and reinject synthetic events into itself.
@@ -585,15 +615,312 @@ Status definitions:
     events as defense in depth.
   - Deterministic queue tests prove no event survives disable/switch; a physical-display regression
     proves Viewer cannot target or recursively forward to itself.
+- Verification: `JanitorAndControlTests`, `ViewerAccessibilityTests`, and the native physical-
+  display bug bash cover epochs, transition cleanup, held keys, self-exclusion, and local escape.
+
+### SPAO-135 — Expose scroll, hover, and drag to agents
+
+- Priority: P0
+- Status: Done
+- Original problem: `InputRouter.scroll` was fully implemented and had zero call sites; there was
+  no MCP tool, CLI command, or daemon command for scroll, pointer move, or drag. Measured against
+  a standard computer-use action set, SpaceO implemented screenshot, left click, type, and key,
+  and nothing else.
+- Impact: An agent could not reach anything below the fold of any window, could not reveal a
+  hover-only menu or tooltip, and could not move a slider, reorder a list, or select text by
+  dragging. These are ordinary steps on ordinary UI, not edge cases.
+- Fix:
+  - Added `spaceo_scroll`, `spaceo_move`, and `spaceo_drag` across MCP, CLI, and the daemon.
+  - Extracted `InputRouter.withPointerTransaction` so every pointer action shares one route-hold,
+    window-stamp, and verified-restore body; a new action cannot skip the stamp.
+  - A scroll and a hover both take a point, because an app with two scrollable or hoverable
+    regions routes by what is under the pointer.
+- Acceptance:
+  - Every pointer action is reachable from MCP and the CLI and posts stamped per-PID events.
+  - The MCP smoke asserts all three tools are advertised.
+- Verification: `PointerSurfaceTests`, `scripts/mcp-smoke.mjs` (16 tools).
+
+### SPAO-138 — Complete the click matrix and stop silent downgrades
+
+- Priority: P1
+- Status: Done
+- Original problem: `MouseButton` was `left`/`right` only. On the element path,
+  `InputRouter.press(element)` silently dropped both `button` and `count`; on the coordinate path
+  the `AXPress` short-circuit silently dropped `count`. `spaceo_click --element 7 --button right
+  --count 2` reported success and performed a single left press.
+- Impact: Silently doing the wrong thing is worse than refusing — the agent proceeded believing a
+  context menu had opened or a word had been selected.
+- Fix:
+  - Added `middle` to `MouseButton` with its own down/up/dragged event types.
+  - The accessibility shortcut is taken only for a plain single left click.
+  - An element reference with a button, count, or modifiers is refused at both the MCP boundary
+    and the daemon, naming the coordinate alternative.
+- Verification: `PointerSurfaceTests.testElementClickRefusesPointerOnlyArguments`, MCP smoke.
+
+### SPAO-139 — Support modifier-held pointer actions
+
+- Priority: P1
+- Status: Done
+- Original problem: `InputRouter.click` never set `event.flags`, so shift-click, cmd-click, and
+  option-drag were impossible. Modifiers existed only for standalone key presses.
+- Fix: Added `ModifierKeys.parse` and a `modifiers` argument on click, move, drag, and scroll,
+  stamped onto every synthesised event in the transaction.
+- Verification: `PointerSurfaceTests.testModifierParsingAcceptsAliasesAndRejectsUnknownNames`.
+
+### SPAO-141 / SPAO-142 — One capture scale, reported
+
+- Priority: P0
+- Status: Done
+- Original problem: `spaceo_click` took window-local points; window captures were hard-coded to 2×
+  (`Capture.swift`) while tile captures stayed at 1×; Chromium clicks rebased again into CSS
+  viewport coordinates. Nothing in any response told the agent which space it had.
+  `Demo.swift` encoded the ambiguity as an assertion that accepted either scale.
+- Impact: This is the defect that made vision-driven agents fail silently. An agent reading a
+  coordinate off the default screenshot clicked at half the intended position — the wrong control
+  near the top-left, a hard out-of-bounds error near the edges.
+- Fix:
+  - `Capture.defaultScale` is 1 for both window and region capture, so an image pixel and a click
+    coordinate are the same number.
+  - Every capture returns an `ImageGeometry` (origin kind, scale, pixel and point dimensions,
+    global origin, window id) plus a one-line `advice` string, carried in the response message.
+  - Added an optional `scale` (1–4) and a tile-relative `x/y/width/height` sub-region, clamped to
+    the session's own tile so a caller cannot widen its view past its tile.
+  - Out-of-bounds refusals name the scale mistake rather than leaving the agent to guess.
+- Verification: `PointerSurfaceTests` coordinate-space cases, the tightened
+  `testCapturesTheAgentScreen` live assertion, and `spaceo demo`'s
+  "tile screenshot pixels equal click points" check.
+
+### SPAO-149 — Make TileLayout.rects and rect agree
+
+- Priority: P2
+- Status: Done
+- Original problem: `rects` clamped `n = min(64, capacity)` and computed `grid(for: n)` while
+  `rect` computed `grid(for: capacity)`. At capacity 100 the two produced an 8×8 layout of
+  240×135 tiles against a 10×10 layout of 192×108.
+- Impact: Overlapping tile rects are exactly the cross-agent leak tiling exists to prevent.
+- Fix: `rects` derives the grid from the true capacity and clamps only how many rects it
+  materialises, so the allocation bound stops silently changing the layout.
+- Verification: property test asserting `rects[i] == rect(index: i)` across the 64 boundary.
+
+### SPAO-154 — Restore host input state if the Viewer dies while captured
+
+- Priority: P0
+- Status: Done
+- Original problem: Entering Control decoupled the mouse, hid the cursor, and disabled system-wide
+  global hotkeys; only the normal exit path restored them. A crash or force-quit while captured
+  left the user's whole machine with a hidden cursor, a decoupled mouse, and Spotlight, Mission
+  Control, and screenshot shortcuts disabled, recoverable only by logging out.
+- Fix: `HostInputGuard` — a durable Application Support breadcrumb written before the machine-wide
+  change, signal and `atexit` handlers that restore the minimum critical state, an
+  `applicationWillTerminate` hook, and a launch-time repair pass for deaths the previous run could
+  not observe. Restoration is idempotent, so every path may run redundantly.
+- Verification: `HostInputGuard` unit coverage for breadcrumb lifecycle and abandoned-capture repair.
+
+### SPAO-156 / SPAO-157 — Viewer first-run and dead ends
+
+- Priority: P1
+- Status: Done
+- Original problem: `ViewerModel.requestPermissions()` had no callers, and because stream start
+  refuses without a pre-flight grant, macOS's own first-capture prompt never fired either — a new
+  user had to find System Settings and add the app by hand. The Session/Display scope picker
+  disabled itself permanently once a display row was selected. `saveScreenshot` reported failure
+  only through `streamError`, which no view read, so a failed screenshot was completely silent.
+- Fix:
+  - A Grant Access action raises the real system prompts, then re-polls and restarts the selection
+    so a granted permission produces a live stream without relaunching.
+  - Scope switching is gated on `canSwitchCanvasMode` — whether the display *hosts* a session,
+    not whether one is currently selected.
+  - Screenshot outcomes surface as a banner with Reveal in Finder, an accessibility announcement,
+    and an event-log entry.
+- Verification: `ViewerControlPlaneTests`.
+
+### SPAO-164 — Match Space attribution on display UUID alone
+
+- Priority: P1
+- Status: Done
+- Original problem: `SPOSpacesForDisplay` accepted a managed-display entry when the UUID matched
+  **or** there was only one entry **or** the entry was literally named `Main`, so it could return
+  the *user's* main display's Space list for an agent display id.
+- Impact: That result reaches `AgentActivity.claim(spaces:)`, which every isolation verdict is
+  decided against — the user's own active Space filed as agent territory makes `verify` report a
+  breach on every run the user caused themselves, and a check that cries wolf stops being read.
+- Fix: Match on UUID only; report no Spaces when there is no UUID to match, so callers treat the
+  set as unknown instead of inheriting a guess. `Stage.hasOwnSpace` already fails safe on empty.
+
+### SPAO-172 — Derive the MCP lease-injection set from one shared definition
+
+- Priority: P1
+- Status: Done
+- Original problem: `MCPControllerContext.prepare` matched owner-scoped mutations against a
+  hard-coded string list that had to stay in sync with the daemon's `resolveForMutation` call
+  sites by hand. Adding `scroll`, `move`, and `drag` to the daemon without adding them to that
+  list made all three permanently uncallable over MCP.
+- Impact: The failure is unrecoverable from the client's side — the daemon answers "controller
+  lease is required", and leases are deliberately never returned in a session list, so the agent
+  has no way to obtain one. A new pointer command looked implemented and was unusable.
+- Fix: `DaemonCommand.ownerScopedMutations` in `Protocol.swift` is the single definition both
+  sides read.
+- Verification: `PointerSurfaceTests.testEveryPointerCommandIsOwnerScopedSoMCPAttachesItsLease`,
+  and the end-to-end MCP run that first exposed it.
+
+### SPAO-173 — Scroll through accessibility, because synthetic wheel events do not arrive
+
+- Priority: P0
+- Status: Done
+- Evidence: Measured against TextEdit on macOS 27 through a standalone probe: per-PID scroll wheel
+  events in pixel units and line units, stamped and unstamped with the window id, with and
+  without an explicit event location, and with the continuous-phase field set — **every variant
+  reported success and moved nothing**. The same host reports `MISS focus-without-raise` in
+  `doctor`, and a per-PID coordinate click into a document did not move the insertion point
+  either, which points at the removed focus record as the load-bearing dependency.
+- Impact: `spaceo scroll` returned `ok: true` while the view did not move. Silent success is the
+  failure mode this project treats as worse than refusal, and it made every below-the-fold task
+  quietly impossible.
+- Fix:
+  - `AX.scrollArea(at:in:windowID:)` resolves the scroll area **within the requested window**.
+    An app-wide hit test answers with the frontmost window, and TextEdit's document and Untitled
+    windows occupy identical frames — so the first implementation scrolled the wrong window and
+    reported success.
+  - `AX.scroll` sets the scroll bar's documented 0...1 `AXValue` and **compares the read-back
+    against the starting value**, so an element pinned at its limit or ignoring the write is
+    reported as not scrolled rather than as a scroll.
+  - The synthetic wheel remains a fallback for canvas surfaces with no scroll bar, and that path
+    now ends in an explicit unconfirmed error rather than a success.
+- Verification: live before/after capture — content moved from lines 1–70 to 128–200, bringing
+  the deliberately off-screen `TARGET-BELOW-THE-FOLD` marker into view.
+
+### SPAO-174 — Report unconfirmed pointer delivery instead of bare success
+
+- Priority: P0
+- Status: Done (reporting); the underlying delivery gap is tracked below
+- Evidence: A coordinate click into a TextEdit document reported `ok: true` and did not move the
+  insertion point — a marker typed after the click landed immediately after the pre-click marker.
+  Coordinate clicks only take effect when an accessibility element under the point accepts an
+  `AXPress`; the raw per-PID fallback is not known to reach AppKit on a host without the
+  focus-without-raise record.
+- Impact: The agent believes it clicked. Every downstream step then reasons from a state that
+  never happened, which is strictly worse than a refusal it could have handled.
+- Fix: `InputRouter.click` returns a `PointerDelivery` distinguishing a confirmed accessibility
+  action from unconfirmed synthetic delivery. `Response.warnings` carries the distinction, the
+  CLI prints it as `unconfirmed:`, and MCP renders it as `UNCONFIRMED:` ahead of ambient notes.
+- Remaining decision for the owner: whether unconfirmed coordinate delivery should become a hard
+  error. SPAO-105 deliberately moved this surface from refusing to attempting, so leaving it as a
+  loud warning respects that decision rather than silently reversing it.
+
+### SPAO-175 — A running daemon keeps executing the binary it started with
+
+- Priority: P2
+- Status: Open
+- Evidence: `make install` replaces `~/.local/bin/spaceo`, but the daemon is a long-lived process
+  and continues to run its original image. Three rebuild-and-retest cycles during the SPAO-173
+  investigation silently tested unchanged behaviour, and the fix only appeared after
+  `spaceo daemon stop`.
+- Impact: Anyone developing against SpaceO — or upgrading it — can conclude a change had no
+  effect, or run a mixed pair of new client and old daemon whose wire expectations differ.
+- Acceptance:
+  - `spaceo doctor` reports the running daemon's version alongside the CLI's, and flags a
+    mismatch.
+  - A client refuses, or clearly warns, when its protocol expectations exceed the daemon's.
+  - Installation and upgrade documentation states that the daemon must be restarted.
+
+### SPAO-176 — Give web content the pointer actions it can actually receive
+
+- Priority: P0
+- Status: Done
+- Evidence: `ChromiumBridge` implemented click, type and key but had **no scroll, hover, or drag**.
+  Web content is the one surface where nothing else can substitute: the renderer drops synthetic
+  events the WindowServer did not vouch for (`FINDINGS.md` §4.7), and a page's scroller is not an
+  accessibility scroll bar, so neither native path can move it either. A page was therefore
+  unscrollable — the single most common thing an agent does on the web.
+- Impact: Every below-the-fold web task was impossible, and hover-revealed menus and drag
+  interactions were unreachable.
+- Fix:
+  - `scroll`, `move`, and `drag` dispatched through `Input.dispatchMouseEvent`.
+  - `viewportPoint(windowLocal:windowOrigin:)` shared by every pointer action, so a click and a
+    scroll aimed at the same pixel cannot land in different coordinate spaces.
+  - The bridge's click no longer maps every non-right button onto left, which had turned a middle
+    click into an ordinary click on whatever was under it.
+- Verification: `scripts/computer-use-check.mjs --suite=web` asserts DOM effects, not return
+  values — click fires a DOM click, scroll reaches `scrollY` 1541, hover fires `mouseenter`, drag
+  produces a selection, and typing reaches an input.
+
+### SPAO-177 — Make `web` mean "these are viewport coordinates" on pointer actions
+
+- Priority: P1
+- Status: Done
+- Original problem: `spaceo_read_screen` prints page elements with **CSS viewport** coordinates
+  (`[w0] button — CLICK ME at (70,37)`), but every pointer tool takes **window-local** points.
+  Browser chrome offsets the two by its own height, so an agent that read its own screen output
+  and passed those numbers back aimed roughly a toolbar above its target. `click --web` already
+  existed as a flag and was accepted and silently ignored.
+- Impact: The only positional information an agent has about a page was not usable with the tools
+  that consume positions.
+- Fix: `web: true` on click, scroll, move and drag means the supplied coordinates are already CSS
+  viewport coordinates and are dispatched straight through DevTools. The previously dead `--web`
+  flag on click now does this.
+- Verification: the web suite drives hover and drag from coordinates it reads out of
+  `read_screen`, which is the path an agent actually takes.
+
+### SPAO-178 — Disclose a clipped screen read
+
+- Priority: P1
+- Status: Done
+- Evidence: `AXTraversal` clips every value at 480 bytes and marks it with an ellipsis, but
+  nothing above that reported the clipping. A 200-line document read back as its first few lines,
+  looking exactly like a complete read of a short document.
+- Impact: An agent concludes content does not exist and moves on — the same class of failure as a
+  silent click, one level up.
+- Fix: `Response.truncated` is set when any value was clipped, and the message says so in words
+  and names the alternatives (screenshot, or scroll and read again).
+- Verification: the native suite asserts that a clipped read discloses the clipping.
+
+### SPAO-179 — Electron apps have no pointer channel that works
+
+- Priority: P1
+- Status: Open
+- Evidence: Measured against Cursor on the agent display: the accessibility tree is readable
+  (119 outline lines in the latest run) and the window renders, but there is no scroll area with a settable scroll
+  bar, and SpaceO only supplies `--remote-debugging-port` to applications it launches *as
+  browsers* — so an Electron app gets neither the accessibility path nor the DevTools path.
+  `spaceo scroll` now refuses honestly rather than reporting a success that moved nothing.
+  A private-profile remote-debugging experiment reached a DevTools endpoint, but every
+  non-activating launch path produced no AX window. Allowing normal foreground activation
+  produced a window and renderer target, but visibly stole the user's route and is therefore not
+  an acceptable SpaceO implementation.
+- Impact: Electron is one of the three application classes the README claims to exercise, and
+  scrolling, hovering and dragging are unavailable in all of it. Since Electron *is* Chromium,
+  the channel that works for browsers should be reachable here too.
+- Acceptance:
+  - Launch Electron applications with a DevTools port and a private user-data directory, or
+    document why a given app cannot accept one.
+  - Bind to the correct renderer target rather than the first one listed.
+  - Extend `scripts/computer-use-check.mjs --suite=electron` to assert scroll and hover effects
+    the way the web suite does, rather than accepting an honest refusal.
+- Current gate: the Electron suite compares screenshots before and after scroll. It exits with
+  blocker status (`2`) when Cursor has no safe renderer channel; it will pass automatically once
+  an observable effect is delivered without an isolation breach.
 
 ## Completed automated verification
 
-- 274 deterministic tests pass, including unrestricted geometry/density admission and
-  constant-space large-density tile lookup, without invoking live WindowServer tests.
-- Clean debug build passes.
-- Release build and the 12-tool MCP protocol/validation/mutation-safety smoke pass.
+- 303 deterministic tests pass, including the agent pointer surface, capture coordinate space,
+  unrestricted geometry/density admission and constant-space large-density tile lookup, without
+  invoking live WindowServer tests.
+- Clean debug build passes with no warnings.
+- Release build and the 16-tool MCP protocol/validation/mutation-safety smoke pass.
+- `scripts/computer-use-check.mjs` drives the real MCP stdio server end to end across three
+  application classes — native AppKit (TextEdit), Chromium web content (Google Chrome), and
+  Electron (Cursor). Where an action has an observable effect the suite asserts the *effect*:
+  native scroll is checked by comparing screenshots, and every web action is checked against page
+  state the fixture encodes in its window title. The latest full run passes 24/25 steps and
+  records the Electron pointer channel as the sole blocker instead of laundering its honest
+  refusal into a pass.
+  Run it with `node scripts/computer-use-check.mjs [--suite=native|web|electron|all]`.
+  It found SPAO-172 through SPAO-178, none of which any unit test or the protocol smoke saw.
 - Regression coverage exists for transport double-start, doctor/version JSON, bounded display
   configuration, Viewer targeting semantics, and release qualification records.
 - Live one-display runs passed native placement, CLI pointer/key/type delivery, capture,
   Viewer pointer/key/TextEdit delivery, toolbar screenshot sizing, isolation verification, app
-  cleanup, daemon shutdown and zero-display teardown.
+  cleanup, daemon shutdown and zero-display teardown. The latest complete live run passed 15/16;
+  the shared-display two-session case failed safely because the right-hand session's oversized
+  windows refused tile placement. Teardown still left zero SpaceO displays, orphan displays, or
+  owned apps. That remaining live gate is SPAO-148.

@@ -97,8 +97,7 @@ public struct ResourceBudget: Sendable, Equatable {
                                          capacity: capacity, index: 0),
               tile.width >= 1, tile.height >= 1 else {
             throw SpaceOError.badRequest(
-                "sessions per display must be between 1 and \(TileLayout.maximumCapacity), "
-                + "with at least one pixel per tile")
+                "sessions per display must be positive and give every tile at least one pixel")
         }
         return (width, height)
     }

@@ -12,6 +12,7 @@ protocol ViewerDisplayStreaming: AnyObject, Sendable {
     func start(
         displayID: CGDirectDisplayID,
         pointSize: CGSize,
+        sourceRect: CGRect?,
         onFrame: @escaping @Sendable (CMSampleBuffer) -> Void,
         onStopped: @escaping @Sendable (Error?) -> Void
     ) async throws -> any ViewerDisplayStreamSession
@@ -28,6 +29,7 @@ final class DisplayStream: ViewerDisplayStreaming, @unchecked Sendable {
     func start(
         displayID: CGDirectDisplayID,
         pointSize: CGSize,
+        sourceRect: CGRect?,
         onFrame: @escaping @Sendable (CMSampleBuffer) -> Void,
         onStopped: @escaping @Sendable (Error?) -> Void
     ) async throws -> any ViewerDisplayStreamSession {
@@ -53,10 +55,14 @@ final class DisplayStream: ViewerDisplayStreaming, @unchecked Sendable {
             let dimensions = Self.frameDimensions(
                 pixelWidth: display.width,
                 pixelHeight: display.height,
-                fallbackPointSize: pointSize
+                fallbackPointSize: pointSize,
+                sourceRect: sourceRect
             )
             config.width = dimensions.width
             config.height = dimensions.height
+            if let sourceRect {
+                config.sourceRect = sourceRect
+            }
             config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
             config.pixelFormat = kCVPixelFormatType_32BGRA
             config.queueDepth = 6
@@ -90,8 +96,22 @@ final class DisplayStream: ViewerDisplayStreaming, @unchecked Sendable {
     static func frameDimensions(
         pixelWidth: Int,
         pixelHeight: Int,
-        fallbackPointSize: CGSize
+        fallbackPointSize: CGSize,
+        sourceRect: CGRect? = nil
     ) -> (width: Int, height: Int) {
+        if pixelWidth > 0, pixelHeight > 0,
+           let sourceRect,
+           fallbackPointSize.width.isFinite, fallbackPointSize.height.isFinite,
+           fallbackPointSize.width > 0, fallbackPointSize.height > 0,
+           sourceRect.width.isFinite, sourceRect.height.isFinite,
+           sourceRect.width > 0, sourceRect.height > 0 {
+            let scaleX = Double(pixelWidth) / fallbackPointSize.width
+            let scaleY = Double(pixelHeight) / fallbackPointSize.height
+            return (
+                max(1, Int((sourceRect.width * scaleX).rounded())),
+                max(1, Int((sourceRect.height * scaleY).rounded()))
+            )
+        }
         if pixelWidth > 0, pixelHeight > 0 {
             return (pixelWidth, pixelHeight)
         }

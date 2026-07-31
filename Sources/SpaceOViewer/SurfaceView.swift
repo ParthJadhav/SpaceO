@@ -16,6 +16,17 @@ final class VMSurfaceView: NSView {
     var onKey: ((_ down: Bool, _ keyCode: UInt16,
                  _ modifiers: NSEvent.ModifierFlags, _ characters: String?) -> Void)?
     var onExitControl: (() -> Void)?
+    var onCaptureRequest: (() -> Void)?
+    var onPan: ((CGPoint) -> Void)?
+    var displayBounds = CGRect.zero {
+        didSet { needsLayout = true }
+    }
+    var zoom: CGFloat = 1 {
+        didSet { needsLayout = true }
+    }
+    var pan = CGPoint.zero {
+        didSet { needsLayout = true }
+    }
     var displayName = "No display selected" {
         didSet { updateAccessibilityMetadata() }
     }
@@ -29,6 +40,9 @@ final class VMSurfaceView: NSView {
                 // A new Control session cannot be a repeat of an exit sequence whose key-up was
                 // lost while the previous session was closing.
                 localExitKeyIsDown = false
+                beginHostInputCapture()
+            } else {
+                endHostInputCapture()
             }
             window?.invalidateCursorRects(for: self)
             updateAccessibilityMetadata()
@@ -36,8 +50,13 @@ final class VMSurfaceView: NSView {
     }
 
     private let contentLayer = CALayer()
+    private let virtualPointerLayer = CAShapeLayer()
     private var lastSample: CMSampleBuffer?
     private var activeTrackingArea: NSTrackingArea?
+    private var windowObservers: [NSObjectProtocol] = []
+    private var hostCaptureActive = false
+    private var savedHostCursorPosition: CGPoint?
+    private var virtualPointer = CGPoint.zero
     /// Control turns off during the reserved key-down callback. Remember that sequence so its
     /// matching key-up (and any repeat generated before release) remains local as well.
     private var localExitKeyIsDown = false
@@ -51,6 +70,18 @@ final class VMSurfaceView: NSView {
         layer?.backgroundColor = NSColor.black.cgColor
         contentLayer.contentsGravity = .resizeAspect
         layer?.addSublayer(contentLayer)
+        virtualPointerLayer.path = CGPath(
+            ellipseIn: CGRect(x: -4, y: -4, width: 8, height: 8),
+            transform: nil
+        )
+        virtualPointerLayer.fillColor = NSColor.controlAccentColor.cgColor
+        virtualPointerLayer.strokeColor = NSColor.white.cgColor
+        virtualPointerLayer.lineWidth = 1.5
+        virtualPointerLayer.shadowColor = NSColor.black.cgColor
+        virtualPointerLayer.shadowOpacity = 0.45
+        virtualPointerLayer.shadowRadius = 2
+        virtualPointerLayer.isHidden = true
+        layer?.addSublayer(virtualPointerLayer)
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         updateAccessibilityMetadata()
@@ -60,14 +91,55 @@ final class VMSurfaceView: NSView {
         fatalError("VMSurfaceView is code-only")
     }
 
+    deinit {
+        endHostInputCapture()
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        windowObservers.forEach(NotificationCenter.default.removeObserver)
+        windowObservers.removeAll()
+        guard let window else {
+            endHostInputCapture()
+            return
+        }
+        let center = NotificationCenter.default
+        windowObservers.append(center.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onExitControl?()
+        })
+        windowObservers.append(center.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: NSApp,
+            queue: .main
+        ) { [weak self] _ in
+            self?.onExitControl?()
+        })
+        if interactionEnabled { beginHostInputCapture() }
+    }
+
     override func layout() {
         super.layout()
-        withoutImplicitAnimation { contentLayer.frame = bounds }
+        let mapping = MirrorInput.ViewportMapping(
+            displayBounds: displayBounds,
+            viewSize: bounds.size,
+            zoom: zoom,
+            pan: pan
+        )
+        withoutImplicitAnimation {
+            contentLayer.frame = mapping.contentRect
+            contentLayer.contentsGravity = .resize
+            updateVirtualPointerLayer(mapping: mapping)
+        }
     }
 
     override func resetCursorRects() {
-        if interactionEnabled {
-            addCursorRect(bounds, cursor: .crosshair)
+        if !interactionEnabled {
+            addCursorRect(bounds, cursor: zoom > 1 ? .openHand : .arrow)
         }
     }
 
@@ -106,7 +178,18 @@ final class VMSurfaceView: NSView {
     }
 
     private func viewPoint(for event: NSEvent) -> CGPoint {
-        convert(event.locationInWindow, from: nil)   // flipped view: top-left origin
+        guard hostCaptureActive else {
+            return convert(event.locationInWindow, from: nil)
+        }
+        if event.type == .mouseMoved
+            || event.type == .leftMouseDragged
+            || event.type == .rightMouseDragged {
+            virtualPointer.x += event.deltaX
+            virtualPointer.y += event.deltaY
+            clampVirtualPointer()
+            updateVirtualPointerLayer()
+        }
+        return virtualPointer
     }
 
     private func forwardPointer(_ phase: MirrorInput.PointerPhase,
@@ -117,10 +200,17 @@ final class VMSurfaceView: NSView {
                        viewPoint: viewPoint(for: event),
                        viewSize: bounds.size,
                        clickCount: max(1, min(3, event.clickCount)),
-                       template: event.cgEvent?.copy())
+                       template: event.cgEvent?.copy(),
+                       zoom: zoom,
+                       pan: pan)
     }
 
     override func mouseDown(with event: NSEvent) {
+        if !interactionEnabled {
+            window?.makeFirstResponder(self)
+            onCaptureRequest?()
+            return
+        }
         window?.makeFirstResponder(self)
         forwardPointer(.down, .left, event)
     }
@@ -132,11 +222,20 @@ final class VMSurfaceView: NSView {
     override func mouseMoved(with event: NSEvent) { forwardPointer(.move, .left, event) }
 
     override func scrollWheel(with event: NSEvent) {
-        guard interactionEnabled else { return }
+        guard interactionEnabled else {
+            guard zoom > 1 else { return }
+            onPan?(CGPoint(
+                x: event.scrollingDeltaX / 240,
+                y: event.scrollingDeltaY / 240
+            ))
+            return
+        }
         input?.scroll(deltaX: event.scrollingDeltaX,
                       deltaY: event.scrollingDeltaY,
                       viewPoint: viewPoint(for: event),
-                      viewSize: bounds.size)
+                      viewSize: bounds.size,
+                      zoom: zoom,
+                      pan: pan)
     }
 
     // MARK: - Keyboard events
@@ -216,6 +315,88 @@ final class VMSurfaceView: NSView {
             )
         )
     }
+
+    // MARK: - Host-input capture
+
+    private func beginHostInputCapture() {
+        guard interactionEnabled,
+              window?.isKeyWindow == true,
+              !hostCaptureActive else { return }
+        savedHostCursorPosition = CGEvent(source: nil)?.location
+        let mapping = MirrorInput.ViewportMapping(
+            displayBounds: displayBounds,
+            viewSize: bounds.size,
+            zoom: zoom,
+            pan: pan
+        )
+        let localMouse = window.map { convert($0.mouseLocationOutsideOfEventStream, from: nil) }
+            ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        virtualPointer = mapping.contentRect.contains(localMouse)
+            ? localMouse
+            : CGPoint(x: mapping.contentRect.midX, y: mapping.contentRect.midY)
+        clampVirtualPointer()
+
+        // Record the takeover before it happens. Everything below belongs to the whole Mac and
+        // outlives this process, so a crash between the breadcrumb and the restore is survivable
+        // while a crash between the takeover and the breadcrumb is not.
+        HostInputGuard.beginCapture()
+        CGAssociateMouseAndMouseCursorPosition(0)
+        _ = MirrorInput.setHostGlobalShortcutsEnabled(false)
+        NSCursor.hide()
+        hostCaptureActive = true
+        virtualPointerLayer.isHidden = false
+        updateVirtualPointerLayer(mapping: mapping)
+    }
+
+    private func endHostInputCapture() {
+        guard hostCaptureActive else { return }
+        _ = MirrorInput.setHostGlobalShortcutsEnabled(true)
+        CGAssociateMouseAndMouseCursorPosition(1)
+        if let savedHostCursorPosition {
+            CGWarpMouseCursorPosition(savedHostCursorPosition)
+        }
+        savedHostCursorPosition = nil
+        hostCaptureActive = false
+        virtualPointerLayer.isHidden = true
+        NSCursor.unhide()
+        HostInputGuard.endCapture()
+    }
+
+    private func clampVirtualPointer() {
+        let mapping = MirrorInput.ViewportMapping(
+            displayBounds: displayBounds,
+            viewSize: bounds.size,
+            zoom: zoom,
+            pan: pan
+        )
+        guard mapping.contentRect.width > 0, mapping.contentRect.height > 0 else {
+            virtualPointer = CGPoint(x: bounds.midX, y: bounds.midY)
+            return
+        }
+        virtualPointer = CGPoint(
+            x: min(mapping.contentRect.maxX.nextDown,
+                   max(mapping.contentRect.minX, virtualPointer.x)),
+            y: min(mapping.contentRect.maxY.nextDown,
+                   max(mapping.contentRect.minY, virtualPointer.y))
+        )
+    }
+
+    private func updateVirtualPointerLayer(
+        mapping: MirrorInput.ViewportMapping? = nil
+    ) {
+        guard hostCaptureActive else {
+            virtualPointerLayer.isHidden = true
+            return
+        }
+        if let mapping, !mapping.contentRect.contains(virtualPointer) {
+            virtualPointer = CGPoint(
+                x: mapping.contentRect.midX,
+                y: mapping.contentRect.midY
+            )
+        }
+        virtualPointerLayer.position = virtualPointer
+        virtualPointerLayer.isHidden = false
+    }
 }
 
 /// SwiftUI wrapper for the console surface.
@@ -232,6 +413,12 @@ struct StreamSurface: NSViewRepresentable {
         view.onExitControl = { [weak model] in
             model?.setInteractionEnabled(false)
         }
+        view.onCaptureRequest = { [weak model] in
+            model?.setInteractionEnabled(true)
+        }
+        view.onPan = { [weak model] delta in
+            model?.pan(by: delta)
+        }
         model.onFrame = { [weak view] sample in
             DispatchQueue.main.async { view?.present(sample) }
         }
@@ -242,7 +429,10 @@ struct StreamSurface: NSViewRepresentable {
         let interactive = model.interactionEnabled
             && model.selected != nil
             && model.streamRunning
-        view.displayName = model.selected?.name ?? "No display selected"
+        view.displayName = model.interactionDisplay?.name ?? "No display selected"
+        view.displayBounds = model.interactionDisplay?.bounds ?? .zero
+        view.zoom = model.viewportZoom
+        view.pan = model.viewportPan
         view.streamRunning = model.streamRunning
         view.interactionEnabled = interactive
         if interactive, view.window?.firstResponder !== view {

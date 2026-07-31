@@ -91,8 +91,10 @@ excess empty displays from a larger peak are retired after a grace period.
 **Runtime geometry — `ResourceBudget`.** `allocate()` does not impose product-policy ceilings on
 sessions, displays, framebuffer totals, or creation rate. It validates positive whole-pixel
 geometry representable by Swift and CoreGraphics. `pool` and `doctor` report current usage.
-Capacity remains bounded by `TileLayout.maximumCapacity` because the public full-layout API
-materializes an array; per-tile lookup stays O(1) and allocation-free.
+The convenience full-layout API materializes at most
+`TileLayout.maximumMaterializedCapacity` entries. That allocation bound is not a density limit:
+production per-tile lookup stays O(1) and allocation-free for any positive technically
+representable capacity.
 
 ### 3.1 Stage — `VirtualDisplay`
 
@@ -170,6 +172,11 @@ let app = try await session.launch(app: appURL, opening: [fileURL])   // placed 
 - Some apps activate themselves regardless of `activates = false` (Electron shells calling
   `NSApp.activate`). SpaceO cannot prevent that, so it hands the user's frontmost app straight
   back and reports that it had to — a blip rather than a state change.
+- Electron renderer control is not treated as Chromium browser control by default. On the
+  verification host, a private-profile Cursor launch with remote debugging creates no window
+  while backgrounded; foregrounding it creates the renderer but violates the invariant above.
+  The conformance harness therefore records SPAO-179 as blocked instead of accepting a
+  successful-return/no-effect pointer action.
 
 ### 3.3 Input — `InputRouter`
 
@@ -189,6 +196,19 @@ The native-input sequence:
    §3.3b instead.
 6. `press(element:)` — `AXUIElementPerformAction(kAXPressAction)`. **Preferred.** Coordinate-free,
    needs no focus, cannot miss, works while occluded.
+
+The `AXPress` shortcut in step 5 is taken **only for a plain single left click**. A modifier-held,
+multi-, or non-left click means something a press cannot express — shift-click extends a selection,
+double-click selects a word, right-click opens a context menu — so substituting a press there
+would report success for an action that never happened. An element index carries no button, count,
+or modifier state at all, and supplying one is refused rather than silently downgraded.
+
+`move`, `drag`, and `scroll` share `click`'s transaction through one `withPointerTransaction`
+body: the target's input route held for the duration, every event stamped with the window it
+happened over, and a verified route restore afterwards. Sharing one body is what stops a newly
+added action from quietly skipping the stamp — an unstamped per-PID event has no window to route
+to and is dropped rather than delivered. A scroll takes a point for the same reason a click does:
+an app with two scrollable regions routes the wheel by what is under the pointer.
 
 `InputRouter` does not classify targets by bundle identifier. It attempts the requested per-PID
 delivery for native, canvas, game, browser, and Electron processes alike. A target may ignore a
@@ -243,9 +263,20 @@ wedged or hostile local endpoint stream unbounded data into the daemon.
   screen, always renderable because the stage's Space is always active.
 - `Capture.window(windowID)` — `SCContentFilter(desktopIndependentWindow:)`, which is documented
   display- and Space-independent and includes full content when occluded.
-- `Capture.region(stage:rect:)` — a session's **tile**, cropped in the capture itself via
-  `sourceRect` rather than cropped afterwards, so one agent's screenshot can never contain a
-  neighbouring agent's window.
+- `Capture.region(stage:rect:subRect:)` — a session's **tile**, or a sub-region of it, cropped in
+  the capture itself via `sourceRect` rather than cropped afterwards, so one agent's screenshot can
+  never contain a neighbouring agent's window. An oversized `subRect` clamps to the tile, so a
+  caller cannot widen its view past its own tile by asking for a larger rect.
+
+**One scale, and it is reported.** Every agent-facing capture defaults to `Capture.defaultScale`
+(1), so one image pixel is one point and a coordinate read off a screenshot is a coordinate
+`click` accepts. Window captures were previously hard-coded to 2× while tile captures stayed at
+1×: an agent reading a coordinate off the default screenshot clicked at half the intended
+position, hitting the wrong control near the top-left and failing as out-of-bounds near the edges,
+with no field in the response it could have used to tell the difference. Every capture now returns
+an `ImageGeometry` carrying origin kind, scale, pixel and point dimensions, and the captured
+area's global origin, plus a one-line `advice` string stating the conversion. Raising `scale`
+is available for reading small text and is always reported.
 - `AXTree.snapshot(pid:window:)` — walks the accessibility tree and emits **indexed actionable
   nodes**. This is the primary addressing channel for an agent: `click --element 7` beats pixel
   coordinates on every axis (no HiDPI math, no occlusion, no misses). Pixels are the fallback.
@@ -254,11 +285,15 @@ wedged or hostile local endpoint stream unbounded data into the daemon.
 
 ### 3.5 Session hygiene
 
-- `PasteboardGuard` — `withPasteboardPreserved { }` snapshots and restores the general pasteboard
-  around any agent action that might use copy/paste. The general pasteboard is shared and agents
-  *will* clobber it.
-- **Janitor** — periodic sweep: re-park windows that escaped the stage, detect owned-PID focus
-  theft, and reap dead sessions.
+- `PasteboardGuard` — bounded snapshot/restore for tests and diagnostics only. It is deliberately
+  **not** a production copy/cut guard: `NSPasteboard` has no compare-and-swap, so no
+  snapshot/restore bracket can prove it is not overwriting a newer user copy between its final
+  check and its write. Production key delivery therefore refuses Command-C and Command-X outright
+  (`KeyCombo.requireClipboardSafeRoute`) before synthesising either event. Command-V is *not*
+  refused, so an agent can still paste whatever the user last copied — see SPAO-143.
+- **Janitor** — periodic sweep: re-park windows that escaped the stage, reap dead launched apps,
+  reclaim abandoned sessions, and persist session state. It does not detect focus theft; focus is
+  handed back at launch time by `AgentSession` and reported in the response.
 
 ### 3.6 Viewer — `MirrorInput`, SpaceO Viewer
 
@@ -375,12 +410,18 @@ spaceo session list | destroy <id>
 spaceo run <id> <app-path> [-- files...]       launch into a session, no activation
 spaceo windows <id>                            owned windows with ids and frames
 spaceo ax <id> [--window W]                    indexed accessibility tree
-spaceo click <id> (--element N | --x X --y Y)
+spaceo click <id> (--element N | --x X --y Y) [--button B] [--count N] [--modifiers M]
+spaceo move <id> --x X --y Y                   hover, to reveal hover-only UI
+spaceo drag <id> --x X --y Y --to-x X --to-y Y
+spaceo scroll <id> --x X --y Y --dy -600       reach content below the fold
 spaceo type <id> "text"
 spaceo key <id> cmd+s
-spaceo screenshot <id> [--window W] -o out.png
+spaceo screenshot <id> [--window W] [--scale N] [--x X --y Y --width W --height H] -o out.png
 spaceo verify <id>                             assert the isolation invariant right now
 ```
+
+Pointer coordinates are window-local **points** everywhere, and a screenshot at the default
+scale 1 returns one pixel per point, so the two spaces are the same numbers by construction.
 
 `spaceo verify` exists so the invariant is checkable in production, not only in tests.
 

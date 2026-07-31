@@ -180,14 +180,30 @@ final class IntegrationTests: XCTestCase {
         let window = try XCTUnwrap(session.primaryWindow)
         try await Task.sleep(nanoseconds: 500_000_000)
 
-        let windowImage = try await Capture.window(window)
-        XCTAssertTrue(Capture.looksRendered(windowImage),
-                      "window capture was blank — entropy \(Capture.visualEntropy(windowImage))")
+        let windowShot = try await Capture.window(window)
+        XCTAssertTrue(Capture.looksRendered(windowShot.image),
+                      "window capture was blank — entropy \(Capture.visualEntropy(windowShot.image))")
+        // A click takes window-local points, so the default capture has to hand back points.
+        // While window captures were hard-coded to 2x and tile captures to 1x, a coordinate read
+        // off a screenshot landed at half position with nothing in the response to reveal it.
+        XCTAssertEqual(windowShot.geometry.scale, 1)
+        XCTAssertEqual(Double(windowShot.image.width),
+                       windowShot.geometry.pointWidth, accuracy: 1)
 
-        let tileImage = try await Capture.region(session.stage, session.frame)
-        XCTAssertEqual(tileImage.width, 1440)
-        XCTAssertTrue(Capture.looksRendered(tileImage),
-                      "tile capture was blank — entropy \(Capture.visualEntropy(tileImage))")
+        let tileShot = try await Capture.region(session.stage, session.frame)
+        XCTAssertEqual(tileShot.image.width, 1440)
+        XCTAssertEqual(tileShot.geometry.scale, windowShot.geometry.scale,
+                       "window and tile captures must agree on scale")
+        XCTAssertTrue(Capture.looksRendered(tileShot.image),
+                      "tile capture was blank — entropy \(Capture.visualEntropy(tileShot.image))")
+
+        // A zoomed sub-region is expressed against the tile and clamped to it, so an agent can
+        // never widen its view past its own tile by asking for a larger rect.
+        let zoom = try await Capture.region(
+            session.stage, session.frame,
+            subRect: CGRect(x: 0, y: 0, width: 4_000, height: 4_000))
+        XCTAssertEqual(zoom.image.width, 1440,
+                       "an oversized region must clamp to the session's own tile")
     }
 
     // MARK: - Refusals
@@ -304,7 +320,15 @@ final class IntegrationTests: XCTestCase {
                        "window spilled into the neighbouring session's tile")
         XCTAssertTrue(WindowPlacement.isInRegion(rightWindow, right.frame))
         XCTAssertFalse(WindowPlacement.isInRegion(rightWindow, left.frame))
-        XCTAssertTrue(right.audit().isEmpty, "the neighbour should see nothing wrong")
+        // Match the production `verify` path: contain any late TextEdit window that appeared
+        // after the launch result, then audit the settled session. On newer macOS builds the
+        // untitled companion window can materialize between the assertions above and audit.
+        right.sweepStrayWindows()
+        let neighbourFindings = right.audit()
+        XCTAssertTrue(
+            neighbourFindings.isEmpty,
+            "the neighbour should see nothing wrong; got \(neighbourFindings)"
+        )
     }
 
     func testReleaseAllClearsOwnedSpaceBookkeeping() throws {

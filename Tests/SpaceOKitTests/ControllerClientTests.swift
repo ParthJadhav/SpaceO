@@ -270,6 +270,28 @@ final class ControllerClientTests: XCTestCase {
         XCTAssertEqual(capture.value?.controllerLeaseID, lease)
     }
 
+    func testCLIDaemonStopSupportsGlobalJSONOutput() throws {
+        let capture = RequestCapture()
+        let result = try withServer(capture: capture) { socketPath in
+            try runSpaceO([
+                "daemon", "stop",
+                "--socket", socketPath,
+                "--json",
+            ])
+        } response: { _ in
+            Response.success("stopping SpaceO daemon")
+        }
+
+        XCTAssertEqual(result.status, 0, result.standardError)
+        XCTAssertEqual(capture.value?.cmd, "daemon.stop")
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(result.standardOutput.utf8))
+                as? [String: Any]
+        )
+        XCTAssertEqual(payload["ok"] as? Bool, true)
+        XCTAssertEqual(payload["message"] as? String, "stopping SpaceO daemon")
+    }
+
     func testCLIListRenderingLabelsDetachedRecoveryMetadataAndStalePlacement() throws {
         let capture = RequestCapture()
         let detached = try detachedSessionInfo()

@@ -172,13 +172,13 @@ final class OwnershipAndBudgetTests: XCTestCase {
             CGSize(width: 8, height: 8), capacity: 64))
     }
 
-    func testZeroAreaTileAndUnboundedMaterializationAreRejected() throws {
+    func testZeroAreaTileIsRejectedButDensityIsNotCappedByMaterialization() throws {
         let budget = ResourceBudget.default
         XCTAssertThrowsError(try budget.validateDisplaySize(
             CGSize(width: 1, height: 1), capacity: 2))
-        XCTAssertThrowsError(try budget.validateDisplaySize(
-            CGSize(width: 1920, height: 1080),
-            capacity: TileLayout.maximumCapacity + 1))
+        XCTAssertNoThrow(try budget.validateDisplaySize(
+            CGSize(width: 16_384, height: 16_384),
+            capacity: 4_097))
     }
 
     // MARK: - Unrestricted usage accounting
@@ -278,22 +278,18 @@ final class OwnershipAndBudgetTests: XCTestCase {
                                stageFactory: RecordingStageFactory().make)
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(4))
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(0))
-        XCTAssertThrowsError(try pool.setSessionsPerDisplay(TileLayout.maximumCapacity + 1))
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(48))
         XCTAssertEqual(pool.sessionsPerDisplay, 48)
     }
 
     // MARK: - SPAO-128: tile lookup stays bounded
 
-    func testTileLookupIsBoundedAndIndividualLookupNeedsNoFullLayout() {
-        let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+    func testTileLookupIsConstantSpaceAndFullLayoutMaterializationStaysBounded() {
+        let bounds = CGRect(x: 0, y: 0, width: 1_000_000, height: 1_000_000)
         XCTAssertNotNil(TileLayout.rect(in: bounds,
-                                        capacity: TileLayout.maximumCapacity, index: 0))
-        XCTAssertNil(TileLayout.rect(in: bounds,
-                                     capacity: TileLayout.maximumCapacity + 1, index: 0),
-                     "a capacity past the bound must be refused, not silently tiled")
+                                        capacity: 1_000_000_000, index: 999_999_999))
         XCTAssertEqual(TileLayout.rects(in: bounds, capacity: Int.max).count,
-                       TileLayout.maximumCapacity,
+                       TileLayout.maximumMaterializedCapacity,
                        "the materialised layout must never scale with a caller-supplied integer")
     }
 }

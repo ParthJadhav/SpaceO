@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import SpaceOPrivate
 
 /// Per-PID input forwarding for a human driving an agent display through the viewer.
 ///
@@ -45,10 +46,17 @@ public enum MirrorInput {
         /// Where the display's pixels land inside the view. `.zero` when either rect is degenerate.
         public let contentRect: CGRect
 
-        public init(displayBounds: CGRect, viewSize: CGSize) {
+        public init(
+            displayBounds: CGRect,
+            viewSize: CGSize,
+            zoom: CGFloat = 1,
+            pan: CGPoint = .zero
+        ) {
             self.displayBounds = displayBounds
             guard displayBounds.width.isFinite, displayBounds.height.isFinite,
                   viewSize.width.isFinite, viewSize.height.isFinite,
+                  zoom.isFinite, zoom >= 1,
+                  pan.x.isFinite, pan.y.isFinite,
                   displayBounds.width > 0, displayBounds.height > 0,
                   viewSize.width > 0, viewSize.height > 0 else {
                 self.contentRect = .zero
@@ -56,10 +64,23 @@ public enum MirrorInput {
             }
             let scale = min(viewSize.width / displayBounds.width,
                             viewSize.height / displayBounds.height)
-            let size = CGSize(width: displayBounds.width * scale,
-                              height: displayBounds.height * scale)
-            self.contentRect = CGRect(x: (viewSize.width - size.width) / 2,
-                                      y: (viewSize.height - size.height) / 2,
+            let fittedSize = CGSize(width: displayBounds.width * scale,
+                                    height: displayBounds.height * scale)
+            let fittedOrigin = CGPoint(
+                x: (viewSize.width - fittedSize.width) / 2,
+                y: (viewSize.height - fittedSize.height) / 2
+            )
+            let clampedPan = CGPoint(
+                x: min(1, max(-1, pan.x)),
+                y: min(1, max(-1, pan.y))
+            )
+            let size = CGSize(width: fittedSize.width * zoom,
+                              height: fittedSize.height * zoom)
+            let overflow = CGSize(width: size.width - fittedSize.width,
+                                  height: size.height - fittedSize.height)
+            self.contentRect = CGRect(
+                x: fittedOrigin.x - overflow.width * (clampedPan.x + 1) / 2,
+                y: fittedOrigin.y - overflow.height * (clampedPan.y + 1) / 2,
                                       width: size.width,
                                       height: size.height)
         }
@@ -85,6 +106,16 @@ public enum MirrorInput {
                           width: rect.width * scaleX,
                           height: rect.height * scaleY)
         }
+    }
+
+    // MARK: - Host shortcut capture
+
+    /// Suppress or restore host-global shortcuts while the Viewer owns an explicit input
+    /// capture. This does not pause the agent or claim daemon ownership; it only changes where
+    /// the human operator's local keystrokes go.
+    @discardableResult
+    public static func setHostGlobalShortcutsEnabled(_ enabled: Bool) -> Bool {
+        SPOSetGlobalHotKeysEnabled(enabled)
     }
 
     // MARK: - Window hit-testing
@@ -141,7 +172,19 @@ public enum MirrorInput {
         containing point: CGPoint,
         excluding excludedPIDs: Set<pid_t> = []
     ) -> WindowCandidate? {
-        candidates.first { candidate in
+        targets(from: candidates, containing: point, excluding: excludedPIDs).first
+    }
+
+    /// Every eligible window under a point, preserving WindowServer front-to-back order.
+    ///
+    /// Viewer pointer-down uses the full list to find an actionable Accessibility control below
+    /// click-through overlays before falling back to the geometrically frontmost canvas/window.
+    public static func targets(
+        from candidates: [WindowCandidate],
+        containing point: CGPoint,
+        excluding excludedPIDs: Set<pid_t> = []
+    ) -> [WindowCandidate] {
+        candidates.filter { candidate in
             !excludedPIDs.contains(candidate.pid) && candidate.bounds.contains(point)
         }
     }

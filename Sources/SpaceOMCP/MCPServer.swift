@@ -50,7 +50,7 @@ final class MCPControllerContext {
             if request.controllerLeaseID == nil {
                 request.controllerLeaseID = UUID()
             }
-        case "session.heartbeat", "run", "adopt", "click", "type", "key", "repark":
+        case let command where DaemonCommand.ownerScopedMutations.contains(command):
             guard let lease = lease(for: request.session) else {
                 throw MCPControllerError.missingLease(request.session ?? "")
             }
@@ -307,11 +307,24 @@ public enum MCPServer {
                 "instructions": """
                 SpaceO gives each agent a virtual display and routes input without activating or \
                 raising the agent's applications. Create a session before launching or driving \
-                apps, prefer indexed accessibility elements over coordinates, and destroy the \
-                session when work is complete. SpaceO isolates attention, not security: launched \
-                apps and same-user clients retain the macOS user's file, network, app-session, \
-                notification, and credential authority. Use a separate login session or VM for \
-                untrusted agents or applications.
+                apps, and destroy the session when work is complete.
+
+                Addressing: prefer indexed accessibility elements from spaceo_read_screen over \
+                coordinates — an index cannot miss and survives the window moving. Use \
+                coordinates when you need something an accessibility press cannot express: a \
+                right-click, a double-click, a modifier-held click, a drag, or a point with no \
+                accessibility element at all. All coordinates are window-local points, and \
+                spaceo_screenshot at the default scale=1 returns one pixel per point, so a \
+                coordinate you read off the image is a coordinate you can click.
+
+                Reaching content: spaceo_read_screen only describes what is currently on screen. \
+                Use spaceo_scroll to bring anything below the fold into view, and spaceo_move to \
+                reveal hover-only menus and tooltips, then read the screen again.
+
+                SpaceO isolates attention, not security: launched apps and same-user clients \
+                retain the macOS user's file, network, app-session, notification, and credential \
+                authority. Use a separate login session or VM for untrusted agents or \
+                applications.
                 """,
             ], id: id)
 
@@ -369,6 +382,23 @@ public enum MCPServer {
             "minimum": 1,
             "maximum": UInt32.max,
             "description": "Window id; defaults to the session's main window.",
+        ]
+
+        let webPointArg: [String: Any] = [
+            "type": "boolean",
+            "description":
+                "Treat x/y as CSS viewport coordinates inside a web page — the numbers "
+                + "spaceo_read_screen prints beside each wN element. Leave unset for "
+                + "window-local points.",
+        ]
+
+        let modifiersArg: [String: Any] = [
+            "type": "array",
+            "maxItems": 5,
+            "items": ["type": "string", "enum": ["cmd", "shift", "alt", "ctrl", "fn"]],
+            "description":
+                "Modifier keys held for the whole action, e.g. [\"shift\"] to extend a "
+                + "selection or [\"cmd\"] to multi-select.",
         ]
 
         func tool(_ name: String, _ description: String,
@@ -460,25 +490,85 @@ public enum MCPServer {
 
             tool("spaceo_screenshot", """
                 PNG of the session's window, or of its whole tile with full=true. Use when you \
-                need to see layout or images that the accessibility outline cannot convey.
+                need to see layout or images that the accessibility outline cannot convey. \
+                At the default scale=1 one image pixel is one point, so a coordinate you read \
+                off the image is exactly what spaceo_click takes. Pass x/y/width/height \
+                (tile-relative) to zoom into part of the tile instead of capturing all of it.
                 """, ["session": sessionArg,
                       "window": windowArg,
-                      "full": ["type": "boolean", "description": "Capture the whole tile."]]),
+                      "full": ["type": "boolean", "description": "Capture the whole tile."],
+                      "scale": ["type": "integer", "minimum": 1, "maximum": 4,
+                                "description":
+                                    "Pixels per point. Leave at 1 so image coordinates are "
+                                    + "click coordinates; raise only to read small text."],
+                      "x": ["type": "number", "description": "Region origin x, tile-relative."],
+                      "y": ["type": "number", "description": "Region origin y, tile-relative."],
+                      "width": ["type": "integer", "minimum": 1,
+                                "description": "Region width in points."],
+                      "height": ["type": "integer", "minimum": 1,
+                                 "description": "Region height in points."]]),
 
             tool("spaceo_click", """
                 Click an element by its reference from spaceo_read_screen (preferred — it cannot \
                 miss), or by x/y coordinates relative to the window's top-left corner. \
                 References look like "3" for an app control and "w3" for an element inside a \
-                web page.
+                web page. An element reference performs an accessibility press, so it cannot \
+                carry a button, count, or modifiers — use x/y coordinates for those.
                 """, ["element": ["type": "string", "maxLength": 32,
                                   "description": "Reference from spaceo_read_screen: \"3\" or \"w3\"."],
-                      "x": ["type": "number", "description": "Window-relative x."],
-                      "y": ["type": "number", "description": "Window-relative y."],
-                      "button": ["type": "string", "enum": ["left", "right"]],
+                      "x": ["type": "number", "description": "Window-relative x, in points."],
+                      "y": ["type": "number", "description": "Window-relative y, in points."],
+                      "button": ["type": "string", "enum": ["left", "right", "middle"]],
                       "count": ["type": "integer", "minimum": 1, "maximum": 3,
-                                "description": "2 for a double-click."],
+                                "description": "2 for a double-click, 3 to select a line."],
+                      "modifiers": modifiersArg,
+                      "web": webPointArg,
                       "session": sessionArg,
                       "window": windowArg]),
+
+            tool("spaceo_scroll", """
+                Scroll at a point inside the window. Positive dy scrolls content up (reveals \
+                what is below); negative dy scrolls down. This is how you reach anything below \
+                the fold — the accessibility outline only describes what is currently on screen.
+                """, ["x": ["type": "number", "description": "Window-relative x to scroll over."],
+                      "y": ["type": "number", "description": "Window-relative y to scroll over."],
+                      "dy": ["type": "integer", "minimum": -10_000, "maximum": 10_000,
+                             "description": "Vertical pixels per tick. Try -600 to page down."],
+                      "dx": ["type": "integer", "minimum": -10_000, "maximum": 10_000,
+                             "description": "Horizontal pixels per tick."],
+                      "ticks": ["type": "integer", "minimum": 1, "maximum": 100,
+                                "description": "How many wheel ticks to send."],
+                      "modifiers": modifiersArg,
+                      "web": webPointArg,
+                      "session": sessionArg,
+                      "window": windowArg],
+                 required: ["x", "y"]),
+
+            tool("spaceo_move", """
+                Move the pointer to a point without pressing anything. Use this to reveal \
+                hover-only interface — menus that open on hover, tooltips, controls that fade \
+                in — then call spaceo_read_screen again to see what appeared.
+                """, ["x": ["type": "number", "description": "Window-relative x."],
+                      "y": ["type": "number", "description": "Window-relative y."],
+                      "modifiers": modifiersArg,
+                      "web": webPointArg,
+                      "session": sessionArg,
+                      "window": windowArg],
+                 required: ["x", "y"]),
+
+            tool("spaceo_drag", """
+                Press at one point, drag to another, and release. Use for sliders, reordering, \
+                resizing, and selecting text by dragging across it.
+                """, ["x": ["type": "number", "description": "Window-relative start x."],
+                      "y": ["type": "number", "description": "Window-relative start y."],
+                      "to_x": ["type": "number", "description": "Window-relative end x."],
+                      "to_y": ["type": "number", "description": "Window-relative end y."],
+                      "button": ["type": "string", "enum": ["left", "right", "middle"]],
+                      "modifiers": modifiersArg,
+                      "web": webPointArg,
+                      "session": sessionArg,
+                      "window": windowArg],
+                 required: ["x", "y", "to_x", "to_y"]),
 
             tool("spaceo_type", """
                 Type text into the session's focused window. Newlines are sent as Return. \
@@ -682,6 +772,9 @@ public enum MCPServer {
         } else if let drift = response.drift {
             lines.append(renderLegacyIsolation(drift))
         }
+        // Ahead of ambient notes: an unconfirmed effect changes what the agent should do next,
+        // where an ambient note is only context.
+        for warning in response.warnings ?? [] { lines.append("UNCONFIRMED: \(warning)") }
         for change in response.ambient ?? [] { lines.append("note: \(change)") }
         return lines.isEmpty ? "ok" : lines.joined(separator: "\n")
     }
@@ -819,9 +912,20 @@ public enum MCPServer {
         case "spaceo_session_destroy": allowed = ["session", "all"]
         case "spaceo_open_app": allowed = ["session", "app", "files"]
         case "spaceo_read_screen": allowed = ["session", "window", "full"]
-        case "spaceo_screenshot": allowed = ["session", "window", "full"]
+        case "spaceo_screenshot":
+            allowed = ["session", "window", "full", "scale", "x", "y", "width", "height"]
         case "spaceo_click":
-            allowed = ["session", "window", "element", "x", "y", "button", "count"]
+            allowed = [
+                "session", "window", "element", "x", "y", "button", "count", "modifiers", "web",
+            ]
+        case "spaceo_scroll":
+            allowed = ["session", "window", "x", "y", "dx", "dy", "ticks", "modifiers", "web"]
+        case "spaceo_move":
+            allowed = ["session", "window", "x", "y", "modifiers", "web"]
+        case "spaceo_drag":
+            allowed = [
+                "session", "window", "x", "y", "to_x", "to_y", "button", "modifiers", "web",
+            ]
         case "spaceo_type": allowed = ["session", "window", "text", "web"]
         case "spaceo_press_key": allowed = ["session", "window", "key", "web"]
         case "spaceo_list_windows", "spaceo_verify_isolation": allowed = ["session"]
@@ -901,6 +1005,34 @@ public enum MCPServer {
             guard let raw = try int("window") else { return nil }
             guard raw > 0, let value = UInt32(exactly: raw) else {
                 throw MCPInputError.invalid("'window' must be an integer from 1 through \(UInt32.max)")
+            }
+            return value
+        }
+        func validatePointerButton(_ raw: String?) throws {
+            guard let raw else { return }
+            guard ["left", "right", "middle"].contains(raw) else {
+                throw MCPInputError.invalid("'button' must be 'left', 'right', or 'middle'")
+            }
+        }
+        func modifiers() throws -> [String]? {
+            guard let value = supplied("modifiers") else { return nil }
+            guard let list = value as? [Any], list.count <= 5 else {
+                throw MCPInputError.invalid(
+                    "'modifiers' must be an array of at most 5 modifier names")
+            }
+            return try list.map { item in
+                guard let name = item as? String, name.count <= 16 else {
+                    throw MCPInputError.invalid(
+                        "'modifiers' entries must be strings of at most 16 characters")
+                }
+                return name
+            }
+        }
+        func int32(_ key: String) throws -> Int32? {
+            guard let raw = try int(key) else { return nil }
+            guard let value = Int32(exactly: raw) else {
+                throw MCPInputError.invalid(
+                    "'\(key)' must be an integer from -10000 through 10000")
             }
             return value
         }
@@ -1002,17 +1134,39 @@ public enum MCPServer {
         case "spaceo_screenshot":
             request.cmd = "screenshot"
             request.full = try flag("full")
+            request.scale = try int("scale")
+            request.x = try dbl("x")
+            request.y = try dbl("y")
+            request.width = try int("width")
+            request.height = try int("height")
+            if let scale = request.scale, !(1...4).contains(scale) {
+                throw MCPInputError.invalid("'scale' must be from 1 through 4")
+            }
+            let regionParts = [
+                request.x != nil, request.y != nil,
+                request.width != nil, request.height != nil,
+            ].filter { $0 }.count
+            guard regionParts == 0 || regionParts == 4 else {
+                throw MCPInputError.invalid(
+                    "a screenshot region needs 'x', 'y', 'width' and 'height' together")
+            }
+            if let width = request.width, width < 1 {
+                throw MCPInputError.invalid("'width' must be at least 1")
+            }
+            if let height = request.height, height < 1 {
+                throw MCPInputError.invalid("'height' must be at least 1")
+            }
             request.output = NSTemporaryDirectory() + "spaceo-mcp-\(UUID().uuidString).png"
         case "spaceo_click":
             request.cmd = "click"
             request.element = try str("element", max: 32)
             request.x = try dbl("x")
             request.y = try dbl("y")
-            request.button = try str("button", max: 5)
+            request.button = try str("button", max: 6)
             request.count = try int("count")
-            if let button = request.button, button != "left" && button != "right" {
-                throw MCPInputError.invalid("'button' must be 'left' or 'right'")
-            }
+            request.modifiers = try modifiers()
+            request.web = try flag("web")
+            try validatePointerButton(request.button)
             if let count = request.count, !(1...3).contains(count) {
                 throw MCPInputError.invalid("'count' must be from 1 through 3")
             }
@@ -1024,6 +1178,51 @@ public enum MCPServer {
             }
             if request.element == nil && request.x == nil {
                 throw MCPInputError.invalid("click needs either 'element' or x/y coordinates")
+            }
+            // An element reference performs an accessibility press, which carries no button,
+            // click count, or modifier state. The daemon refuses this too; catching it here
+            // saves a round trip and names the alternative while the model is still deciding.
+            if request.element != nil {
+                let pointerOnly = [
+                    request.button != nil ? "button" : nil,
+                    (request.count ?? 1) != 1 ? "count" : nil,
+                    !(request.modifiers ?? []).isEmpty ? "modifiers" : nil,
+                ].compactMap { $0 }
+                guard pointerOnly.isEmpty else {
+                    throw MCPInputError.invalid(
+                        "'\(pointerOnly.joined(separator: "', '"))' cannot apply to an element "
+                        + "reference, which performs an accessibility press. Read the element's "
+                        + "coordinates from a screenshot and click with x/y instead.")
+                }
+            }
+        case "spaceo_scroll", "spaceo_move", "spaceo_drag":
+            request.cmd = String(name.dropFirst("spaceo_".count))
+            request.x = try dbl("x")
+            request.y = try dbl("y")
+            request.modifiers = try modifiers()
+            request.web = try flag("web")
+            guard request.x != nil, request.y != nil else {
+                throw MCPInputError.invalid("'x' and 'y' are required")
+            }
+            if name == "spaceo_scroll" {
+                request.dx = try int32("dx")
+                request.dy = try int32("dy")
+                request.ticks = try int("ticks")
+                guard request.dx != nil || request.dy != nil else {
+                    throw MCPInputError.invalid("scroll needs 'dx' or 'dy'")
+                }
+                if let ticks = request.ticks, !(1...100).contains(ticks) {
+                    throw MCPInputError.invalid("'ticks' must be from 1 through 100")
+                }
+            }
+            if name == "spaceo_drag" {
+                request.toX = try dbl("to_x")
+                request.toY = try dbl("to_y")
+                request.button = try str("button", max: 6)
+                try validatePointerButton(request.button)
+                guard request.toX != nil, request.toY != nil else {
+                    throw MCPInputError.invalid("'to_x' and 'to_y' are required")
+                }
             }
         case "spaceo_type":
             request.cmd = "type"

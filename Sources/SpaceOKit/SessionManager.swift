@@ -1100,6 +1100,15 @@ public actor SessionManager {
             }
             var response = Response(ok: true)
             response.outline = outline
+            // A screen read that stopped short reads exactly like a complete one, so an agent
+            // reasons over a partial view believing it is the whole screen. The traversal marks
+            // every clipped value with an ellipsis; surface that as a flag and say so in words.
+            if outline.contains("…") {
+                response.truncated = true
+                message += "\n  note: some values were clipped (shown with …). A long document's "
+                    + "text is not readable in full through the accessibility outline; screenshot "
+                    + "the window, or scroll and read again."
+            }
             response.message = message
             return response
 
@@ -1108,10 +1117,8 @@ public actor SessionManager {
             guard (1...3).contains(clickCount) else {
                 throw SpaceOError.badRequest("click count must be from 1 through 3")
             }
-            guard request.button == nil || request.button == "left"
-                    || request.button == "right" else {
-                throw SpaceOError.badRequest("button must be 'left' or 'right'")
-            }
+            let button = try MouseButton.parse(request.button)
+            let modifiers = try ModifierKeys.parse(request.modifiers)
             if let x = request.x, !x.isFinite {
                 throw SpaceOError.badRequest("x must be a finite number")
             }
@@ -1131,7 +1138,7 @@ public actor SessionManager {
             let before = IsolationSnapshot.capture()
             let window = try session.resolveWindow(request.window)
             defer { session.invalidateAXSnapshot() }
-            let button: MouseButton = (request.button == "right") ? .right : .left
+            var clickWarnings: [String] = []
 
             if let reference = request.element, reference.hasPrefix("w") {
                 // Page element: only DevTools can dispatch a real DOM click.
@@ -1140,6 +1147,11 @@ public actor SessionManager {
                 }
                 guard index >= 0 else {
                     throw SpaceOError.badRequest("web element indices cannot be negative")
+                }
+                guard modifiers.isEmpty else {
+                    throw SpaceOError.badRequest(
+                        "modifier-held clicks are not available on web element references; "
+                        + "click the element's coordinates instead")
                 }
                 guard let bridge = session.webBridge(for: window.pid) else {
                     throw SpaceOError.badRequest(
@@ -1155,6 +1167,16 @@ public actor SessionManager {
                 guard index >= 0 else {
                     throw SpaceOError.badRequest("element indices cannot be negative")
                 }
+                // An indexed press is an accessibility action, not a pointer event: it has no
+                // button, no click count and no modifier state. Accepting those and performing a
+                // plain press anyway reported success for an action that never happened — the
+                // agent believed it had opened a context menu or extended a selection.
+                guard button == .left, clickCount == 1, modifiers.isEmpty else {
+                    throw SpaceOError.badRequest(
+                        "an element index performs an accessibility press, which cannot carry a "
+                        + "button, click count, or modifiers. Read the element's coordinates from "
+                        + "a screenshot and click by --x/--y for that.")
+                }
                 let element = try session.element(at: index, for: window)
                 try InputRouter.press(element)
             } else if let x = request.x, let y = request.y {
@@ -1162,24 +1184,137 @@ public actor SessionManager {
                     // Coordinates inside a browser window belong to the page, and synthetic
                     // mouse events never arrive there. Translate into viewport space and let
                     // DevTools dispatch it.
-                    let bounds = try WindowPlacement.liveBounds(of: window.windowID)
-                    let viewport = try await bridge.viewportOnScreen()
-                    try await bridge.click(x: bounds.origin.x + x - viewport.origin.x,
-                                           y: bounds.origin.y + y - viewport.origin.y,
+                    guard modifiers.isEmpty else {
+                        throw SpaceOError.badRequest(
+                            "modifier-held clicks are not yet dispatched through DevTools; "
+                            + "this browser window cannot receive them")
+                    }
+                    // `web` means x/y are already CSS viewport coordinates, matching what
+                    // read_screen prints beside each wN element. Previously this flag was
+                    // accepted here and silently ignored.
+                    let page: CGPoint
+                    if request.web == true {
+                        page = CGPoint(x: x, y: y)
+                    } else {
+                        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+                        page = try await bridge.viewportPoint(
+                            windowLocal: CGPoint(x: x, y: y), windowOrigin: bounds.origin)
+                    }
+                    try await bridge.click(x: page.x, y: page.y,
                                            button: button, clickCount: clickCount)
                 } else {
-                    try InputRouter.click(window, at: CGPoint(x: x, y: y),
-                                          button: button, clickCount: clickCount)
+                    let delivery = try InputRouter.click(
+                        window, at: CGPoint(x: x, y: y),
+                        button: button, clickCount: clickCount,
+                        modifiers: modifiers)
+                    if !delivery.isConfirmed {
+                        clickWarnings.append(InputRouter.unverifiedDeliveryNote("click"))
+                    }
                 }
             } else {
                 throw SpaceOError.badRequest("click needs --element N (or wN for page elements) or --x X --y Y")
             }
             var response = Response(ok: true)
+            response.warnings = clickWarnings.isEmpty ? nil : clickWarnings
             let now = IsolationSnapshot.capture()
             response.isolation = now.report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
             failOnIsolationBreach(&response, action: "click")
+            if response.ok {
+                try renewAfterSuccessfulMutation(
+                    session,
+                    leaseID: request.controllerLeaseID)
+            }
+            return response
+
+        case "scroll", "move", "drag":
+            // The three pointer actions share every step except the events they post: same
+            // lease, same lifecycle barrier, same window resolution, same isolation bracket.
+            let modifiers = try ModifierKeys.parse(request.modifiers)
+            let button = try MouseButton.parse(request.button)
+            guard let x = request.x, let y = request.y else {
+                throw SpaceOError.badRequest("\(request.cmd) needs --x X --y Y")
+            }
+            let session = try resolveForMutation(
+                request.session,
+                leaseID: request.controllerLeaseID)
+            let lifecycleLease = try session.beginOperation()
+            defer { lifecycleLease.finish() }
+            let window = try session.resolveWindow(request.window)
+            defer { session.invalidateAXSnapshot() }
+            let before = IsolationSnapshot.capture()
+            let at = CGPoint(x: x, y: y)
+
+            // A point inside a browser window belongs to the page, and nothing synthetic reaches
+            // web content — the renderer drops events the WindowServer did not vouch for, and a
+            // page's scroller is not an accessibility scroll bar either. DevTools is the only
+            // channel that works, exactly as it already is for clicks.
+            if let bridge = session.webBridge(for: window.pid) {
+                guard modifiers.isEmpty else {
+                    throw SpaceOError.badRequest(
+                        "modifier-held pointer actions are not yet dispatched through DevTools; "
+                        + "this browser window cannot receive them")
+                }
+                // `web` means the caller is already speaking CSS viewport coordinates — which is
+                // what `read_screen` prints next to every `wN` element. Without this an agent
+                // that reads `[w0] button at (70,37)` and passes those numbers straight back
+                // lands roughly a browser-chrome's height above what it aimed at.
+                let page: CGPoint
+                if request.web == true {
+                    page = at
+                } else {
+                    let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+                    page = try await bridge.viewportPoint(
+                        windowLocal: at, windowOrigin: bounds.origin)
+                }
+                switch request.cmd {
+                case "scroll":
+                    try await bridge.scroll(
+                        x: page.x, y: page.y,
+                        deltaX: Double(request.dx ?? 0), deltaY: Double(-(request.dy ?? 0)),
+                        ticks: request.ticks ?? 1)
+                case "move":
+                    try await bridge.move(x: page.x, y: page.y)
+                default:
+                    guard let toX = request.toX, let toY = request.toY else {
+                        throw SpaceOError.badRequest("drag needs --to-x X --to-y Y")
+                    }
+                    let destination: CGPoint
+                    if request.web == true {
+                        destination = CGPoint(x: toX, y: toY)
+                    } else {
+                        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+                        destination = try await bridge.viewportPoint(
+                            windowLocal: CGPoint(x: toX, y: toY), windowOrigin: bounds.origin)
+                    }
+                    try await bridge.drag(
+                        fromX: page.x, fromY: page.y,
+                        toX: destination.x, toY: destination.y, button: button)
+                }
+            } else {
+                switch request.cmd {
+                case "scroll":
+                    let dy = request.dy ?? 0
+                    try InputRouter.scroll(window, at: at, dx: request.dx ?? 0, dy: dy,
+                                           ticks: request.ticks ?? 1, modifiers: modifiers)
+                case "move":
+                    try InputRouter.move(window, to: at, modifiers: modifiers)
+                default:
+                    guard let toX = request.toX, let toY = request.toY else {
+                        throw SpaceOError.badRequest("drag needs --to-x X --to-y Y")
+                    }
+                    try InputRouter.drag(window, from: at, to: CGPoint(x: toX, y: toY),
+                                         button: button, modifiers: modifiers)
+                }
+            }
+
+            var response = Response(ok: true)
+            let now = IsolationSnapshot.capture()
+            response.isolation = now.report(comparedTo: before)
+            response.drift = response.isolation?.legacyDrift
+            response.ambient = now.ambientChanges(from: before)
+            failOnIsolationBreach(&response, action: request.cmd)
             if response.ok {
                 try renewAfterSuccessfulMutation(
                     session,
@@ -1281,31 +1416,56 @@ public actor SessionManager {
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             try Capabilities().requireCapture()
-            let image: CGImage
+            let scale = try Capture.validatedScale(request.scale)
+            // A sub-region is expressed against the session's tile, so an agent zooming into a
+            // detail never needs the window's global origin to ask for it.
+            var subRect: CGRect?
+            if request.x != nil || request.y != nil
+                || request.width != nil || request.height != nil {
+                guard let x = request.x, let y = request.y,
+                      let width = request.width, let height = request.height else {
+                    throw SpaceOError.badRequest(
+                        "a screenshot region needs x, y, width and height together")
+                }
+                guard x.isFinite, y.isFinite else {
+                    throw SpaceOError.badRequest("region x and y must be finite numbers")
+                }
+                subRect = CGRect(x: x, y: y, width: Double(width), height: Double(height))
+            }
+            let captured: (image: CGImage, geometry: ImageGeometry)
             let label: String
-            if let windowID = request.window {
+            if let windowID = request.window, subRect == nil {
                 let window = try session.resolveWindow(windowID)
-                image = try await Capture.window(window)
+                captured = try await Capture.window(window, scale: scale)
                 label = "window \(windowID)"
+            } else if subRect != nil {
+                captured = try await Capture.region(
+                    session.stage, session.frame, subRect: subRect, scale: scale)
+                label = "region of tile on display \(session.stage.displayID)"
             } else if request.full ?? false {
                 // "the whole screen" means this session's tile — never a neighbour's.
-                image = try await Capture.region(session.stage, session.frame)
+                captured = try await Capture.region(
+                    session.stage, session.frame, scale: scale)
                 label = session.hasExclusiveDisplay
                     ? "display \(session.stage.displayID)"
                     : "tile \(session.slot.index + 1)/\(session.slot.capacity) of display \(session.stage.displayID)"
             } else if let window = session.primaryWindow {
-                image = try await Capture.window(window)
+                captured = try await Capture.window(window, scale: scale)
                 label = "window \(window.windowID)"
             } else {
-                image = try await Capture.region(session.stage, session.frame)
+                captured = try await Capture.region(
+                    session.stage, session.frame, scale: scale)
                 label = "tile of display \(session.stage.displayID)"
             }
+            let image = captured.image
             let path = request.output
                 ?? NSTemporaryDirectory() + "spaceo-\(UUID().uuidString).png"
             try Capture.write(image, to: URL(fileURLWithPath: path))
             var response = Response(ok: true)
             response.path = path
-            response.message = "captured \(label) (\(image.width)x\(image.height), rendered=\(Capture.looksRendered(image)))"
+            response.image = captured.geometry
+            response.message = "captured \(label) (\(image.width)x\(image.height), "
+                + "rendered=\(Capture.looksRendered(image)))\n  \(captured.geometry.advice)"
             return response
 
         case "verify":

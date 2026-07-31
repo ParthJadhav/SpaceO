@@ -227,24 +227,27 @@ enum Demo {
         // ---- 6. capture ------------------------------------------------------------------
         if capabilities.canCapture && capture {
             do {
-                let image = try await Capture.window(window)
-                check("window screenshot is really rendered", Capture.looksRendered(image),
-                      String(format: "%dx%d entropy %.3f", image.width, image.height,
-                             Capture.visualEntropy(image)))
+                let shot = try await Capture.window(window)
+                check("window screenshot is really rendered", Capture.looksRendered(shot.image),
+                      String(format: "%dx%d entropy %.3f", shot.image.width, shot.image.height,
+                             Capture.visualEntropy(shot.image)))
                 let path = URL(fileURLWithPath: NSTemporaryDirectory() + "spaceo-demo-window.png")
-                try Capture.write(image, to: path)
+                try Capture.write(shot.image, to: path)
                 print("        wrote \(path.path)")
 
                 let tile = try await Capture.region(session.stage, session.frame)
-                check("tile screenshot is really rendered", Capture.looksRendered(tile),
-                      String(format: "%dx%d entropy %.3f", tile.width, tile.height,
-                             Capture.visualEntropy(tile)))
-                check("tile screenshot is cropped to this session",
-                      abs(Double(tile.width) - Double(session.frame.width)) <= 2
-                      || abs(Double(tile.width) - Double(session.frame.width) * 2) <= 4,
-                      String(format: "%d px wide for a %.0f pt tile", tile.width, session.frame.width))
+                check("tile screenshot is really rendered", Capture.looksRendered(tile.image),
+                      String(format: "%dx%d entropy %.3f", tile.image.width, tile.image.height,
+                             Capture.visualEntropy(tile.image)))
+                // Exactly one pixel per point, so a coordinate read off this image is a
+                // coordinate `spaceo click` accepts. The old "1x or 2x" tolerance here was the
+                // ambiguity that made vision-driven clicks land at half position.
+                check("tile screenshot pixels equal click points",
+                      abs(Double(tile.image.width) - Double(session.frame.width)) <= 2,
+                      String(format: "%d px wide for a %.0f pt tile",
+                             tile.image.width, session.frame.width))
                 let tilePath = URL(fileURLWithPath: NSTemporaryDirectory() + "spaceo-demo-tile.png")
-                try Capture.write(tile, to: tilePath)
+                try Capture.write(tile.image, to: tilePath)
                 print("        wrote \(tilePath.path)")
             } catch {
                 check("capture", false, "\(error)")

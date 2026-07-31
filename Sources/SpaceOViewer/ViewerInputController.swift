@@ -263,23 +263,28 @@ final class ViewerInputController: @unchecked Sendable {
                  viewPoint: CGPoint,
                  viewSize: CGSize,
                  clickCount: Int,
-                 template: CGEvent?) {
+                 template: CGEvent?,
+                 zoom: CGFloat = 1,
+                 pan: CGPoint = .zero) {
         guard let display = permittedDisplay(), let ticket = gate.admit() else { return }
         let eventTemplate = EventTemplate(value: template)
         queue.async { [weak self] in
             guard let self, self.gate.isCurrent(ticket) else { return }
             self.deliverPointer(phase, button: button, on: display,
                                 viewPoint: viewPoint, viewSize: viewSize,
-                                clickCount: clickCount, template: eventTemplate.value)
+                                clickCount: clickCount, template: eventTemplate.value,
+                                zoom: zoom, pan: pan)
         }
     }
 
-    func scroll(deltaX: CGFloat, deltaY: CGFloat, viewPoint: CGPoint, viewSize: CGSize) {
+    func scroll(deltaX: CGFloat, deltaY: CGFloat, viewPoint: CGPoint, viewSize: CGSize,
+                zoom: CGFloat = 1, pan: CGPoint = .zero) {
         guard let display = permittedDisplay(), let ticket = gate.admit() else { return }
         queue.async { [weak self] in
             guard let self, self.gate.isCurrent(ticket) else { return }
             self.deliverScroll(deltaX: deltaX, deltaY: deltaY, on: display,
-                               viewPoint: viewPoint, viewSize: viewSize)
+                               viewPoint: viewPoint, viewSize: viewSize,
+                               zoom: zoom, pan: pan)
         }
     }
 
@@ -300,7 +305,9 @@ final class ViewerInputController: @unchecked Sendable {
                                 viewPoint: CGPoint,
                                 viewSize: CGSize,
                                 clickCount: Int,
-                                template: CGEvent?) {
+                                template: CGEvent?,
+                                zoom: CGFloat,
+                                pan: CGPoint) {
         defer {
             if phase == .up {
                 restorePointerRoute()
@@ -314,8 +321,12 @@ final class ViewerInputController: @unchecked Sendable {
                 return
             }
         }
-        let mapping = MirrorInput.ViewportMapping(displayBounds: display.bounds,
-                                                  viewSize: viewSize)
+        let mapping = MirrorInput.ViewportMapping(
+            displayBounds: display.bounds,
+            viewSize: viewSize,
+            zoom: zoom,
+            pan: pan
+        )
         guard let global = mapping.globalPoint(fromViewPoint: viewPoint) else { return }
 
         if phase == .move || phase == .drag {
@@ -325,11 +336,13 @@ final class ViewerInputController: @unchecked Sendable {
         }
 
         let target: WindowRef?
+        var downCandidates: [MirrorInput.WindowCandidate] = []
         switch phase {
         case .down:
             restorePointerRoute()
             accessibilityPressHandled = false
-            target = hitTest(at: global)
+            downCandidates = hitCandidates(at: global)
+            target = downCandidates.first?.ref
             dragTarget = target
         case .drag:
             target = dragTarget ?? hitTest(at: global)
@@ -351,10 +364,15 @@ final class ViewerInputController: @unchecked Sendable {
 
         do {
             if phase == .down {
-                if button == .left, InputRouter.press(at: global, in: target.pid) {
+                if button == .left,
+                   let pressedTarget = Self.pressFirstActionableTarget(
+                       downCandidates,
+                       pressing: { InputRouter.press(at: global, in: $0.pid) }
+                   ) {
                     accessibilityPressHandled = true
-                    keyTarget = target
-                    describeTarget(target)
+                    dragTarget = pressedTarget
+                    keyTarget = pressedTarget
+                    describeTarget(pressedTarget)
                     return
                 }
                 // Keep the target's input route through mouse-up. AppKit controls can discard
@@ -392,9 +410,15 @@ final class ViewerInputController: @unchecked Sendable {
     private func deliverScroll(deltaX: CGFloat, deltaY: CGFloat,
                                on display: DisplayEntry,
                                viewPoint: CGPoint,
-                               viewSize: CGSize) {
-        let mapping = MirrorInput.ViewportMapping(displayBounds: display.bounds,
-                                                  viewSize: viewSize)
+                               viewSize: CGSize,
+                               zoom: CGFloat,
+                               pan: CGPoint) {
+        let mapping = MirrorInput.ViewportMapping(
+            displayBounds: display.bounds,
+            viewSize: viewSize,
+            zoom: zoom,
+            pan: pan
+        )
         guard let global = mapping.globalPoint(fromViewPoint: viewPoint),
               let target = hitTest(at: global) else { return }
         let dx = Int32(max(-500, min(500, deltaX.rounded())))
@@ -461,6 +485,10 @@ final class ViewerInputController: @unchecked Sendable {
     /// window would otherwise let a click select that window and be posted straight back into
     /// this process, which drives the viewer's own controls and feeds itself forever.
     private func hitTest(at global: CGPoint) -> WindowRef? {
+        hitCandidates(at: global).first?.ref
+    }
+
+    private func hitCandidates(at global: CGPoint) -> [MirrorInput.WindowCandidate] {
         let now = DispatchTime.now().uptimeNanoseconds
         let list: [MirrorInput.WindowCandidate]
         if let cache = candidateCache, now &- cache.uptime < 100_000_000 {
@@ -469,8 +497,19 @@ final class ViewerInputController: @unchecked Sendable {
             list = MirrorInput.onScreenCandidates()
             candidateCache = (now, list)
         }
-        return MirrorInput.selectTarget(from: list, containing: global,
-                                        excluding: MirrorInput.selfExcludedPIDs)?.ref
+        return MirrorInput.targets(from: list, containing: global,
+                                   excluding: MirrorInput.selfExcludedPIDs)
+    }
+
+    /// Try pressable controls front-to-back. A click-through overlay may be geometrically first
+    /// even though it has no actionable element at the visible point; the underlying control
+    /// should then win. If no candidate handles AXPress, normal pointer delivery still falls back
+    /// to the first geometric candidate, preserving support for canvases and custom surfaces.
+    static func pressFirstActionableTarget(
+        _ candidates: [MirrorInput.WindowCandidate],
+        pressing: (MirrorInput.WindowCandidate) -> Bool
+    ) -> WindowRef? {
+        candidates.first(where: pressing)?.ref
     }
 
     // MARK: - Support

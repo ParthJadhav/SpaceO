@@ -23,8 +23,19 @@ public struct Request: Codable, Sendable {
     public var web: Bool?
     public var x: Double?
     public var y: Double?
+    /// Drag destination, window-local like `x`/`y`.
+    public var toX: Double?
+    public var toY: Double?
+    /// Scroll deltas in pixels; positive `dy` scrolls content up.
+    public var dx: Int32?
+    public var dy: Int32?
+    public var ticks: Int?
+    /// Modifier keys held for the duration of a pointer action (cmd, shift, alt, ctrl, fn).
+    public var modifiers: [String]?
     public var button: String?
     public var count: Int?
+    /// Capture scale. 1 makes screenshot pixels equal click coordinates; 2 doubles detail.
+    public var scale: Int?
     public var output: String?
     public var quitApps: Bool?
     public var full: Bool?
@@ -36,6 +47,30 @@ public struct Request: Codable, Sendable {
     public var controllerTTLSeconds: Double?
 
     public init(cmd: String) { self.cmd = cmd }
+}
+
+/// The daemon's command vocabulary, in the one place both sides can agree on.
+public enum DaemonCommand {
+
+    /// Commands that mutate a session and therefore need its controller lease.
+    ///
+    /// This exists as shared data rather than a literal in each client because the two copies
+    /// drift silently and in opposite directions: a client that forgets an entry sends work the
+    /// daemon refuses with "controller lease is required", and the agent has no way to supply
+    /// one because leases are deliberately never returned in a session list. Adding a mutating
+    /// command means adding it here, once.
+    public static let ownerScopedMutations: Set<String> = [
+        "session.heartbeat",
+        "run",
+        "adopt",
+        "click",
+        "scroll",
+        "move",
+        "drag",
+        "type",
+        "key",
+        "repark",
+    ]
 }
 
 public struct WindowInfo: Codable, Sendable {
@@ -170,6 +205,67 @@ public struct SessionInfo: Codable, Sendable {
     }
 }
 
+/// What a captured image's pixels mean, so a coordinate read off it can be clicked.
+///
+/// Without this an agent cannot tell a 2× window capture from a 1× tile capture, and there is no
+/// way to recover the difference from the image alone: it reads a coordinate off the picture,
+/// sends it as a click, and lands at half or double the intended position — near the top-left it
+/// silently hits the wrong control, near the edges it fails as out-of-bounds. Every field here
+/// exists to make that conversion mechanical rather than guessed.
+public struct ImageGeometry: Codable, Sendable, Equatable {
+    /// `window` — coordinates are window-local, directly usable as click x/y.
+    /// `tile` — coordinates are tile-local; subtract the window origin to click (see `originX`).
+    public var origin: String
+    /// Pixels per point. Divide an image pixel coordinate by this to get a click coordinate.
+    public var scale: Double
+    public var pixelWidth: Int
+    public var pixelHeight: Int
+    public var pointWidth: Double
+    public var pointHeight: Double
+    /// Global-screen origin of the captured area, so tile and window spaces can be related.
+    public var originX: Double
+    public var originY: Double
+    /// The window a `window` capture belongs to; nil for a tile capture.
+    public var windowID: UInt32?
+
+    public init(
+        origin: String,
+        scale: Double,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        pointWidth: Double,
+        pointHeight: Double,
+        originX: Double,
+        originY: Double,
+        windowID: UInt32? = nil
+    ) {
+        self.origin = origin
+        self.scale = scale
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+        self.pointWidth = pointWidth
+        self.pointHeight = pointHeight
+        self.originX = originX
+        self.originY = originY
+        self.windowID = windowID
+    }
+
+    /// One line an agent can act on without consulting documentation.
+    public var advice: String {
+        if scale == 1 {
+            return origin == "window"
+                ? "Image pixels are window-local points: click these coordinates directly."
+                : "Image pixels are tile-local points. Subtract the target window's origin "
+                    + "(from list_windows) to get click coordinates."
+        }
+        let divisor = scale == scale.rounded() ? String(Int(scale)) : String(scale)
+        return origin == "window"
+            ? "Image is \(divisor)x. Divide pixel coordinates by \(divisor) to get click coordinates."
+            : "Image is \(divisor)x and tile-local. Divide pixel coordinates by \(divisor), then "
+                + "subtract the target window's origin (from list_windows)."
+    }
+}
+
 /// Runtime representation bounds, flattened for wire compatibility.
 public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var maximumSessions: Int
@@ -292,12 +388,21 @@ public struct Response: Codable, Sendable {
     public var sessions: [SessionInfo]?
     public var windows: [WindowInfo]?
     public var outline: String?
+    /// True when an accessibility or page read stopped at a budget rather than at the end of the
+    /// tree. Silence here reads as "this is the whole screen", which is the lie that makes an
+    /// agent reason confidently over a partial view.
+    public var truncated: Bool?
     public var path: String?
+    /// How to convert this image's pixels into click coordinates.
+    public var image: ImageGeometry?
     /// Structured isolation coverage and verdict.
     public var isolation: IsolationReport?
     /// Legacy isolation failures. Omitted for a partial report so `[]` cannot be read as clean.
     public var drift: [String]?
     public var ambient: [String]?
+    /// Things that happened but could not be confirmed. An empty or absent list means the
+    /// command's effect was verified; it is never a place for advisory chatter.
+    public var warnings: [String]?
     public var findings: [String]?
     public var displays: [DisplayPool.DisplayReport]?
     /// What the pool is holding right now, against the limits it will refuse at. Reported by

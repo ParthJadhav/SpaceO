@@ -67,7 +67,12 @@ BOOL SPOBuiltWithARC(void);
 
 #pragma mark - Space graph (read-only)
 
-/// Managed space ids belonging to `displayID`, or nil if the Space API is unavailable.
+/// Managed space ids belonging to `displayID`, matched on that display's UUID alone.
+///
+/// Nil when the Space API is unavailable or the display has no UUID to match against; empty
+/// when no managed display entry is this display. Never another display's Spaces — the result
+/// decides which Spaces count as agent territory, so a guess reports the user's own Space as a
+/// breach. Callers must treat an absent or empty answer as "unknown", not "no Spaces exist".
 NSArray<NSNumber *> *_Nullable SPOSpacesForDisplay(CGDirectDisplayID displayID);
 /// Space ids a window is currently associated with.
 NSArray<NSNumber *> *_Nullable SPOSpacesForWindow(uint32_t windowID);
@@ -129,6 +134,15 @@ uint32_t SPOWindowIDForAXElement(AXUIElementRef element);
 /// Post through the resolved per-PID event symbol.
 /// Returns NO without posting when the symbol is unavailable.
 BOOL SPOPostEventToPID(pid_t pid, CGEventRef event);
+
+#pragma mark - Viewer host-input capture
+
+/// Enable or disable WindowServer global hotkeys for this process's active capture session.
+///
+/// This is the same narrow mechanism VM consoles use so Command-Tab, Mission Control, and
+/// similar host shortcuts can be delivered to the remote surface. Callers must always pair a
+/// disable with an enable; failure to resolve the runtime symbols returns NO without mutation.
+BOOL SPOSetGlobalHotKeysEnabled(BOOL enabled);
 
 NS_ASSUME_NONNULL_END
 

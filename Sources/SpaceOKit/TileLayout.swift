@@ -11,16 +11,19 @@ import CoreGraphics
 /// Pure geometry, so the packing rules are testable without touching the WindowServer.
 public enum TileLayout {
 
-    /// The most tiles one display may be cut into.
+    /// The most tiles the convenience full-layout API will materialize.
     ///
-    /// Not a taste judgement — an unbounded capacity makes `rects` allocate proportionally to a
-    /// caller-supplied integer, and makes `grid` produce tiles no window can use. Sixty-four
-    /// tiles on the largest display this package allows is already past the point of usefulness.
-    public static let maximumCapacity = 64
+    /// This is an allocation bound for `rects`, not a product limit on display density.
+    /// Production allocation uses `rect(in:capacity:index:)`, which stays O(1).
+    public static let maximumMaterializedCapacity = 64
+
+    /// Source-compatible name retained for callers that used the old materialization bound.
+    @available(*, deprecated, renamed: "maximumMaterializedCapacity")
+    public static let maximumCapacity = maximumMaterializedCapacity
 
     /// Column/row split for a given capacity. Wider than tall, because app windows are.
     public static func grid(for capacity: Int) -> (columns: Int, rows: Int) {
-        let n = min(maximumCapacity, max(1, capacity))
+        let n = max(1, capacity)
         switch n {
         case 1:      return (1, 1)
         case 2:      return (2, 1)
@@ -30,7 +33,8 @@ public enum TileLayout {
         case 10...12: return (4, 3)
         default:
             let columns = Int(ceil(sqrt(Double(n))))
-            let rows = Int(ceil(Double(n) / Double(columns)))
+            let quotient = n / columns
+            let rows = quotient + (n % columns == 0 ? 0 : 1)
             return (columns, rows)
         }
     }
@@ -40,15 +44,23 @@ public enum TileLayout {
     /// Tiles tile the display exactly — no gutters. A gutter would waste pixels an agent could
     /// be reading, and nothing here needs to look pretty to a human.
     ///
-    /// Materialises the whole layout, so it is bounded by `maximumCapacity`. Per-tile lookup
-    /// stays O(1) through `rect(in:capacity:index:)` — use that on any hot path.
+    /// Returns a *prefix* of the layout: the first `maximumMaterializedCapacity` tiles at most,
+    /// so the array never scales with a caller-supplied integer. The grid itself always comes
+    /// from the real `capacity`, which is what makes `rects(in:capacity:)[i]` identical to
+    /// `rect(in:capacity:index: i)` for every index returned. Clamping the grid instead handed
+    /// the two APIs different, overlapping rects for the same session above the bound — at
+    /// capacity 100 an 8x8 layout of 240x135 tiles against a 10x10 layout of 192x108 — and
+    /// overlapping tiles are how one agent's window ends up in another agent's screenshot.
+    ///
+    /// Per-tile lookup stays O(1) through `rect(in:capacity:index:)` — use that on any hot path,
+    /// and for any index the prefix does not reach.
     public static func rects(in bounds: CGRect, capacity: Int) -> [CGRect] {
         guard capacity > 0 else { return [] }
-        let n = min(maximumCapacity, capacity)
-        let (columns, rows) = grid(for: n)
+        let (columns, rows) = grid(for: capacity)
         let tileWidth = (bounds.width / CGFloat(columns)).rounded(.down)
         let tileHeight = (bounds.height / CGFloat(rows)).rounded(.down)
 
+        let n = min(maximumMaterializedCapacity, capacity)
         var out: [CGRect] = []
         out.reserveCapacity(n)
         for index in 0..<n {
@@ -66,8 +78,7 @@ public enum TileLayout {
     ///
     /// O(1) and allocation-free — the lookup every session's `frame` goes through.
     public static func rect(in bounds: CGRect, capacity: Int, index: Int) -> CGRect? {
-        guard capacity > 0, capacity <= maximumCapacity,
-              index >= 0, index < capacity else { return nil }
+        guard capacity > 0, index >= 0, index < capacity else { return nil }
         let (columns, rows) = grid(for: capacity)
         let tileWidth = (bounds.width / CGFloat(columns)).rounded(.down)
         let tileHeight = (bounds.height / CGFloat(rows)).rounded(.down)

@@ -346,17 +346,122 @@ public actor ChromiumBridge {
         guard (1...3).contains(clickCount) else {
             throw SpaceOError.badRequest("click count must be from 1 through 3")
         }
-        let name = button == .right ? "right" : "left"
+        // Mapping anything that is not `right` onto `left` turned a middle click — open in a
+        // new tab, close a tab — into an ordinary click on whatever was under it.
+        let name = Self.devToolsButton(button)
         try await send("Input.dispatchMouseEvent",
                        ["type": "mouseMoved", "x": x, "y": y, "button": "none"])
         try await send("Input.dispatchMouseEvent",
                        ["type": "mousePressed", "x": x, "y": y,
-                        "button": name, "buttons": button == .right ? 2 : 1,
+                        "button": name, "buttons": Self.devToolsButtonMask(button),
                         "clickCount": clickCount])
         try await send("Input.dispatchMouseEvent",
                        ["type": "mouseReleased", "x": x, "y": y,
                         "button": name, "buttons": 0,
                         "clickCount": clickCount])
+    }
+
+    /// Translate a window-local point into the page's viewport coordinates.
+    ///
+    /// Shared by every pointer action so they cannot drift into different coordinate spaces —
+    /// which is exactly how a click and a scroll aimed at the same pixel end up hitting
+    /// different things.
+    public func viewportPoint(
+        windowLocal: CGPoint,
+        windowOrigin: CGPoint
+    ) async throws -> CGPoint {
+        let viewport = try await viewportOnScreen()
+        return CGPoint(x: windowOrigin.x + windowLocal.x - viewport.origin.x,
+                       y: windowOrigin.y + windowLocal.y - viewport.origin.y)
+    }
+
+    /// Scroll at a point in *viewport* coordinates.
+    ///
+    /// Web content is the one surface where the wheel genuinely has to come from DevTools:
+    /// the renderer validates event provenance and drops anything the WindowServer did not
+    /// vouch for, and a page's scroller is not in the accessibility tree as a settable scroll
+    /// bar either, so neither of the native paths can move it.
+    public func scroll(
+        x: Double,
+        y: Double,
+        deltaX: Double,
+        deltaY: Double,
+        ticks: Int = 1
+    ) async throws {
+        guard x.isFinite, y.isFinite, deltaX.isFinite, deltaY.isFinite else {
+            throw SpaceOError.badRequest("scroll coordinates and deltas must be finite")
+        }
+        guard (1...100).contains(ticks) else {
+            throw SpaceOError.badRequest("scroll ticks must be from 1 through 100")
+        }
+        for _ in 0..<ticks {
+            try await send("Input.dispatchMouseEvent",
+                           ["type": "mouseWheel", "x": x, "y": y,
+                            "deltaX": deltaX, "deltaY": deltaY])
+        }
+    }
+
+    /// Move the pointer without pressing, so hover-only page UI appears.
+    public func move(x: Double, y: Double) async throws {
+        guard x.isFinite, y.isFinite else {
+            throw SpaceOError.badRequest("move coordinates must be finite")
+        }
+        try await send("Input.dispatchMouseEvent",
+                       ["type": "mouseMoved", "x": x, "y": y, "button": "none"])
+    }
+
+    /// Press, travel, and release in *viewport* coordinates.
+    ///
+    /// The intermediate moves are load-bearing: a press followed immediately by a release
+    /// somewhere else reads as a click at the destination to most page handlers, so sliders and
+    /// drag-to-select need to see the pointer travel.
+    public func drag(
+        fromX: Double, fromY: Double,
+        toX: Double, toY: Double,
+        button: MouseButton = .left,
+        steps: Int = 12
+    ) async throws {
+        guard fromX.isFinite, fromY.isFinite, toX.isFinite, toY.isFinite else {
+            throw SpaceOError.badRequest("drag coordinates must be finite")
+        }
+        guard (1...200).contains(steps) else {
+            throw SpaceOError.badRequest("drag steps must be from 1 through 200")
+        }
+        let name = Self.devToolsButton(button)
+        let mask = Self.devToolsButtonMask(button)
+        try await send("Input.dispatchMouseEvent",
+                       ["type": "mouseMoved", "x": fromX, "y": fromY, "button": "none"])
+        try await send("Input.dispatchMouseEvent",
+                       ["type": "mousePressed", "x": fromX, "y": fromY,
+                        "button": name, "buttons": mask, "clickCount": 1])
+        for step in 1...steps {
+            let t = Double(step) / Double(steps)
+            try await send("Input.dispatchMouseEvent",
+                           ["type": "mouseMoved",
+                            "x": fromX + (toX - fromX) * t,
+                            "y": fromY + (toY - fromY) * t,
+                            "button": name, "buttons": mask])
+        }
+        try await send("Input.dispatchMouseEvent",
+                       ["type": "mouseReleased", "x": toX, "y": toY,
+                        "button": name, "buttons": 0, "clickCount": 1])
+    }
+
+    static func devToolsButton(_ button: MouseButton) -> String {
+        switch button {
+        case .left:   return "left"
+        case .right:  return "right"
+        case .middle: return "middle"
+        }
+    }
+
+    /// CDP's `buttons` bitmask: 1 left, 2 right, 4 middle.
+    static func devToolsButtonMask(_ button: MouseButton) -> Int {
+        switch button {
+        case .left:   return 1
+        case .right:  return 2
+        case .middle: return 4
+        }
     }
 
     public func type(_ text: String) async throws {

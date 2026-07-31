@@ -124,6 +124,126 @@ public enum AX {
         return list
     }
 
+    // MARK: - Scrolling
+
+    /// The scroll area at a global point **inside a specific window**.
+    ///
+    /// The window id is not optional decoration. `AXUIElementCopyElementAtPosition` hit-tests the
+    /// whole application and answers with the frontmost window, so an app with two stacked
+    /// windows — TextEdit with a document and an empty Untitled, which occupy identical frames —
+    /// returns the wrong one. Scrolling it succeeds, reports success, and moves nothing the
+    /// caller asked about. Resolving within the requested window makes that impossible.
+    public static func scrollArea(
+        at point: CGPoint,
+        in pid: pid_t,
+        windowID: CGWindowID
+    ) -> AXUIElement? {
+        let app = application(pid)
+        setTimeout(app, seconds: 1.0)
+        guard let windows = copyValue(app, kAXWindowsAttribute as String) as? [AXUIElement],
+              let window = windows.first(where: { self.windowID($0) == windowID })
+        else { return nil }
+        return deepestScrollArea(in: window, containing: point)
+    }
+
+    /// Deepest scroll area whose frame contains the point, so nested scrollers resolve to the
+    /// inner one — which is what the wheel would have hit.
+    private static func deepestScrollArea(
+        in element: AXUIElement,
+        containing point: CGPoint,
+        depth: Int = 0
+    ) -> AXUIElement? {
+        guard depth < 16 else { return nil }
+        guard let children = copyValue(element, kAXChildrenAttribute as String)
+                as? [AXUIElement] else {
+            return nil
+        }
+        var match: AXUIElement?
+        for child in children.prefix(64) {
+            if let childFrame = frame(child), !childFrame.contains(point) { continue }
+            if let deeper = deepestScrollArea(
+                in: child, containing: point, depth: depth + 1) {
+                return deeper
+            }
+            if role(child) == kAXScrollAreaRole as String { match = child }
+        }
+        return match
+    }
+
+    /// Move a scroll area by a pixel delta, expressed through its scroll bar's documented
+    /// 0...1 `AXValue`.
+    ///
+    /// This is the *primary* scroll path, not a fallback. Synthetic scroll wheel events posted
+    /// with `CGEventPostToPid` do not reach AppKit on a host without the private
+    /// focus-without-raise record: measured against TextEdit on macOS 27, pixel and line units,
+    /// stamped and unstamped, with and without an explicit location, all reported success and
+    /// moved nothing. A scroll bar's value is public API, is settable, and can be read back to
+    /// confirm the scroll actually happened.
+    ///
+    /// Returns the achieved value when the position changed, or nil when this element cannot be
+    /// scrolled — never a silent success.
+    @discardableResult
+    public static func scroll(
+        _ scrollArea: AXUIElement,
+        byPixels delta: CGFloat,
+        horizontal: Bool = false
+    ) -> Double? {
+        let barAttribute = horizontal
+            ? kAXHorizontalScrollBarAttribute
+            : kAXVerticalScrollBarAttribute
+        guard let raw = copyValue(scrollArea, barAttribute as String),
+              CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        let bar = (raw as! AXUIElement)
+
+        var settable: DarwinBoolean = false
+        AXUIElementIsAttributeSettable(bar, kAXValueAttribute as CFString, &settable)
+        guard settable.boolValue,
+              let current = number(bar, kAXValueAttribute as String) else { return nil }
+
+        // AXValue is a fraction of the scrollable range, so a pixel delta needs the range to
+        // convert. The scrollable extent is the content's overflow beyond the viewport.
+        guard let viewport = size(scrollArea, kAXSizeAttribute as String) else { return nil }
+        let extent = horizontal ? viewport.width : viewport.height
+        guard extent > 0 else { return nil }
+        let contentExtent = contentSize(of: scrollArea, horizontal: horizontal) ?? (extent * 2)
+        let scrollable = max(1, contentExtent - extent)
+
+        let target = min(1, max(0, current + Double(delta / scrollable)))
+        guard AXUIElementSetAttributeValue(
+            bar, kAXValueAttribute as CFString, target as NSNumber) == .success else {
+            return nil
+        }
+        // Compare the read-back against where we started, not merely against nil. A scroll area
+        // pinned at its limit accepts the assignment and does not move, and an element that
+        // ignores the write reports success too — returning the new value without checking it
+        // changed is how a scroll that did nothing still reported that it scrolled.
+        guard let achieved = number(bar, kAXValueAttribute as String),
+              abs(achieved - current) > 0.0001 else { return nil }
+        return achieved
+    }
+
+    /// The scrolled content's extent, taken from the largest child a scroll area contains.
+    private static func contentSize(
+        of scrollArea: AXUIElement,
+        horizontal: Bool
+    ) -> CGFloat? {
+        guard let children = copyValue(scrollArea, kAXChildrenAttribute as String)
+                as? [AXUIElement] else { return nil }
+        var largest: CGFloat = 0
+        for child in children.prefix(16) {
+            guard let childSize = size(child, kAXSizeAttribute as String) else { continue }
+            largest = max(largest, horizontal ? childSize.width : childSize.height)
+        }
+        return largest > 0 ? largest : nil
+    }
+
+    public static func number(_ element: AXUIElement, _ attribute: String) -> Double? {
+        guard let raw = copyValue(element, attribute) else { return nil }
+        if let value = raw as? Double { return value }
+        if let value = raw as? NSNumber { return value.doubleValue }
+        return nil
+    }
+
     // MARK: - Identity
 
     /// The CGWindowID behind an AX window element.

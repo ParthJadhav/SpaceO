@@ -210,6 +210,29 @@ final class ViewerSessionPresentationTests: XCTestCase {
             "only the explicitly detached record belongs in the recovery section")
     }
 
+    func testSessionSearchCoversIdentityOwnerAppsWindowsAndState() throws {
+        let json = """
+        {
+          "id":"research-alpha","displayID":7,"x":0,"y":0,"width":100,"height":100,
+          "tileIndex":0,"tileCapacity":1,"exclusiveDisplay":true,
+          "spaces":[],"hasOwnSpace":false,
+          "apps":[{"pid":44,"name":"Safari","bundleID":"com.apple.Safari","startedByUs":true}],
+          "windows":[{"windowID":9,"pid":44,"title":"Market report","x":0,"y":0,
+            "width":100,"height":100,"onStage":true,"spaces":[]}],
+          "createdAt":"2026-07-28T00:00:00Z","teardownPending":false,
+          "runtimeAttached":true,
+          "controllerOwner":{"id":"codex-1","kind":"mcp","label":"Research agent"},
+          "abandoned":true
+        }
+        """
+        let session = try Wire.decoder.decode(SessionInfo.self, from: Data(json.utf8))
+
+        XCTAssertTrue(ViewerSessionSearch.matches(session, query: "research safari"))
+        XCTAssertTrue(ViewerSessionSearch.matches(session, query: "market 44"))
+        XCTAssertTrue(ViewerSessionSearch.matches(session, query: "abandoned codex"))
+        XCTAssertFalse(ViewerSessionSearch.matches(session, query: "terminal"))
+    }
+
     private func presentation(
         teardownPending: Bool = false,
         owner: DurableSessionOwner? = nil,

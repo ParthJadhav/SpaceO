@@ -101,8 +101,9 @@ from CoreGraphics or WindowServer are returned to the caller.
 
 Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`,
 `spaceo_session_heartbeat`, `spaceo_open_app`, `spaceo_read_screen`, `spaceo_click`,
-`spaceo_type`, `spaceo_press_key`, `spaceo_screenshot`, `spaceo_list_windows`,
-`spaceo_verify_isolation`, `spaceo_pool_status`, `spaceo_session_destroy`.
+`spaceo_scroll`, `spaceo_move`, `spaceo_drag`, `spaceo_type`, `spaceo_press_key`,
+`spaceo_screenshot`, `spaceo_list_windows`, `spaceo_verify_isolation`, `spaceo_pool_status`,
+`spaceo_session_destroy`.
 
 `spaceo_read_screen` is the one that matters. It returns an indexed outline —
 
@@ -117,6 +118,14 @@ page content (click these with --element wN):
 — and `spaceo_click` takes those references. Clicking `3` presses an app control through
 accessibility; clicking `w0` dispatches a real DOM event through the browser. Neither needs
 coordinates, so neither can miss.
+
+An element reference is an accessibility press, so it carries no button, click count, or
+modifiers. For a right-click, a double-click, a shift-click, a drag, or a point with no
+accessibility element, use coordinates — and coordinates are safe to read straight off a
+screenshot, because `spaceo_screenshot` returns one pixel per point at its default scale and
+reports its geometry either way. `spaceo_scroll` reaches anything below the fold and
+`spaceo_move` reveals hover-only menus and tooltips; both take a point, because an app with two
+scrollable or hoverable regions routes by what is under the pointer.
 
 ## Session ownership and recovery
 
@@ -357,14 +366,33 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 | Spaces | each display owns its own; windows placed there stay composited |
 | launch | isolated new application instances placed into the session tile |
 | late windows | watched and re-parked into the owning tile |
-| input, native apps | enabled; focus preparation and route restoration are best-effort |
+| input, native apps | click, scroll, hover, drag, type, keys; left/right/middle buttons, click counts, and held modifiers |
 | input, Chromium pages | DevTools when available, unrestricted per-PID delivery otherwise |
-| vision | AX outlines plus per-window, per-tile, and full-display capture |
+| vision | AX outlines plus per-window, per-tile, and sub-region capture, all reporting their scale and origin |
 | session hygiene | pasteboard preservation, audit, clean shutdown; no pointer fencing |
 | the invariant | checked after every agent action and by the live suite |
 
-App classes actually exercised: **native AppKit** (TextEdit), **Electron** (Cursor), **Chromium**
-(Google Chrome).
+App classes actually exercised, by `scripts/computer-use-check.mjs` driving the real MCP server:
+
+| | native AppKit | Chromium web content | Electron |
+|---|---|---|---|
+| read screen | yes, values clipped at 480 bytes and disclosed | yes, page elements under `wN` | yes |
+| screenshot | yes | yes | yes |
+| click | accessibility press; a coordinate click with no element under it is reported unconfirmed | yes, via DevTools | accessibility press only |
+| type / keys | yes | yes | posted through AX/per-PID paths; not yet effect-asserted |
+| scroll | yes, via the accessibility scroll bar | yes, via DevTools | **no** — see SPAO-179 |
+| hover / drag | posted, unconfirmed | yes, via DevTools | **no** — see SPAO-179 |
+
+The Electron pointer gap is reported rather than hidden: an action that could not be confirmed
+does not become a conformance pass merely because the refusal was honest.
+
+```bash
+make computer-use-check
+```
+
+The harness exits `0` only when every exercised capability passes, `1` for a regression, and `2`
+when the run is otherwise healthy but a documented product blocker remains. On the current
+verification host Electron pointer control produces exit `2` for SPAO-179.
 
 Known boundaries:
 
@@ -377,6 +405,11 @@ Known boundaries:
 - **Self-activating apps.** Some Electron shells activate themselves despite `activates=false`.
   SpaceO hands focus straight back and reports that it had to, so the theft is a blip rather
   than a state change — but there is a visible moment.
+- **Electron renderer input.** Cursor renders and exposes an accessibility outline on the agent
+  display, but its editor has no settable AX scroll area and ignores synthetic wheel delivery.
+  Giving it a private DevTools profile makes background launch create no window; allowing
+  foreground activation creates one but violates SpaceO's desktop-isolation promise. SPAO-179
+  remains a release blocker until there is a renderer channel that preserves that promise.
 - **Cmd-Tab, the Dock, and notifications** still show agent apps. Not solvable on-host.
 - **SIGKILL leaks apps.** A daemon killed with `-9` cannot quit the apps it started; displays
   normally follow process lifetime, while `SIGTERM`, Ctrl-C, and `spaceo daemon stop` perform

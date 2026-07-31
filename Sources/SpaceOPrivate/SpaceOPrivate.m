@@ -22,6 +22,7 @@ static OSStatus   (*p_SLPSPostEventRecordTo)(ProcessSerialNumber *, uint8_t *);
 static CGError    (*p_SLSGetWindowBounds)(CGSConnectionID, uint32_t, CGRect *);
 static AXError    (*p_AXUIElementGetWindow)(AXUIElementRef, uint32_t *);
 static void       (*p_CGEventPostToPid)(pid_t, CGEventRef);
+static CGError    (*p_CGSSetGlobalHotKeyOperatingMode)(CGSConnectionID, uint32_t);
 
 static NSMutableArray<NSString *> *g_missing = nil;
 
@@ -47,6 +48,8 @@ static void SPOLoad(void) {
             p_SLSGetActiveSpace           = resolve(sky, "SLSGetActiveSpace");
             p_SLPSPostEventRecordTo       = resolve(sky, "SLPSPostEventRecordTo");
             p_SLSGetWindowBounds          = resolve(sky, "SLSGetWindowBounds");
+            p_CGSSetGlobalHotKeyOperatingMode =
+                resolve(sky, "CGSSetGlobalHotKeyOperatingMode");
         }
 
         // _AXUIElementGetWindow lives in the (public) HIServices sub-framework but is not declared.
@@ -132,6 +135,14 @@ BOOL SPOBuiltWithARC(void) {
 #else
     return NO;
 #endif
+}
+
+BOOL SPOSetGlobalHotKeysEnabled(BOOL enabled) {
+    SPOLoad();
+    if (!p_SLSMainConnectionID || !p_CGSSetGlobalHotKeyOperatingMode) return NO;
+    // CGSGlobalHotKeyOperatingMode: enable = 0, disable = 1.
+    return p_CGSSetGlobalHotKeyOperatingMode(
+        p_SLSMainConnectionID(), enabled ? 0 : 1) == kCGErrorSuccess;
 }
 
 #pragma mark - Virtual display class surface
@@ -251,16 +262,24 @@ NSArray *_Nullable SPOManagedDisplaySpaces(void) {
 NSArray<NSNumber *> *_Nullable SPOSpacesForDisplay(CGDirectDisplayID displayID) {
     NSArray *displays = SPOManagedDisplaySpaces();
     if (!displays) return nil;
+    // The display's UUID is the only thing we match on.
+    //
+    // The tempting fallbacks — "there is only one entry, so it must be the one asked for" and
+    // "the entry literally named Main" — answer with the *user's* Space list for an agent
+    // display id. That answer reaches AgentActivity.claim(spaces:), which is what every
+    // isolation verdict is decided against: the user's own active Space gets filed as agent
+    // territory and `verify` reports a breach on every run the user caused themselves, while a
+    // real Space breach on the agent display is masked behind the same wrong set. With no UUID
+    // to match on there is no answer to give, and reporting none lets callers treat the Space
+    // set as unknown instead of inheriting a guess.
     NSString *want = UUIDStringForDisplay(displayID);
+    if (!want) return nil;
     for (id value in displays) {
         if (![value isKindOfClass:NSDictionary.class]) continue;
         NSDictionary *d = value;
         id rawIdent = d[@"Display Identifier"];
-        NSString *ident = [rawIdent isKindOfClass:NSString.class] ? rawIdent : nil;
-        BOOL match = (want && [ident isEqualToString:want])
-                  || (displays.count == 1)
-                  || [ident isEqualToString:@"Main"];
-        if (!match) continue;
+        if (![rawIdent isKindOfClass:NSString.class]) continue;
+        if (![(NSString *)rawIdent isEqualToString:want]) continue;
         NSMutableArray<NSNumber *> *out = [NSMutableArray array];
         id rawSpaces = d[@"Spaces"];
         if (![rawSpaces isKindOfClass:NSArray.class]) return out;

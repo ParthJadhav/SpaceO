@@ -103,11 +103,6 @@ public final class DisplayPool {
         guard value > 0 else {
             throw SpaceOError.badRequest("sessions per display must be a positive integer")
         }
-        guard value <= TileLayout.maximumCapacity else {
-            throw SpaceOError.badRequest(
-                "sessions per display must be at most \(TileLayout.maximumCapacity); "
-                + "\(value) would give each session a tile no window can use")
-        }
         // Validate technical layout bounds before applying the new density.
         _ = try budget.validateDisplaySize(displaySize, capacity: value)
         lock.withLock { sessionsPerDisplay = value }

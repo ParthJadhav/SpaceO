@@ -80,6 +80,9 @@ final class ChromiumBridgeTests: XCTestCase {
                 let client = accept(listener, nil, nil)
                 guard client >= 0 else { return }
                 defer { close(client) }
+                var noSignal: Int32 = 1
+                setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                           socklen_t(MemoryLayout<Int32>.size))
 
                 // Read (and discard) the request line; we answer every path the same way.
                 var scratch = [UInt8](repeating: 0, count: 4096)

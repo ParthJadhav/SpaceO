@@ -1,6 +1,7 @@
 import AppKit
 import CoreMedia
 import XCTest
+@testable import SpaceOKit
 @testable import SpaceOViewer
 
 @MainActor
@@ -241,6 +242,99 @@ final class ViewerStreamLifecycleTests: XCTestCase {
         XCTAssertTrue(announcements.last?.contains("could not be verified") == true)
     }
 
+    func testSelectingSessionStartsTileScopedStreamAndInputGeometry() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = DisplayEntry(
+            id: 7,
+            bounds: CGRect(x: 100, y: 50, width: 1_920, height: 1_080),
+            isSpaceO: true,
+            isActive: true,
+            name: "Stage 7"
+        )
+        let model = makeModel(engine: engine, displays: [display])
+        let json = """
+        {
+          "id":"focused","displayID":7,"x":1060,"y":50,"width":960,"height":540,
+          "tileIndex":1,"tileCapacity":4,"exclusiveDisplay":false,
+          "spaces":[],"hasOwnSpace":false,"apps":[],"windows":[],
+          "createdAt":"2026-07-28T00:00:00Z","teardownPending":false,
+          "runtimeAttached":true
+        }
+        """
+        let session = try Wire.decoder.decode(SessionInfo.self, from: Data(json.utf8))
+
+        model.applyControlPlane(sessions: [session], poolResponse: Response(ok: true))
+        try await waitForPendingStarts(engine, count: 1)
+
+        XCTAssertEqual(model.selectedSessionID, "focused")
+        XCTAssertEqual(model.canvasMode, .session)
+        let sourceRect = await engine.firstSourceRect()
+        XCTAssertEqual(
+            sourceRect,
+            CGRect(x: 960, y: 0, width: 960, height: 540)
+        )
+        XCTAssertEqual(
+            model.interactionDisplay?.bounds,
+            CGRect(x: 1060, y: 50, width: 960, height: 540)
+        )
+    }
+
+    func testRepeatedDaemonFailureDoesNotFloodEventHistory() {
+        let model = ViewerModel(automaticRefresh: false)
+        let error = TestViewerStreamError("daemon unavailable")
+
+        model.applyControlPlaneFailure(error)
+        model.applyControlPlaneFailure(error)
+        model.applyControlPlaneFailure(error)
+
+        XCTAssertEqual(model.connectivity, .degraded)
+        XCTAssertEqual(model.events.count, 1)
+        XCTAssertEqual(model.events.first?.title, "Connection interrupted")
+    }
+
+    func testTerminalDaemonDisconnectClearsLiveAuthority() throws {
+        let model = ViewerModel(automaticRefresh: false)
+        let json = """
+        {
+          "id":"stale","displayID":7,"x":0,"y":0,"width":100,"height":100,
+          "tileIndex":0,"tileCapacity":1,"exclusiveDisplay":true,
+          "spaces":[],"hasOwnSpace":false,"apps":[],"windows":[],
+          "createdAt":"2026-07-28T00:00:00Z","teardownPending":false,
+          "runtimeAttached":true
+        }
+        """
+        let session = try Wire.decoder.decode(SessionInfo.self, from: Data(json.utf8))
+        var pool = Response(ok: true)
+        pool.displays = [DisplayPool.DisplayReport(
+            displayID: 7,
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            capacity: 1,
+            used: 1,
+            spaces: []
+        )]
+        model.applyControlPlane(sessions: [session], poolResponse: pool)
+        XCTAssertEqual(model.sessions.count, 1)
+        XCTAssertEqual(model.infrastructure.displays.count, 1)
+
+        let start = Date(timeIntervalSinceReferenceDate: 100)
+        model.applyControlPlaneFailure(
+            TestViewerStreamError("daemon unavailable"),
+            now: start
+        )
+        model.applyControlPlaneFailure(
+            TestViewerStreamError("daemon unavailable"),
+            now: start.addingTimeInterval(6)
+        )
+
+        XCTAssertEqual(model.connectivity, .disconnected)
+        XCTAssertTrue(model.sessions.isEmpty)
+        XCTAssertTrue(model.infrastructure.displays.isEmpty)
+        XCTAssertNil(model.selectedSessionID)
+    }
+
     private func makeModel(
         engine: FakeViewerStreamEngine,
         displays: [DisplayEntry],
@@ -360,6 +454,7 @@ private final class FakeViewerStreamSession: ViewerDisplayStreamSession, @unchec
 private actor FakeViewerStreamEngine: ViewerDisplayStreaming {
     private struct PendingStart {
         let displayID: CGDirectDisplayID
+        let sourceRect: CGRect?
         let onFrame: @Sendable (CMSampleBuffer) -> Void
         let onStopped: @Sendable (Error?) -> Void
         let continuation: CheckedContinuation<any ViewerDisplayStreamSession, Error>
@@ -369,9 +464,14 @@ private actor FakeViewerStreamEngine: ViewerDisplayStreaming {
 
     var pendingCount: Int { pending.count }
 
+    func firstSourceRect() -> CGRect? {
+        pending.first?.sourceRect
+    }
+
     func start(
         displayID: CGDirectDisplayID,
         pointSize: CGSize,
+        sourceRect: CGRect?,
         onFrame: @escaping @Sendable (CMSampleBuffer) -> Void,
         onStopped: @escaping @Sendable (Error?) -> Void
     ) async throws -> any ViewerDisplayStreamSession {
@@ -379,6 +479,7 @@ private actor FakeViewerStreamEngine: ViewerDisplayStreaming {
             (continuation: CheckedContinuation<any ViewerDisplayStreamSession, Error>) in
             pending.append(PendingStart(
                 displayID: displayID,
+                sourceRect: sourceRect,
                 onFrame: onFrame,
                 onStopped: onStopped,
                 continuation: continuation

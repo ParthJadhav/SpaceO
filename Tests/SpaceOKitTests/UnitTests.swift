@@ -784,29 +784,63 @@ final class UnitTests: XCTestCase {
         XCTAssertEqual(tiles[0].origin.y, 900)
     }
 
+    /// The two tiling APIs must describe the same display.
+    ///
+    /// `rects` used to build its grid from the materialization-bounded count, so above 64 it
+    /// laid out a different, coarser grid than `rect` did — at capacity 100, 240x135 tiles
+    /// against 192x108 ones. A caller mixing the two (diagnostics, tile overlays) then placed
+    /// two sessions on rects that overlap, which is the cross-agent context leak tiling exists
+    /// to prevent.
+    func testFullLayoutAgreesWithSingleTileLookupAcrossTheMaterializationBound() {
+        let bounds = CGRect(x: -900, y: 120, width: 3840, height: 2160)
+        for capacity in Array(1...12) + [63, 64, 65, 100, 1000] {
+            let tiles = TileLayout.rects(in: bounds, capacity: capacity)
+            XCTAssertEqual(tiles.count, min(TileLayout.maximumMaterializedCapacity, capacity),
+                           "capacity \(capacity): the prefix must be the whole layout or the bound")
+            for i in tiles.indices {
+                XCTAssertEqual(tiles[i],
+                               TileLayout.rect(in: bounds, capacity: capacity, index: i),
+                               "capacity \(capacity): tile \(i) disagrees between the two APIs")
+            }
+        }
+    }
+
+    /// Above the materialization bound the tiles are still a real, non-overlapping layout —
+    /// a truncated list of correct rects, not a whole layout recomputed at the wrong density.
+    func testTilesAboveTheMaterializationBoundStillDoNotOverlap() {
+        let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        let tiles = TileLayout.rects(in: bounds, capacity: 100)
+        XCTAssertEqual(tiles.count, TileLayout.maximumMaterializedCapacity)
+        XCTAssertEqual(tiles[0], CGRect(x: 0, y: 0, width: 192, height: 108),
+                       "the grid must come from capacity 100, not from the clamped count")
+        for i in tiles.indices {
+            for j in tiles.indices where j > i {
+                XCTAssertFalse(tiles[i].intersects(tiles[j]),
+                               "tile \(i) overlaps tile \(j)")
+            }
+            XCTAssertTrue(bounds.contains(tiles[i]), "tile \(i) escapes the display")
+        }
+    }
+
     /// Full-layout materialization remains technically bounded.
     func testTilingMaterializationIsBounded() {
         let bounds = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let tiles = TileLayout.rects(in: bounds, capacity: 4_097)
-        XCTAssertEqual(tiles.count, TileLayout.maximumCapacity)
+        XCTAssertEqual(tiles.count, TileLayout.maximumMaterializedCapacity)
         XCTAssertEqual(tiles.first?.origin, bounds.origin)
     }
 
-    func testSingleTileLookupIsConstantTimeAndBounded() {
-        let bounds = CGRect(x: 40, y: 60, width: 8_000, height: 8_000)
-
-        // Inside the bound: an O(1) lookup with no full layout materialised.
-        let last = TileLayout.maximumCapacity - 1
+    func testSingleTileLookupDoesNotInheritTheMaterializationBound() {
+        let bounds = CGRect(x: 40, y: 60, width: 1_000_000, height: 1_000_000)
+        let capacity = 1_000_000_000
+        let last = capacity - 1
         let tile = TileLayout.rect(in: bounds,
-                                   capacity: TileLayout.maximumCapacity, index: last)
+                                   capacity: capacity, index: last)
         XCTAssertNotNil(tile)
         XCTAssertGreaterThan(tile?.width ?? 0, 0)
         XCTAssertNil(TileLayout.rect(in: bounds,
-                                     capacity: TileLayout.maximumCapacity,
-                                     index: TileLayout.maximumCapacity))
-
-        // Past the materialization bound: no array is allocated.
-        XCTAssertNil(TileLayout.rect(in: bounds, capacity: 1_000_000_000, index: 0))
+                                     capacity: capacity,
+                                     index: capacity))
     }
 
     func testTilingStillRequiresPositiveCapacity() {
@@ -815,14 +849,15 @@ final class UnitTests: XCTestCase {
         XCTAssertTrue(TileLayout.rects(in: bounds, capacity: -1).isEmpty)
     }
 
-    func testPoolAcceptsDensityWithinLayoutRepresentation() {
+    func testPoolAcceptsUnrestrictedTechnicallyRepresentableDensity() {
         let pool = DisplayPool(sessionsPerDisplay: 1,
-                               displaySize: CGSize(width: 1280, height: 800))
+                               displaySize: CGSize(width: 100_000, height: 100_000))
         XCTAssertNoThrow(try pool.setSessionsPerDisplay(4))
         XCTAssertEqual(pool.sessionsPerDisplay, 4)
-        XCTAssertThrowsError(try pool.setSessionsPerDisplay(10_000))
+        XCTAssertNoThrow(try pool.setSessionsPerDisplay(4_097))
         XCTAssertThrowsError(try pool.setSessionsPerDisplay(0))
-        XCTAssertEqual(pool.sessionsPerDisplay, 4, "a refused density must not be applied")
+        XCTAssertEqual(pool.sessionsPerDisplay, 4_097,
+                       "a refused density must not replace the last accepted value")
     }
 
     func testPoolAcceptsLargeDisplaysButRejectsInvalidGeometry() {

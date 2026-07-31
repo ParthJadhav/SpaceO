@@ -218,6 +218,9 @@ func emit(_ response: Response, json: Bool) -> Never {
     } else if let drift = response.drift {
         printLegacyIsolation(drift)
     }
+    if let warnings = response.warnings, !warnings.isEmpty {
+        for item in warnings { print("  unconfirmed: \(item)") }
+    }
     if let ambient = response.ambient, !ambient.isEmpty {
         for item in ambient { print("  note: \(item)") }
     }
@@ -252,11 +255,18 @@ spaceo — give each agent its own screen, and leave the user's alone.
   spaceo adopt --pid N                   move an already-running app onto a session
   spaceo windows                         list the session's windows
   spaceo ax [--window W] [--full]        indexed accessibility tree
-  spaceo click (--element N | --element wN | --x X --y Y) [--button right] [--count 2]
+  spaceo click (--element N | --element wN | --x X --y Y)
+               [--button left|right|middle] [--count 2] [--modifiers cmd,shift]
                                          N = accessibility index, wN = page element
+  spaceo move --x X --y Y                hover without pressing, to reveal hover-only UI
+  spaceo drag --x X --y Y --to-x X --to-y Y [--button B] [--modifiers M]
+  spaceo scroll --x X --y Y [--dy -600] [--dx 0] [--ticks 3]
+                                         positive --dy scrolls content up
   spaceo type "text" [--web]             --web types into the page, not the app chrome
   spaceo key cmd+s [--web]
-  spaceo screenshot [-o out.png] [--window W] [--full]
+  spaceo screenshot [-o out.png] [--window W] [--full] [--scale 1|2]
+                    [--x X --y Y --width W --height H]
+                                         coordinates are window-local points at scale 1
   spaceo verify                          audit the session's isolation
   spaceo repark                          pull escaped windows back
 
@@ -343,6 +353,25 @@ func remote(_ build: (inout Request) -> Void) -> Never {
     } catch {
         fail("\(error)")
     }
+}
+
+func int32Argument(_ name: String) -> Int32? {
+    guard let raw = intArgument(name) else { return nil }
+    guard let value = Int32(exactly: raw) else {
+        fail("--\(name) must be an integer from \(Int32.min) through \(Int32.max)")
+    }
+    return value
+}
+
+/// `--modifiers cmd,shift`. Comma-separated so one flag carries the whole held set, which is
+/// what a modifier-held click actually is.
+func modifiersArgument() -> [String]? {
+    guard let raw = stringArgument("modifiers") else { return nil }
+    let names = raw.split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
+    guard !names.isEmpty else { fail("--modifiers needs at least one modifier name") }
+    return names
 }
 
 func windowArgument() -> UInt32? {
@@ -504,10 +533,11 @@ case "doctor":
     exit(capabilities.canDrive ? 0 : 1)
 
 case "daemon":
-    validateFlags(["socket", "display-size", "sessions-per-display"])
     if args.positional.first == "stop" {
+        validateFlags(["socket", "json"])
         remote { $0.cmd = "daemon.stop" }
     }
+    validateFlags(["socket", "display-size", "sessions-per-display"])
 
     let budget = ResourceBudget.fromEnvironment()
     var displaySize = CGSize(width: 1920, height: 1080)
@@ -739,7 +769,7 @@ case "ax":
 case "click":
     validateFlags([
         "socket", "json", "session", "window", "element", "web",
-        "x", "y", "button", "count", "lease",
+        "x", "y", "button", "count", "modifiers", "lease",
     ])
     remote { request in
             request.cmd = "click"
@@ -752,6 +782,57 @@ case "click":
         request.y = doubleArgument("y")
         request.button = stringArgument("button")
         request.count = intArgument("count")
+        request.modifiers = modifiersArgument()
+    }
+
+case "scroll":
+    validateFlags([
+        "socket", "json", "session", "window",
+        "x", "y", "dx", "dy", "ticks", "modifiers", "web", "lease",
+    ])
+    remote { request in
+        request.cmd = "scroll"
+        request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
+        request.window = windowArgument()
+        request.x = doubleArgument("x")
+        request.y = doubleArgument("y")
+        request.dx = int32Argument("dx")
+        request.dy = int32Argument("dy")
+        request.ticks = intArgument("ticks")
+        request.modifiers = modifiersArgument()
+        request.web = args.bool("web") ? true : nil
+    }
+
+case "move":
+    validateFlags(["socket", "json", "session", "window", "x", "y", "modifiers", "web", "lease"])
+    remote { request in
+        request.cmd = "move"
+        request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
+        request.window = windowArgument()
+        request.x = doubleArgument("x")
+        request.y = doubleArgument("y")
+        request.modifiers = modifiersArgument()
+        request.web = args.bool("web") ? true : nil
+    }
+
+case "drag":
+    validateFlags([
+        "socket", "json", "session", "window",
+        "x", "y", "to-x", "to-y", "button", "modifiers", "web", "lease",
+    ])
+    remote { request in
+        request.cmd = "drag"
+        request.session = stringArgument("session")
+        request.controllerLeaseID = leaseArgument()
+        request.window = windowArgument()
+        request.x = doubleArgument("x")
+        request.y = doubleArgument("y")
+        request.toX = doubleArgument("to-x")
+        request.toY = doubleArgument("to-y")
+        request.button = stringArgument("button")
+        request.modifiers = modifiersArgument()
     }
 
 case "type":
@@ -779,13 +860,21 @@ case "key":
     }
 
 case "screenshot":
-    validateFlags(["socket", "json", "session", "window", "output", "o", "full"])
+    validateFlags([
+        "socket", "json", "session", "window", "output", "o", "full",
+        "scale", "x", "y", "width", "height",
+    ])
     remote { request in
             request.cmd = "screenshot"
             request.session = stringArgument("session")
             request.window = windowArgument()
         request.output = stringArgument("output", "o")
         request.full = args.bool("full")
+        request.scale = intArgument("scale")
+        request.x = doubleArgument("x")
+        request.y = doubleArgument("y")
+        request.width = intArgument("width")
+        request.height = intArgument("height")
     }
 
 case "verify":

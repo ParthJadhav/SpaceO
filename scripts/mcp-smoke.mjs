@@ -93,10 +93,46 @@ try {
 
   const listed = await request("tools/list");
   const tools = listed.result?.tools ?? [];
-  assert(tools.length === 13, `expected 13 tools, got ${tools.length}`);
+  assert(tools.length === 16, `expected 16 tools, got ${tools.length}`);
   assert(
     new Set(tools.map((tool) => tool.name)).size === tools.length,
     "tool names are not unique",
+  );
+
+  // Without these an agent cannot reach anything below the fold, cannot open a hover-only menu,
+  // and cannot move a slider — the ordinary steps a computer-use agent takes on real UI.
+  for (const required of ["spaceo_scroll", "spaceo_move", "spaceo_drag"]) {
+    assert(
+      tools.some((tool) => tool.name === required),
+      `${required} is missing from the advertised tool set`,
+    );
+  }
+
+  const droppedModifiers = await request("tools/call", {
+    name: "spaceo_click",
+    arguments: { element: "3", modifiers: ["shift"] },
+  });
+  assert(
+    droppedModifiers.result?.isError === true,
+    "a modifier-held click on an element index must fail rather than silently press",
+  );
+
+  const badButton = await request("tools/call", {
+    name: "spaceo_click",
+    arguments: { x: 1, y: 1, button: "sideways" },
+  });
+  assert(
+    badButton.result?.isError === true,
+    "an unknown mouse button was not rejected",
+  );
+
+  const partialRegion = await request("tools/call", {
+    name: "spaceo_screenshot",
+    arguments: { x: 0, y: 0, width: 10 },
+  });
+  assert(
+    partialRegion.result?.isError === true,
+    "an incomplete screenshot region was not rejected",
   );
 
   const negativeWindow = await request("tools/call", {
@@ -184,7 +220,7 @@ try {
   assert(exitCode === 0, `MCP process exited ${exitCode}. Diagnostics:\n${diagnostics}`);
 
   console.log(
-    "MCP smoke passed: protocol, 13 tools, validation, mutation safety, and clean exit",
+    "MCP smoke passed: protocol, 16 tools, validation, mutation safety, and clean exit",
   );
 } finally {
   if (!server.killed) server.kill("SIGTERM");

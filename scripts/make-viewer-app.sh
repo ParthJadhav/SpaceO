@@ -9,12 +9,17 @@ set -euo pipefail
 
 BIN="${1:?usage: make-viewer-app.sh <built-binary> <output.app>}"
 APP="${2:?usage: make-viewer-app.sh <built-binary> <output.app>}"
+CLI="$(dirname "$BIN")/spaceo"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VERSION="${SPACEO_VERSION:-$(tr -d '[:space:]' < "$REPOSITORY_ROOT/VERSION")}"
 DISTRIBUTION="${SPACEO_DISTRIBUTION:-0}"
 
 [ -x "$BIN" ] || { echo "error: $BIN is not an executable" >&2; exit 1; }
+[ -x "$CLI" ] || {
+    echo "error: the Viewer requires the sibling spaceo daemon helper at $CLI" >&2
+    exit 1
+}
 [[ "$APP" == *.app && "$APP" != "/" ]] || {
     echo "error: Viewer output must be an explicit .app path" >&2
     exit 1
@@ -57,8 +62,9 @@ if [[ "$DISTRIBUTION" == "1" ]] && ! security find-identity -v -p codesigning 2>
 fi
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers"
 cp "$BIN" "$APP/Contents/MacOS/SpaceOViewer"
+cp "$CLI" "$APP/Contents/Helpers/spaceo"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -85,6 +91,7 @@ SIGN_ARGS=(--force --sign "$SIGNING_IDENTITY")
 if [[ "$SIGNING_IDENTITY" != "-" ]]; then
     SIGN_ARGS+=(--options runtime --timestamp)
 fi
+codesign "${SIGN_ARGS[@]}" "$APP/Contents/Helpers/spaceo"
 codesign "${SIGN_ARGS[@]}" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 echo "built $APP version $VERSION (signed with $SIGNING_IDENTITY)"

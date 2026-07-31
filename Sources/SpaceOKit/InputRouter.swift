@@ -4,12 +4,77 @@ import ApplicationServices
 import CoreGraphics
 import SpaceOPrivate
 
-public enum MouseButton: String, Sendable {
-    case left, right
+public enum MouseButton: String, Sendable, CaseIterable {
+    case left, right, middle
 
-    var downType: CGEventType { self == .left ? .leftMouseDown : .rightMouseDown }
-    var upType: CGEventType { self == .left ? .leftMouseUp : .rightMouseUp }
-    var cgButton: CGMouseButton { self == .left ? .left : .right }
+    var downType: CGEventType {
+        switch self {
+        case .left:   return .leftMouseDown
+        case .right:  return .rightMouseDown
+        case .middle: return .otherMouseDown
+        }
+    }
+
+    var upType: CGEventType {
+        switch self {
+        case .left:   return .leftMouseUp
+        case .right:  return .rightMouseUp
+        case .middle: return .otherMouseUp
+        }
+    }
+
+    var draggedType: CGEventType {
+        switch self {
+        case .left:   return .leftMouseDragged
+        case .right:  return .rightMouseDragged
+        case .middle: return .otherMouseDragged
+        }
+    }
+
+    var cgButton: CGMouseButton {
+        switch self {
+        case .left:   return .left
+        case .right:  return .right
+        case .middle: return .center
+        }
+    }
+
+    public static func parse(_ raw: String?) throws -> MouseButton {
+        guard let raw, !raw.isEmpty else { return .left }
+        guard let button = MouseButton(rawValue: raw.lowercased()) else {
+            throw SpaceOError.badRequest(
+                "button must be one of "
+                + MouseButton.allCases.map(\.rawValue).joined(separator: ", "))
+        }
+        return button
+    }
+}
+
+/// Modifier keys held down for the duration of a pointer action.
+///
+/// Parsed separately from `KeyCombo` because a modifier-held click has no key of its own —
+/// `shift`, `cmd`, `alt`, `ctrl` and `fn` are the whole request.
+public enum ModifierKeys {
+    public static func parse(_ names: [String]?) throws -> CGEventFlags {
+        guard let names, !names.isEmpty else { return [] }
+        guard names.count <= 5 else {
+            throw SpaceOError.badRequest("at most 5 modifiers may be held")
+        }
+        var flags: CGEventFlags = []
+        for name in names {
+            switch name.lowercased() {
+            case "cmd", "command":       flags.insert(.maskCommand)
+            case "shift":                flags.insert(.maskShift)
+            case "alt", "opt", "option": flags.insert(.maskAlternate)
+            case "ctrl", "control":      flags.insert(.maskControl)
+            case "fn":                   flags.insert(.maskSecondaryFn)
+            default:
+                throw SpaceOError.badRequest(
+                    "unknown modifier '\(name)' (use cmd, shift, alt, ctrl, or fn)")
+            }
+        }
+        return flags
+    }
 }
 
 /// A parsed keystroke such as `cmd+s` or `return`.
@@ -511,32 +576,48 @@ public enum InputRouter {
 
     // MARK: - Mouse
 
-    /// Click inside a window. `localPoint` is relative to the window's top-left, which is what
-    /// an agent reading a window screenshot naturally has.
-    public static func click(
-        _ window: WindowRef,
-        at localPoint: CGPoint,
-        button: MouseButton = .left,
-        clickCount: Int = 1
-    ) throws {
-        guard (1...3).contains(clickCount) else {
-            throw SpaceOError.badRequest("click count must be from 1 through 3")
-        }
-        guard localPoint.x.isFinite, localPoint.y.isFinite else {
-            throw SpaceOError.badRequest("click coordinates must be finite")
-        }
+    /// `kCGMouseEventWindowUnderMousePointer`. Not exposed in the Swift overlay.
+    static let windowUnderPointer = CGEventField(rawValue: 91)!
+    /// `kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent`.
+    static let windowUnderPointerThatCanHandleEvent = CGEventField(rawValue: 92)!
 
-        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+    /// Convert a window-local point to global coordinates, refusing points outside the window.
+    ///
+    /// Agent-facing pointer coordinates are window-local **points**, which is what a screenshot
+    /// taken at scale 1 hands back directly. The 1 pt tolerance covers a border click landing
+    /// exactly on the edge after the WindowServer's own rounding.
+    static func globalPoint(
+        _ localPoint: CGPoint,
+        in window: WindowRef,
+        bounds: CGRect,
+        what: String
+    ) throws -> CGPoint {
+        guard localPoint.x.isFinite, localPoint.y.isFinite else {
+            throw SpaceOError.badRequest("\(what) coordinates must be finite")
+        }
         let global = CGPoint(x: bounds.origin.x + localPoint.x, y: bounds.origin.y + localPoint.y)
         guard bounds.insetBy(dx: -1, dy: -1).contains(global) else {
-            throw SpaceOError.badRequest(String(format: "point (%.0f,%.0f) is outside the window (%.0fx%.0f)",
-                                                localPoint.x, localPoint.y, bounds.width, bounds.height))
+            throw SpaceOError.badRequest(
+                String(format: "%@ point (%.0f,%.0f) is outside the window (%.0fx%.0f). "
+                       + "Coordinates are window-local points; if you read them from a screenshot "
+                       + "taken at scale 2, divide by 2.",
+                       what, localPoint.x, localPoint.y, bounds.width, bounds.height))
         }
+        return global
+    }
 
-        if button == .left, press(at: global, in: window.pid) {
-            return
-        }
-
+    /// One pointer transaction against a single window.
+    ///
+    /// Click, hover, drag and scroll all need the same three things — the target's input route
+    /// held for the duration, every event stamped with the window it happened over, and a
+    /// verified route restore afterwards. Sharing one body is what keeps a new action from
+    /// quietly skipping the stamp: posting straight to a pid bypasses the WindowServer, which is
+    /// normally what tells the app which window an event belongs to, and an unstamped event is
+    /// dropped rather than delivered.
+    private static func withPointerTransaction(
+        _ window: WindowRef,
+        _ body: (CGEventSource?, (CGEvent) throws -> Void) throws -> Void
+    ) throws {
         let source = CGEventSource(stateID: .hidSystemState)
         let userRoute = try beginPointerInputChecked(window)
         var routeRecoveryVerified = false
@@ -548,60 +629,237 @@ public enum InputRouter {
             }
         }
 
-        // Posting straight to a pid bypasses the WindowServer, which is normally the thing that
-        // stamps "this event happened over window N" onto a mouse event. Without that stamp an
-        // app has no window to route the click to — Chromium's browser process in particular
-        // drops it rather than forwarding it to a renderer. So we stamp it ourselves.
-        func addressToWindow(_ event: CGEvent) {
+        func post(_ event: CGEvent) throws {
             event.setIntegerValueField(windowUnderPointer, value: Int64(window.windowID))
-            event.setIntegerValueField(windowUnderPointerThatCanHandleEvent, value: Int64(window.windowID))
+            event.setIntegerValueField(
+                windowUnderPointerThatCanHandleEvent, value: Int64(window.windowID))
+            try postEventToPID(event, pid: window.pid)
         }
 
-        // A move first: apps that track hover state need to believe the pointer arrived, and
-        // Chromium uses it to decide which frame is under the cursor.
-        if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
-                              mouseCursorPosition: global, mouseButton: button.cgButton) {
-            addressToWindow(move)
-            try postEventToPID(move, pid: window.pid)
-            usleep(15_000)
-        }
-
-        for click in 1...clickCount {
-            guard let down = CGEvent(mouseEventSource: source, mouseType: button.downType,
-                                     mouseCursorPosition: global, mouseButton: button.cgButton),
-                  let up = CGEvent(mouseEventSource: source, mouseType: button.upType,
-                                   mouseCursorPosition: global, mouseButton: button.cgButton)
-            else { continue }
-            for event in [down, up] {
-                event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-                addressToWindow(event)
-            }
-            try postEventToPID(down, pid: window.pid)
-            usleep(25_000)
-            try postEventToPID(up, pid: window.pid)
-            usleep(40_000)
-        }
+        try body(source, post)
         try endPointerInputChecked(userRoute)
         routeRecoveryVerified = true
     }
 
-    /// `kCGMouseEventWindowUnderMousePointer`. Not exposed in the Swift overlay.
-    static let windowUnderPointer = CGEventField(rawValue: 91)!
-    /// `kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent`.
-    static let windowUnderPointerThatCanHandleEvent = CGEventField(rawValue: 92)!
+    /// Click inside a window. `localPoint` is relative to the window's top-left, which is what
+    /// an agent reading a window screenshot naturally has.
+    ///
+    /// The accessibility shortcut is taken only for a plain single left click. A modifier-held,
+    /// multi-, or non-left click means something different from `AXPress` — shift-click extends a
+    /// selection, double-click selects a word, right-click opens a context menu — so silently
+    /// substituting a press would report success for an action that never happened.
+    /// How a pointer action actually reached the target, so a caller can tell a confirmed action
+    /// from one that was merely posted.
+    public enum PointerDelivery: String, Sendable {
+        /// An accessibility action the target acknowledged. Confirmed.
+        case accessibility
+        /// Synthetic events posted per-PID. On a host without the focus-without-raise record
+        /// these are **not known to reach AppKit** — measured on macOS 27, a coordinate click
+        /// into a TextEdit document did not move the insertion point, and scroll wheel events
+        /// moved nothing, while both reported success.
+        case syntheticUnverified
 
-    public static func scroll(_ window: WindowRef, dx: Int32 = 0, dy: Int32, ticks: Int = 1) throws {
+        public var isConfirmed: Bool { self == .accessibility }
+    }
+
+    @discardableResult
+    public static func click(
+        _ window: WindowRef,
+        at localPoint: CGPoint,
+        button: MouseButton = .left,
+        clickCount: Int = 1,
+        modifiers: CGEventFlags = []
+    ) throws -> PointerDelivery {
+        guard (1...3).contains(clickCount) else {
+            throw SpaceOError.badRequest("click count must be from 1 through 3")
+        }
+        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+        let global = try globalPoint(localPoint, in: window, bounds: bounds, what: "click")
+
+        if button == .left, clickCount == 1, modifiers.isEmpty,
+           press(at: global, in: window.pid) {
+            return .accessibility
+        }
+
+        try withPointerTransaction(window) { source, post in
+            // A move first: apps that track hover state need to believe the pointer arrived, and
+            // Chromium uses it to decide which frame is under the cursor.
+            if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                  mouseCursorPosition: global, mouseButton: button.cgButton) {
+                move.flags = modifiers
+                try post(move)
+                usleep(15_000)
+            }
+
+            for click in 1...clickCount {
+                guard let down = CGEvent(mouseEventSource: source, mouseType: button.downType,
+                                         mouseCursorPosition: global, mouseButton: button.cgButton),
+                      let up = CGEvent(mouseEventSource: source, mouseType: button.upType,
+                                       mouseCursorPosition: global, mouseButton: button.cgButton)
+                else { continue }
+                for event in [down, up] {
+                    event.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+                    event.flags = modifiers
+                }
+                try post(down)
+                usleep(25_000)
+                try post(up)
+                usleep(40_000)
+            }
+        }
+        return .syntheticUnverified
+    }
+
+    /// The sentence a caller should show when a pointer action could only be posted, not
+    /// confirmed. Kept in one place so click, drag, and hover word it identically.
+    public static func unverifiedDeliveryNote(_ action: String) -> String {
+        "the \(action) was posted as synthetic per-PID events but could not be confirmed: no "
+        + "accessibility element accepted it, and this host has no focus-without-raise record, "
+        + "where synthetic pointer events are not known to reach AppKit. Verify with a "
+        + "screenshot, or address the control by element index from read_screen."
+    }
+
+    /// Move the pointer over a window-local point without pressing anything.
+    ///
+    /// Hover-only affordances — menus that open on hover, tooltips, drag handles that fade in —
+    /// are invisible to an agent that can only click, because the control it needs to press does
+    /// not exist in the accessibility tree until something hovers it.
+    public static func move(
+        _ window: WindowRef,
+        to localPoint: CGPoint,
+        modifiers: CGEventFlags = []
+    ) throws {
+        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+        let global = try globalPoint(localPoint, in: window, bounds: bounds, what: "move")
+
+        try withPointerTransaction(window) { source, post in
+            guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                     mouseCursorPosition: global, mouseButton: .left)
+            else { throw SpaceOError.badRequest("could not synthesise a pointer move") }
+            move.flags = modifiers
+            try post(move)
+            usleep(15_000)
+        }
+    }
+
+    /// Press at one window-local point, drag to another, and release.
+    ///
+    /// The intermediate moves are not cosmetic. A down followed immediately by an up at a
+    /// different point reads as a click at the destination to most controls; sliders, selection,
+    /// and reordering all need to see the pointer travel.
+    public static func drag(
+        _ window: WindowRef,
+        from startLocal: CGPoint,
+        to endLocal: CGPoint,
+        button: MouseButton = .left,
+        modifiers: CGEventFlags = [],
+        steps: Int = 12
+    ) throws {
+        guard (1...200).contains(steps) else {
+            throw SpaceOError.badRequest("drag steps must be from 1 through 200")
+        }
+        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+        let start = try globalPoint(startLocal, in: window, bounds: bounds, what: "drag start")
+        let end = try globalPoint(endLocal, in: window, bounds: bounds, what: "drag end")
+
+        try withPointerTransaction(window) { source, post in
+            func mouse(_ type: CGEventType, _ at: CGPoint) throws {
+                guard let event = CGEvent(mouseEventSource: source, mouseType: type,
+                                          mouseCursorPosition: at, mouseButton: button.cgButton)
+                else { throw SpaceOError.badRequest("could not synthesise a drag event") }
+                event.flags = modifiers
+                event.setIntegerValueField(.mouseEventClickState, value: 1)
+                try post(event)
+            }
+
+            try mouse(.mouseMoved, start)
+            usleep(15_000)
+            try mouse(button.downType, start)
+            usleep(25_000)
+            for step in 1...steps {
+                let t = Double(step) / Double(steps)
+                try mouse(button.draggedType,
+                          CGPoint(x: start.x + (end.x - start.x) * t,
+                                  y: start.y + (end.y - start.y) * t))
+                usleep(12_000)
+            }
+            try mouse(button.upType, end)
+            usleep(40_000)
+        }
+    }
+
+    /// Scroll over a window-local point. Positive `dy` scrolls content up (finger-down gesture).
+    ///
+    /// A point is required rather than optional: an app with two scrollable regions routes the
+    /// wheel by what is under the pointer, so an unpositioned scroll is a coin flip.
+    public static func scroll(
+        _ window: WindowRef,
+        at localPoint: CGPoint,
+        dx: Int32 = 0,
+        dy: Int32,
+        ticks: Int = 1,
+        modifiers: CGEventFlags = []
+    ) throws {
         guard (1...100).contains(ticks) else {
             throw SpaceOError.badRequest("scroll ticks must be from 1 through 100")
         }
-        let source = CGEventSource(stateID: .hidSystemState)
-        for _ in 0..<ticks {
-            guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
-                                      wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)
-            else { continue }
-            try postEventToPID(event, pid: window.pid)
-            usleep(20_000)
+        guard (-10_000...10_000).contains(dx), (-10_000...10_000).contains(dy) else {
+            throw SpaceOError.badRequest("scroll deltas must be from -10000 through 10000 pixels")
         }
+        guard dx != 0 || dy != 0 else {
+            throw SpaceOError.badRequest("scroll needs a non-zero dx or dy")
+        }
+        let bounds = try WindowPlacement.liveBounds(of: window.windowID)
+        let global = try globalPoint(localPoint, in: window, bounds: bounds, what: "scroll")
+
+        // Accessibility first, and it is not a nicety. Synthetic scroll wheel events posted with
+        // `CGEventPostToPid` do not reach AppKit on a host without the private
+        // focus-without-raise record — measured against TextEdit on macOS 27 across pixel and
+        // line units, stamped and unstamped, with and without an explicit location: every
+        // variant reported success and moved nothing. A scroll bar's AXValue is public, settable,
+        // and readable back, so this path can prove it worked.
+        if let area = AX.scrollArea(
+            at: global, in: window.pid, windowID: window.windowID) {
+            var moved = false
+            for _ in 0..<ticks {
+                // Positive dy scrolls content up, which means moving *back* towards the top.
+                if dy != 0,
+                   AX.scroll(area, byPixels: CGFloat(-dy)) != nil { moved = true }
+                if dx != 0,
+                   AX.scroll(area, byPixels: CGFloat(-dx), horizontal: true) != nil { moved = true }
+                usleep(20_000)
+            }
+            if moved { return }
+        }
+
+        // No scroll area, or one that refused: fall back to the synthetic wheel rather than
+        // refusing outright, because a canvas or custom surface may consume wheel events without
+        // exposing a scroll bar. The caller is told which path ran.
+        try withPointerTransaction(window) { source, post in
+            // Position the pointer first so the app routes the wheel to the region the agent
+            // aimed at rather than wherever it last believed the pointer was.
+            if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved,
+                                  mouseCursorPosition: global, mouseButton: .left) {
+                move.flags = modifiers
+                try post(move)
+                usleep(15_000)
+            }
+            for _ in 0..<ticks {
+                guard let event = CGEvent(scrollWheelEvent2Source: source, units: .pixel,
+                                          wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)
+                else { throw SpaceOError.badRequest("could not synthesise a scroll event") }
+                event.flags = modifiers
+                event.location = global
+                try post(event)
+                usleep(20_000)
+            }
+        }
+        throw SpaceOError.unsupportedTarget(
+            "no scrollable accessibility element was found at (\(Int(localPoint.x)),"
+            + "\(Int(localPoint.y))), so the scroll fell back to synthetic wheel events. "
+            + "This host has no focus-without-raise record, where per-PID wheel events are not "
+            + "known to reach AppKit — treat this scroll as unconfirmed and verify with a "
+            + "screenshot rather than assuming the view moved.")
     }
 
     // MARK: - Accessibility actions (preferred)
