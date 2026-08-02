@@ -182,7 +182,10 @@ jobs:
 
       - name: Retain immutable candidate and verification metadata
         id: retain
-        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        # v4.6.0 is the first revision to declare the artifact-digest output that the publication
+        # job verifies. Pinning below it silently exports an empty digest. See
+        # scripts/check-workflow-outputs.sh, which fails the build if that regresses again.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.package.outputs.candidate_name }}
           path: |
@@ -195,6 +198,25 @@ jobs:
           compression-level: 0
           overwrite: false
           retention-days: 90
+
+      # An undeclared or failed action output expands to the empty string rather than erroring, so
+      # the publication job's digest check would otherwise be the first thing to notice - after
+      # notarization has run and a reviewer has already approved the deployment.
+      - name: Require retained candidate identity
+        env:
+          RETAINED_ARTIFACT_ID: ${{ steps.retain.outputs.artifact-id }}
+          RETAINED_ARTIFACT_DIGEST: ${{ steps.retain.outputs.artifact-digest }}
+        run: |
+          set -euo pipefail
+          [[ "$RETAINED_ARTIFACT_ID" =~ ^[0-9]+$ ]] || {
+            echo "error: artifact retention did not report a numeric artifact id" >&2
+            exit 1
+          }
+          [[ "$RETAINED_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "error: artifact retention did not report a SHA-256 artifact digest" >&2
+            echo "the pinned actions/upload-artifact revision must declare artifact-digest" >&2
+            exit 1
+          }
 
   publication:
     needs: candidate

@@ -38,6 +38,11 @@ assert_contains "$RELEASE_WORKFLOW" 'environment: release-publication'
 assert_contains "$RELEASE_WORKFLOW" 'needs: candidate'
 assert_contains "$RELEASE_WORKFLOW" 'artifact-ids: ${{ needs.candidate.outputs.artifact_id }}'
 assert_contains "$RELEASE_WORKFLOW" '[[ "$EXPECTED_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]'
+# The digest must be proven present in the job that produces it. Otherwise an upload-artifact
+# revision that does not declare artifact-digest exports an empty string, and the check above is
+# the first to notice - after notarization and after the publication reviewer has approved.
+assert_contains "$RELEASE_WORKFLOW" '[[ "$RETAINED_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ]]'
+assert_contains "$RELEASE_WORKFLOW" '[[ "$RETAINED_ARTIFACT_ID" =~ ^[0-9]+$ ]]'
 assert_contains "$RELEASE_WORKFLOW" 'overwrite: false'
 assert_contains "$RELEASE_WORKFLOW" 'bash scripts/release.sh verify-candidate "$candidate_record"'
 assert_contains "$RELEASE_WORKFLOW" 'Publish already-qualified candidate'
@@ -331,5 +336,46 @@ if PATH="$MOCK_BIN:$PATH" \
        bash "$RELEASE_SCRIPT" verify-candidate "$candidate_record" >/dev/null 2>&1; then
     fail "candidate verification accepted provenance for a different release commit"
 fi
+
+# A workflow that consumes an output its pinned action never declares is not a syntax error to
+# GitHub Actions: the expression expands to the empty string. These cases assert that the check
+# rejects each way that can happen, so the check failing open is itself a test failure.
+WORKFLOW_CHECK="$REPOSITORY_ROOT/scripts/check-workflow-outputs.sh"
+bash "$WORKFLOW_CHECK" >/dev/null \
+    || fail "the committed workflows do not pass their own output-reference check"
+
+FIXTURE_WORKFLOWS="$TEST_ROOT/workflows"
+mkdir -p "$FIXTURE_WORKFLOWS"
+
+assert_workflow_check_rejects() {
+    local description="$1"
+    local manifest="${2:-}"
+    if SPACEO_WORKFLOW_DIRECTORY="$FIXTURE_WORKFLOWS" \
+       SPACEO_PINNED_ACTION_OUTPUTS="$manifest" \
+           bash "$WORKFLOW_CHECK" >/dev/null 2>&1; then
+        fail "the workflow output check accepted $description"
+    fi
+}
+
+# actions/upload-artifact only began declaring artifact-digest in v4.6.0. Rolling the pin back to
+# v4.3.3 is the exact regression this guards.
+STALE_UPLOAD_PIN="actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808"
+sed "s|actions/upload-artifact@[0-9a-f]\{40\}|$STALE_UPLOAD_PIN|" \
+    "$RELEASE_WORKFLOW" > "$FIXTURE_WORKFLOWS/release.yml"
+assert_workflow_check_rejects "a pin with no recorded output set"
+printf '%s artifact-id artifact-url\n' "$STALE_UPLOAD_PIN" > "$TEST_ROOT/stale-outputs.txt"
+assert_workflow_check_rejects "a pin that does not declare artifact-digest" "$TEST_ROOT/stale-outputs.txt"
+
+# A floating tag can be repointed without review, which reintroduces the same substitution.
+sed "s|actions/upload-artifact@[0-9a-f]\{40\} # v[0-9.]*|actions/upload-artifact@v4|" \
+    "$RELEASE_WORKFLOW" > "$FIXTURE_WORKFLOWS/release.yml"
+assert_workflow_check_rejects "an action that is not pinned to a commit SHA"
+
+# The same empty-string expansion applies to outputs a local step was expected to write.
+sed 's|steps.package.outputs.base }}.dmg|steps.package.outputs.absent }}.dmg|' \
+    "$RELEASE_WORKFLOW" > "$FIXTURE_WORKFLOWS/release.yml"
+assert_workflow_check_rejects "a reference to an output no step writes"
+
+rm -rf "$FIXTURE_WORKFLOWS"
 
 echo "release security policy tests passed"

@@ -25,9 +25,18 @@ jobs:
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
           bash -n scripts/check-swift-toolchain.sh scripts/make-viewer-app.sh scripts/release.sh scripts/test.sh
+          bash -n scripts/check-workflow-outputs.sh
           node --check scripts/mcp-smoke.mjs
           bash scripts/release.sh check
           bash scripts/release.sh dry-run
+      # The release workflow is only exercised end to end by a tag push, so its policy assertions
+      # have to run here to be able to fail a pull request that breaks them.
+      - name: Release security policy
+        run: bash Tests/ReleaseSecurityTests.sh
+      # --online re-derives each pinned action's declared outputs from its action.yml at the pinned
+      # SHA, so .github/pinned-action-outputs.txt cannot drift away from what the action really has.
+      - name: Verify pinned action output references
+        run: bash scripts/check-workflow-outputs.sh --online
       - name: Safe tests (no WindowServer, apps, or input)
         run: bash scripts/test.sh safe
       - name: Release build

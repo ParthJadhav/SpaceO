@@ -1,0 +1,3 @@
+# Outputs declared by each pinned action whose outputs a workflow consumes.
+# Regenerate with: bash scripts/check-workflow-outputs.sh --print-manifest
+actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 artifact-digest artifact-id artifact-url
