@@ -833,6 +833,7 @@ case "drag":
         request.toY = doubleArgument("to-y")
         request.button = stringArgument("button")
         request.modifiers = modifiersArgument()
+        request.web = args.bool("web") ? true : nil
     }
 
 case "type":
