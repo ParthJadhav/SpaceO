@@ -5,60 +5,8 @@ import Darwin
 import SpaceOKit
 import SpaceOMCP
 
-// MARK: - Tiny argument parser
-
-struct Args {
-    private(set) var positional: [String] = []
-    private var flags: [String: String] = [:]
-    private var bools: Set<String> = []
-
-    init(_ argv: [String]) {
-        var index = 0
-        while index < argv.count {
-            let token = argv[index]
-            if token == "--" {
-                positional.append(contentsOf: argv[(index + 1)...])
-                break
-            }
-            if token.hasPrefix("--") {
-                let name = String(token.dropFirst(2))
-                if index + 1 < argv.count
-                    && (!argv[index + 1].hasPrefix("-")
-                        || Double(argv[index + 1]) != nil) {
-                    flags[name] = argv[index + 1]
-                    index += 2
-                    continue
-                }
-                bools.insert(name)
-            } else if token.hasPrefix("-") && token.count == 2 {
-                let name = String(token.dropFirst())
-                if index + 1 < argv.count {
-                    flags[name] = argv[index + 1]
-                    index += 2
-                    continue
-                }
-                bools.insert(name)
-            } else {
-                positional.append(token)
-            }
-            index += 1
-        }
-    }
-
-    func string(_ name: String, _ alt: String? = nil) -> String? {
-        flags[name] ?? alt.flatMap { flags[$0] }
-    }
-    func int(_ name: String) -> Int? { flags[name].flatMap { Int($0) } }
-    func double(_ name: String) -> Double? { flags[name].flatMap { Double($0) } }
-    func bool(_ name: String) -> Bool { bools.contains(name) || flags[name] == "true" }
-    func wasSupplied(_ name: String) -> Bool {
-        flags[name] != nil || bools.contains(name)
-    }
-    var suppliedNames: Set<String> {
-        Set(flags.keys).union(bools)
-    }
-    var hasJSON: Bool { bool("json") }
-}
+// The argument parser and its flag table live in SpaceOKit (`CLIArguments.swift`) so they can be
+// unit tested; this target is top-level code and cannot be imported by the test bundle.
 
 // MARK: - Output
 
@@ -310,7 +258,7 @@ final class DaemonManagerHolder: @unchecked Sendable {
 
 let argv = Array(CommandLine.arguments.dropFirst())
 guard let command = argv.first else { print(usage); exit(0) }
-let args = Args(Array(argv.dropFirst()))
+let args = CLIArguments(Array(argv.dropFirst()))
 
 func stringArgument(_ name: String, _ alt: String? = nil) -> String? {
     if let value = args.string(name, alt) { return value }
@@ -334,11 +282,21 @@ func doubleArgument(_ name: String) -> Double? {
     return value
 }
 
-func validateFlags(_ allowed: Set<String>) {
+/// `command` keys into `CLISpec.allowedFlags` — `"type"`, `"session.destroy"` — so the flags a
+/// command accepts and how each one parses stay in one table.
+func validateFlags(_ command: String) {
+    guard let allowed = CLISpec.allowedFlags[command] else {
+        fail("internal error: no flag spec for '\(command)'")
+    }
     let unexpected = args.suppliedNames.subtracting(allowed)
     guard unexpected.isEmpty else {
         fail("unknown option(s): "
              + unexpected.sorted().map { "--\($0)" }.joined(separator: ", "))
+    }
+    guard args.malformedBooleanValues.isEmpty else {
+        fail(args.malformedBooleanValues.sorted()
+            .map { "--\($0) is a switch: pass it bare, or as --\($0)=true / --\($0)=false" }
+            .joined(separator: "\n"))
     }
 }
 
@@ -446,7 +404,7 @@ func controllerOwnerArgument() -> DurableSessionOwner {
 switch command {
 
 case "version", "--version":
-    validateFlags(["json"])
+    validateFlags("version")
     print(
         args.hasJSON
             ? #"{"version":"\#(SpaceOVersion.current)"}"#
@@ -454,7 +412,7 @@ case "version", "--version":
     exit(0)
 
 case "doctor":
-    validateFlags(["socket", "json"])
+    validateFlags("doctor")
     let capabilities = Capabilities()
     let poolRequest = Request(cmd: "pool")
     let daemonResponse = try? Transport.send(poolRequest, to: socketPath, timeout: 2)
@@ -534,10 +492,10 @@ case "doctor":
 
 case "daemon":
     if args.positional.first == "stop" {
-        validateFlags(["socket", "json"])
+        validateFlags("daemon.stop")
         remote { $0.cmd = "daemon.stop" }
     }
-    validateFlags(["socket", "display-size", "sessions-per-display"])
+    validateFlags("daemon")
 
     let budget = ResourceBudget.fromEnvironment()
     var displaySize = CGSize(width: 1920, height: 1080)
@@ -675,10 +633,7 @@ case "session":
     }
     switch sub {
     case "create":
-        validateFlags([
-            "socket", "json", "session", "name", "controller-id", "controller-label",
-            "controller-kind", "controller-ttl", "lease",
-        ])
+        validateFlags("session.create")
         let owner = controllerOwnerArgument()
         let ttl = doubleArgument("controller-ttl")
         if let ttl, !(30...3_600).contains(ttl) {
@@ -693,10 +648,10 @@ case "session":
             request.controllerLeaseID = requestedLease
         }
     case "list":
-        validateFlags(["socket", "json"])
+        validateFlags("session.list")
         remote { $0.cmd = "session.list" }
     case "heartbeat":
-        validateFlags(["socket", "json", "session", "lease"])
+        validateFlags("session.heartbeat")
         let lease = leaseArgument(required: true)
         remote { request in
             request.cmd = "session.heartbeat"
@@ -704,7 +659,7 @@ case "session":
             request.controllerLeaseID = lease
         }
     case "destroy":
-        validateFlags(["socket", "json", "session", "all", "keep-apps", "lease"])
+        validateFlags("session.destroy")
         remote { request in
             request.cmd = "session.destroy"
             request.session = stringArgument("session")
@@ -717,7 +672,7 @@ case "session":
     }
 
 case "pool":
-    validateFlags(["socket", "json"])
+    validateFlags("pool")
     if args.positional.first == "set" {
         guard let value = args.positional.dropFirst().first.flatMap({ Int($0) }) else {
             fail("pool set needs a number, e.g. `spaceo pool set 4`")
@@ -730,7 +685,7 @@ case "pool":
     remote { $0.cmd = "pool" }
 
 case "run":
-    validateFlags(["socket", "json", "session", "lease"])
+    validateFlags("run")
     guard let app = args.positional.first else { fail("run needs an application name or path") }
     remote { request in
         request.cmd = "run"
@@ -741,7 +696,7 @@ case "run":
     }
 
 case "adopt":
-    validateFlags(["socket", "json", "session", "pid", "lease"])
+    validateFlags("adopt")
     guard let pid = pidArgument() else { fail("adopt needs --pid N") }
     remote { request in
         request.cmd = "adopt"
@@ -751,14 +706,14 @@ case "adopt":
     }
 
 case "windows":
-    validateFlags(["socket", "json", "session"])
+    validateFlags("windows")
     remote { request in
         request.cmd = "windows"
         request.session = stringArgument("session")
     }
 
 case "ax":
-    validateFlags(["socket", "json", "session", "window", "full"])
+    validateFlags("ax")
     remote { request in
             request.cmd = "ax"
             request.session = stringArgument("session")
@@ -767,10 +722,7 @@ case "ax":
     }
 
 case "click":
-    validateFlags([
-        "socket", "json", "session", "window", "element", "web",
-        "x", "y", "button", "count", "modifiers", "lease",
-    ])
+    validateFlags("click")
     remote { request in
             request.cmd = "click"
             request.session = stringArgument("session")
@@ -786,10 +738,7 @@ case "click":
     }
 
 case "scroll":
-    validateFlags([
-        "socket", "json", "session", "window",
-        "x", "y", "dx", "dy", "ticks", "modifiers", "web", "lease",
-    ])
+    validateFlags("scroll")
     remote { request in
         request.cmd = "scroll"
         request.session = stringArgument("session")
@@ -805,7 +754,7 @@ case "scroll":
     }
 
 case "move":
-    validateFlags(["socket", "json", "session", "window", "x", "y", "modifiers", "web", "lease"])
+    validateFlags("move")
     remote { request in
         request.cmd = "move"
         request.session = stringArgument("session")
@@ -818,10 +767,7 @@ case "move":
     }
 
 case "drag":
-    validateFlags([
-        "socket", "json", "session", "window",
-        "x", "y", "to-x", "to-y", "button", "modifiers", "web", "lease",
-    ])
+    validateFlags("drag")
     remote { request in
         request.cmd = "drag"
         request.session = stringArgument("session")
@@ -836,7 +782,7 @@ case "drag":
     }
 
 case "type":
-    validateFlags(["socket", "json", "session", "window", "web", "lease"])
+    validateFlags("type")
     guard let text = args.positional.first else { fail("type needs a string") }
     remote { request in
             request.cmd = "type"
@@ -848,7 +794,7 @@ case "type":
     }
 
 case "key":
-    validateFlags(["socket", "json", "session", "window", "web", "lease"])
+    validateFlags("key")
     guard let combo = args.positional.first else { fail("key needs a combo like cmd+s") }
     remote { request in
             request.cmd = "key"
@@ -860,10 +806,7 @@ case "key":
     }
 
 case "screenshot":
-    validateFlags([
-        "socket", "json", "session", "window", "output", "o", "full",
-        "scale", "x", "y", "width", "height",
-    ])
+    validateFlags("screenshot")
     remote { request in
             request.cmd = "screenshot"
             request.session = stringArgument("session")
@@ -878,14 +821,14 @@ case "screenshot":
     }
 
 case "verify":
-    validateFlags(["socket", "json", "session"])
+    validateFlags("verify")
     remote { request in
         request.cmd = "verify"
         request.session = stringArgument("session")
     }
 
 case "repark":
-    validateFlags(["socket", "json", "session", "lease"])
+    validateFlags("repark")
     remote { request in
         request.cmd = "repark"
         request.session = stringArgument("session")
@@ -893,18 +836,18 @@ case "repark":
     }
 
 case "mcp":
-    validateFlags(["socket"])
+    validateFlags("mcp")
     MCPServer.run(socketPath: socketPath)
 
 case "demo":
-    validateFlags(["app", "keep", "no-capture", "sessions"])
+    validateFlags("demo")
     Demo.run(appName: stringArgument("app") ?? "TextEdit",
              keep: args.bool("keep"),
              capture: !args.bool("no-capture"),
              perDisplay: intArgument("sessions") ?? 1)
 
 case "help", "--help", "-h":
-    validateFlags([])
+    validateFlags("help")
     print(usage)
     exit(0)
 
