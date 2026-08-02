@@ -59,7 +59,7 @@ public enum AppLauncher {
         opening files: [URL] = [],
         into region: CGRect,
         timeout: TimeInterval = 15,
-        onMaterialized: (LaunchedApp) throws -> Void = { _ in }
+        onMaterialized: (LaunchedApp) async throws -> Void = { _ in }
     ) async throws -> (app: LaunchedApp, windows: [WindowRef]) {
 
         guard timeout.isFinite, (0.5...120).contains(timeout) else {
@@ -209,7 +209,7 @@ public enum AppLauncher {
             // exact process identity, before DevTools discovery, window waits, placement, or any
             // other potentially long operation. The session claims/registers the process and
             // the daemon persists that identity before launch work may continue.
-            try onMaterialized(app)
+            try await onMaterialized(app)
             if let profile = temporaryProfile {
                 devToolsPort = await waitForDevToolsPort(
                     in: profile,

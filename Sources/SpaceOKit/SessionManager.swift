@@ -11,7 +11,7 @@ public actor SessionManager {
 
     typealias SessionFactory =
         @Sendable (_ id: String, _ slot: DisplayPool.Slot) throws -> AgentSession
-    typealias MaterializedAppHandler = (_ app: LaunchedApp) throws -> Void
+    typealias MaterializedAppHandler = (_ app: LaunchedApp) async throws -> Void
 
     protocol SessionLaunching {
         nonisolated(nonsending) func launch(
@@ -584,12 +584,16 @@ public actor SessionManager {
 
     /// Record a newly materialized process identity before any later response work. If that first
     /// post-effect write fails, undo the registration where possible; otherwise retain in-memory
-    /// ownership and retry the pending record once so restart cleanup has the exact identity.
+    /// ownership and retry the pending record so restart cleanup has the exact identity.
+    ///
+    /// Reconciliation is bounded and cancellation-aware. This runs with the operation gate held,
+    /// so a rollback and a commit that both fail permanently must surface an error rather than
+    /// retry forever and starve every later request, including daemon shutdown.
     private func recordPostEffectOrRollback(
         session: AgentSession,
         app: LaunchedApp
-    ) throws {
-        try DurablePostEffectReconciliation.run(
+    ) async throws {
+        try await DurablePostEffectReconciliation.run(
             commitPendingIdentity: {
                 try self.persistSession(session, operationState: .mutationPending)
             },
@@ -972,7 +976,7 @@ public actor SessionManager {
                     appURL: appURL,
                     files: files,
                     onMaterialized: { materialized in
-                        try self.recordPostEffectOrRollback(
+                        try await self.recordPostEffectOrRollback(
                             session: session,
                             app: materialized)
                     })
@@ -1034,7 +1038,7 @@ public actor SessionManager {
                 try persistSession(session, operationState: .ready)
                 throw mutationError
             }
-            try recordPostEffectOrRollback(session: session, app: app)
+            try await recordPostEffectOrRollback(session: session, app: app)
             try renewAfterSuccessfulMutation(
                 session,
                 leaseID: request.controllerLeaseID)
