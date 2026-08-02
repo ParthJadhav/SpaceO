@@ -40,6 +40,10 @@ public actor ChromiumBridge {
     /// The page this bridge drives, or nil when it is not attached.
     public var boundTargetID: String? { attachedTargetID }
 
+    /// How many DevTools sockets this bridge has opened. Re-attaching to the page it is already
+    /// on must not open another; re-pointing it at a different page must.
+    private(set) var socketsOpened = 0
+
     /// FIFO of callers waiting for the single in-flight DevTools command to finish.
     ///
     /// The protocol here is strictly request/reply on one WebSocket, but actor reentrancy means
@@ -139,16 +143,27 @@ public actor ChromiumBridge {
 
     // MARK: - Connection
 
+    /// Point the bridge at `target`, replacing any page it is already driving.
+    ///
+    /// The early return is keyed on the *target*, not on "a socket exists". Keyed on the socket,
+    /// re-attaching was a silent no-op: `attach(toTargetID: B)` handed the caller `Target(id: B)`
+    /// while the WebSocket still spoke to page A and `boundTargetID` still said `A`. That is the
+    /// same drive-the-wrong-page failure SPAO-132 closed, arriving through the escape hatch that
+    /// ticket added.
     private func connect(to target: Target) async throws {
-        if socket != nil { return }
+        if socket != nil, attachedTargetID == target.id { return }
         guard Self.validatedWebSocketURL(target.webSocketURL.absoluteString, port: port) != nil else {
+            // Validate before tearing anything down, so a refused endpoint leaves the page we are
+            // already driving bound instead of unbinding the bridge as a side effect.
             throw SpaceOError.badRequest(
                 "DevTools tried to redirect automation away from its private loopback port")
         }
+        detach()
         let task = session.webSocketTask(with: target.webSocketURL)
         task.maximumMessageSize = 32 * 1_048_576
         task.resume()
         socket = task
+        socketsOpened += 1
         attachedTargetID = target.id
     }
 
@@ -207,7 +222,9 @@ public actor ChromiumBridge {
         }
         let found = try await targets()
         guard found.contains(where: { $0.id == attachedTargetID }) else {
-            detach()
+            // Reading the list is an await a re-attach can interleave with. Only unbind if the
+            // bridge is still on the page this call actually checked.
+            if self.attachedTargetID == attachedTargetID { detach() }
             throw SpaceOError.badRequest(
                 "the page SpaceO was driving (target \(attachedTargetID)) is gone; "
                 + "attach again before sending more commands")
@@ -218,6 +235,17 @@ public actor ChromiumBridge {
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         attachedTargetID = nil
+    }
+
+    /// Unbind only if `stale` is still the socket the bridge is driving.
+    ///
+    /// A command keeps its own reference to the socket it sent on, and it is suspended in
+    /// `receive()` across awaits that a re-attach can interleave with. Its failure must retire
+    /// that socket, never a page attached afterwards — `connect(to:)` already cancelled the old
+    /// one on the way out.
+    private func detach(ifCurrent stale: URLSessionWebSocketTask) {
+        guard socket === stale else { return }
+        detach()
     }
 
     @discardableResult
@@ -263,14 +291,14 @@ public actor ChromiumBridge {
         for _ in 0..<64 {
             let remaining = replyDeadline.timeIntervalSinceNow
             guard remaining > 0 else {
-                detach()
+                detach(ifCurrent: socket)
                 throw SpaceOError.badRequest("DevTools \(method): reply timed out")
             }
             let message: URLSessionWebSocketTask.Message
             do {
                 message = try await Self.receive(from: socket, within: remaining)
             } catch {
-                detach()
+                detach(ifCurrent: socket)
                 throw error
             }
             guard case .string(let text) = message,
@@ -284,7 +312,7 @@ public actor ChromiumBridge {
                 return object["result"] as? [String: Any] ?? [:]
             }
         }
-        detach()
+        detach(ifCurrent: socket)
         throw SpaceOError.badRequest("DevTools \(method): no reply")
     }
 

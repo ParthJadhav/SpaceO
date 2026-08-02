@@ -265,6 +265,71 @@ final class ChromiumBridgeTests: XCTestCase {
         }
     }
 
+    /// PAR-22: a second `attach` has to move the bridge. `connect(to:)` used to return early on
+    /// "a socket exists", so re-attaching handed back the requested target while every command
+    /// kept going to the previously bound page.
+    func testReattachingToADifferentTargetMovesTheBridge() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            Self.listing([(id: "A", title: "first"), (id: "B", title: "second")], port: port)
+        }))
+        defer { server.stop() }
+
+        let bridge = ChromiumBridge(port: server.port)
+        let first = try await bridge.attach(toTargetID: "A")
+        XCTAssertEqual(first.id, "A")
+        var bound = await bridge.boundTargetID
+        XCTAssertEqual(bound, "A")
+
+        let second = try await bridge.attach(toTargetID: "B")
+        XCTAssertEqual(second.id, "B")
+        bound = await bridge.boundTargetID
+        XCTAssertEqual(bound, "B",
+                       "the returned target is only honest if the bridge actually re-pointed")
+        let opened = await bridge.socketsOpened
+        XCTAssertEqual(opened, 2, "re-pointing at another page must open that page's socket")
+    }
+
+    /// The other half: attaching to the page the bridge is already on stays a no-op, so a
+    /// re-attach does not churn a working session's socket.
+    func testReattachingToTheSameTargetKeepsTheExistingSocket() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            Self.listing([(id: "A", title: "first"), (id: "B", title: "second")], port: port)
+        }))
+        defer { server.stop() }
+
+        let bridge = ChromiumBridge(port: server.port)
+        _ = try await bridge.attach(toTargetID: "A")
+        _ = try await bridge.attach(toTargetID: "A")
+
+        let bound = await bridge.boundTargetID
+        XCTAssertEqual(bound, "A")
+        let opened = await bridge.socketsOpened
+        XCTAssertEqual(opened, 1)
+    }
+
+    /// A refused re-attach must not unbind the page the bridge is driving — failing closed means
+    /// the caller keeps a known-good binding, not an unusable bridge.
+    func testARefusedReattachLeavesTheOriginalBindingIntact() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            Self.listing([(id: "A", title: "first")], port: port)
+        }))
+        defer { server.stop() }
+
+        let bridge = ChromiumBridge(port: server.port)
+        _ = try await bridge.attach(toTargetID: "A")
+        do {
+            _ = try await bridge.attach(toTargetID: "B")
+            XCTFail("a target that is not in the list must be refused")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("no page target 'B'"),
+                          error.localizedDescription)
+        }
+        let bound = await bridge.boundTargetID
+        XCTAssertEqual(bound, "A")
+        let opened = await bridge.socketsOpened
+        XCTAssertEqual(opened, 1)
+    }
+
     func testAnEmptyOrOverlongTargetIDIsRefusedBeforeAnyRequest() async {
         let bridge = ChromiumBridge(port: 9_222)
         for id in ["", String(repeating: "x", count: 257)] {
