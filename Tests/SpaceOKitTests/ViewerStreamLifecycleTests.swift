@@ -161,6 +161,100 @@ final class ViewerStreamLifecycleTests: XCTestCase {
                        "only the current display generation may present frames")
     }
 
+    /// AppKit refreshes `NSScreen.screens` behind `CGGetOnlineDisplayList`, so a freshly created
+    /// stage is routinely renamed one poll after the Viewer already started streaming it. That
+    /// rename must stay cosmetic: it changes no capture geometry, so it must neither restart the
+    /// stream nor invalidate the frames the running capture is still producing.
+    func testCosmeticRenameKeepsDeliveringFramesWithoutRestart() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7, name: "SpaceO stage 7")
+        let model = makeModel(engine: engine, displays: [display])
+        var acceptedFrames = 0
+        model.onFrame = { _ in acceptedFrames += 1 }
+
+        model.selectedID = display.id
+        try await waitForPendingStarts(engine, count: 1)
+        let session = try await engine.completeFirstStart()
+        try await waitForState(model, .live)
+        model.setInteractionEnabled(true)
+        let liveGeneration = model.streamGeneration
+
+        session.emitFrame(makeSampleBuffer())
+        try await waitUntil { acceptedFrames == 1 }
+
+        // Same id, same bounds — only the AppKit-derived label and the active flag move.
+        model.applyDiscovery(
+            displays: [makeDisplay(id: 7,
+                                   isActive: false,
+                                   name: "Stage — SpaceO Display")],
+            permissions: PermissionState(screenRecording: true, accessibility: true)
+        )
+
+        XCTAssertEqual(model.streamGeneration, liveGeneration,
+                       "a cosmetic rename must not restart the capture")
+        XCTAssertEqual(model.streamState, .live)
+        XCTAssertEqual(session.stopCount, 0)
+        XCTAssertTrue(model.interactionEnabled)
+
+        session.emitFrame(makeSampleBuffer())
+        try await waitUntil { acceptedFrames == 2 }
+        XCTAssertEqual(acceptedFrames, 2,
+                       "frames from the still-current capture must survive a rename")
+    }
+
+    /// The mirror hazard: a renamed display must not swallow a genuine ScreenCaptureKit stop.
+    /// Silently staying `.live` on a dead capture is what makes a frozen picture look current.
+    func testCosmeticRenameStillSurfacesGenuineStreamStop() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7, name: "SpaceO stage 7")
+        let model = makeModel(engine: engine, displays: [display])
+
+        model.selectedID = display.id
+        try await waitForPendingStarts(engine, count: 1)
+        let session = try await engine.completeFirstStart()
+        try await waitForState(model, .live)
+        model.setInteractionEnabled(true)
+
+        model.applyDiscovery(
+            displays: [makeDisplay(id: 7, name: "Stage — SpaceO Display")],
+            permissions: PermissionState(screenRecording: true, accessibility: true)
+        )
+
+        session.fail(TestViewerStreamError("capture died after rename"))
+        try await waitUntil { !model.streamState.isLive }
+
+        guard case let .failed(message) = model.streamState else {
+            return XCTFail("a stop after a rename must still reach the failed state")
+        }
+        XCTAssertTrue(message.contains("capture died after rename"))
+        XCTAssertFalse(model.interactionEnabled)
+        XCTAssertTrue(model.note?.isWarning == true)
+    }
+
+    /// If the rename lands inside the ScreenCaptureKit start window, the completion must still
+    /// install the session. Dropping it stopped the brand-new stream and stranded the Viewer in
+    /// "Starting secure display stream…" with no failure banner and no retry path.
+    func testCosmeticRenameDuringStartStillCompletesToLive() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7, name: "SpaceO stage 7")
+        let model = makeModel(engine: engine, displays: [display])
+
+        model.selectedID = display.id
+        try await waitForPendingStarts(engine, count: 1)
+        XCTAssertEqual(model.streamState, .starting)
+
+        model.applyDiscovery(
+            displays: [makeDisplay(id: 7, name: "Stage — SpaceO Display")],
+            permissions: PermissionState(screenRecording: true, accessibility: true)
+        )
+
+        let session = try await engine.completeFirstStart()
+        try await waitForState(model, .live)
+        XCTAssertEqual(session.stopCount, 0,
+                       "the completing start owns the current generation")
+        XCTAssertTrue(model.streamRunning)
+    }
+
     func testSelectedDisplayRemovalStopsStreamAndReturnsToIdle() async throws {
         let engine = FakeViewerStreamEngine()
         let display = makeDisplay(id: 7)
@@ -354,13 +448,15 @@ final class ViewerStreamLifecycleTests: XCTestCase {
 
     private func makeDisplay(id: CGDirectDisplayID,
                              originX: CGFloat = 0,
-                             width: CGFloat = 1_920) -> DisplayEntry {
+                             width: CGFloat = 1_920,
+                             isActive: Bool = true,
+                             name: String? = nil) -> DisplayEntry {
         DisplayEntry(
             id: id,
             bounds: CGRect(x: originX, y: 0, width: width, height: 1_080),
             isSpaceO: true,
-            isActive: true,
-            name: "Stage \(id)"
+            isActive: isActive,
+            name: name ?? "Stage \(id)"
         )
     }
 

@@ -13,16 +13,18 @@ struct DisplayEntry: Identifiable, Equatable, Sendable {
     let isActive: Bool
     let name: String
 
-    func hasMaterialGeometryChange(from other: DisplayEntry,
-                                   tolerance: CGFloat = 0.5) -> Bool {
-        guard id == other.id else { return true }
-        let values = [
-            abs(bounds.minX - other.bounds.minX),
-            abs(bounds.minY - other.bounds.minY),
-            abs(bounds.width - other.bounds.width),
-            abs(bounds.height - other.bounds.height),
+    /// Rect equality at capture resolution. Anything non-finite counts as a change so a bad
+    /// reading can never be mistaken for "nothing moved".
+    static func rectsMatch(_ lhs: CGRect,
+                           _ rhs: CGRect,
+                           tolerance: CGFloat = 0.5) -> Bool {
+        let deltas = [
+            abs(lhs.minX - rhs.minX),
+            abs(lhs.minY - rhs.minY),
+            abs(lhs.width - rhs.width),
+            abs(lhs.height - rhs.height),
         ]
-        return values.contains { !$0.isFinite || $0 >= tolerance }
+        return !deltas.contains { !$0.isFinite || $0 >= tolerance }
     }
 }
 
@@ -233,6 +235,28 @@ final class ViewerModel: ObservableObject {
         let display: DisplayEntry
         let sourceRect: CGRect?
         let interactionDisplay: DisplayEntry
+
+        /// Everything a restart would actually change: which display is captured, which region
+        /// of it, and where clicks land. Deliberately narrower than `Equatable`, which also
+        /// covers `DisplayEntry`'s cosmetic fields — `name` lags behind `CGGetOnlineDisplayList`
+        /// because AppKit only refreshes `NSScreen.screens` on its own reconfiguration pass, so
+        /// treating a rename as a restart would tear down a healthy capture on a routine poll.
+        func capturesSameContent(as other: StreamTarget) -> Bool {
+            guard display.id == other.display.id,
+                  interactionDisplay.id == other.interactionDisplay.id,
+                  DisplayEntry.rectsMatch(display.bounds, other.display.bounds),
+                  DisplayEntry.rectsMatch(
+                      interactionDisplay.bounds,
+                      other.interactionDisplay.bounds
+                  ) else {
+                return false
+            }
+            switch (sourceRect, other.sourceRect) {
+            case (nil, nil): return true
+            case let (lhs?, rhs?): return DisplayEntry.rectsMatch(lhs, rhs)
+            default: return false
+            }
+        }
     }
 
     @Published private(set) var displays: [DisplayEntry] = []
@@ -571,7 +595,7 @@ final class ViewerModel: ObservableObject {
         permissions newPermissions: PermissionState,
         restartSelected: Bool = false
     ) {
-        let previousSelected = selected
+        let previousTarget = currentStreamTarget
         let previousPermissions = permissions
 
         displays = newDisplays.sorted { left, right in
@@ -581,19 +605,25 @@ final class ViewerModel: ObservableObject {
         permissions = newPermissions
 
         guard let selectedID else { return }
-        guard let updatedSelected = displays.first(where: { $0.id == selectedID }) else {
+        guard displays.contains(where: { $0.id == selectedID }) else {
             selectedSessionID = nil
             self.selectedID = nil
             return
         }
 
-        let geometryChanged = previousSelected.map {
-            updatedSelected.hasMaterialGeometryChange(from: $0)
-        } ?? true
+        // Compare the whole stream target, not just the selected display's geometry. The two
+        // must agree: whatever this check calls immaterial keeps streaming, so any field that
+        // moves a captured pixel or a routed click has to be represented here.
+        let targetChanged: Bool
+        switch (previousTarget, currentStreamTarget) {
+        case let (previous?, current?): targetChanged = !previous.capturesSameContent(as: current)
+        case (nil, nil): targetChanged = false
+        default: targetChanged = true
+        }
         let capturePermissionChanged =
             previousPermissions.screenRecording != newPermissions.screenRecording
 
-        if restartSelected || geometryChanged || capturePermissionChanged {
+        if restartSelected || targetChanged || capturePermissionChanged {
             restartStreamForCurrentSelection()
             return
         }
@@ -1002,20 +1032,12 @@ final class ViewerModel: ObservableObject {
                     onFrame: { [weak self] sample in
                         let delivery = FrameDelivery(sample: sample)
                         Task { @MainActor [weak self] in
-                            self?.receiveFrame(
-                                delivery.sample,
-                                generation: generation,
-                                target: target
-                            )
+                            self?.receiveFrame(delivery.sample, generation: generation)
                         }
                     },
                     onStopped: { [weak self] error in
                         Task { @MainActor [weak self] in
-                            self?.handleStreamStopped(
-                                error,
-                                generation: generation,
-                                target: target
-                            )
+                            self?.handleStreamStopped(error, generation: generation)
                         }
                     }
                 )
@@ -1027,7 +1049,7 @@ final class ViewerModel: ObservableObject {
             } catch is CancellationError {
                 // A newer generation owns state now.
             } catch {
-                await self?.failStart(error, generation: generation, target: target)
+                await self?.failStart(error, generation: generation)
             }
         }
     }
@@ -1037,7 +1059,7 @@ final class ViewerModel: ObservableObject {
         generation: UInt64,
         target: StreamTarget
     ) async {
-        guard isCurrent(generation: generation, target: target) else {
+        guard isCurrent(generation: generation) else {
             await session.stop()
             return
         }
@@ -1047,27 +1069,21 @@ final class ViewerModel: ObservableObject {
         startTask = nil
     }
 
-    private func failStart(_ error: Error,
-                           generation: UInt64,
-                           target: StreamTarget) async {
-        guard isCurrent(generation: generation, target: target) else { return }
+    private func failStart(_ error: Error, generation: UInt64) async {
+        guard isCurrent(generation: generation) else { return }
         startTask = nil
         handleStreamStartFailure(error)
     }
 
-    private func receiveFrame(_ sample: CMSampleBuffer,
-                              generation: UInt64,
-                              target: StreamTarget) {
+    private func receiveFrame(_ sample: CMSampleBuffer, generation: UInt64) {
         guard streamState.isLive,
               activeStream?.generation == generation,
-              isCurrent(generation: generation, target: target) else { return }
+              isCurrent(generation: generation) else { return }
         onFrame?(sample)
     }
 
-    private func handleStreamStopped(_ error: Error?,
-                                     generation: UInt64,
-                                     target: StreamTarget) {
-        guard isCurrent(generation: generation, target: target) else { return }
+    private func handleStreamStopped(_ error: Error?, generation: UInt64) {
+        guard isCurrent(generation: generation) else { return }
         let stoppedActiveStream = activeStream?.generation == generation
         guard stoppedActiveStream || streamState == .starting else { return }
         activeStream = nil
@@ -1079,8 +1095,19 @@ final class ViewerModel: ObservableObject {
         handleUnexpectedStreamStop(error)
     }
 
-    private func isCurrent(generation: UInt64, target: StreamTarget) -> Bool {
-        generation == streamGeneration && currentStreamTarget == target
+    /// The generation is the only authority over which capture attempt owns viewer state.
+    /// `restartStreamForCurrentSelection` is the sole producer of generations and it snapshots
+    /// the target at the same instant, so a matching generation already means "this callback
+    /// belongs to the stream we most recently asked for".
+    ///
+    /// Re-deriving the target here and demanding equality would be strictly worse: the target
+    /// is computed from the live `DisplayEntry`, which `applyDiscovery` replaces wholesale every
+    /// poll. Cosmetic fields — `name` (AppKit refreshes `NSScreen.screens` behind
+    /// `CGGetOnlineDisplayList`, so a stage is routinely renamed a poll or two after it appears)
+    /// and `isActive` — change without a restart, which would permanently wedge the comparison
+    /// and silently drop every frame while `streamState` still claimed `.live`.
+    private func isCurrent(generation: UInt64) -> Bool {
+        generation == streamGeneration
     }
 
     func handleUnexpectedStreamStop(_ error: Error?) {
