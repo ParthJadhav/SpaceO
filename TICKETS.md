@@ -714,7 +714,18 @@ Status definitions:
   change, signal and `atexit` handlers that restore the minimum critical state, an
   `applicationWillTerminate` hook, and a launch-time repair pass for deaths the previous run could
   not observe. Restoration is idempotent, so every path may run redundantly.
-- Verification: `HostInputGuard` unit coverage for breadcrumb lifecycle and abandoned-capture repair.
+- Verification: `HostInputGuardTests` — 16 tests over the `breadcrumb:` and `restore:` seams:
+  breadcrumb lifecycle; `beginCapture` arming both the on-disk marker and the in-process flag before
+  the host is touched; abandoned-capture repair, including restore-before-clear so a death mid-repair
+  is still repairable, one-shot behaviour, and presence alone as the signal so a torn write is never
+  read as "no capture was active"; the `applicationWillTerminate` path and its idempotence; repair of
+  a marker left by a process that ran no teardown at all; that the signal handler's pre-encoded
+  `unlink` path is exactly the file `mark` writes; and `sigaction` read-back proving every catchable
+  signal is armed. Mutation-checked — dropping `breadcrumb.mark()` from `beginCapture`, clearing
+  before restoring, and removing `SIGTERM` from the handled set each fail the suite.
+  Manual-only: the restore running *inside* a real signal or `atexit` context. It flips machine-wide
+  cursor, mouse-association, and hotkey state and cannot be asserted from a test process; it is
+  qualified by force-quitting a Viewer that is holding Control.
 
 ### SPAO-156 / SPAO-157 — Viewer first-run and dead ends
 

@@ -132,9 +132,12 @@ enum HostInputGuard {
 
     /// AppKit tears the process down without unwinding the view hierarchy, so the surface's own
     /// `endHostInputCapture` never runs on Quit, on logout, or on a `SIGTERM` from launchd.
-    static func restoreIfCaptureActive(breadcrumb: HostCaptureBreadcrumb = .shared) {
+    static func restoreIfCaptureActive(
+        breadcrumb: HostCaptureBreadcrumb = .shared,
+        restore: () -> Void = HostInputGuard.restoreHostInputState
+    ) {
         guard hostCaptureIsActive != 0 else { return }
-        restoreHostInputState()
+        restore()
         endCapture(breadcrumb: breadcrumb)
     }
 
