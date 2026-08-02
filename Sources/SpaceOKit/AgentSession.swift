@@ -362,7 +362,7 @@ public final class AgentSession {
     public nonisolated(nonsending) func launch(
         app appURL: URL,
         opening files: [URL] = [],
-        onMaterialized: (LaunchedApp) throws -> Void = { _ in }
+        onMaterialized: (LaunchedApp) async throws -> Void = { _ in }
     ) async throws -> LaunchedApp {
         let lifecycleLease = try beginOperation()
         defer { lifecycleLease.finish() }
@@ -388,7 +388,7 @@ public final class AgentSession {
                     AppLauncher.cleanupTemporaryProfileEventually(for: materialized)
                     throw error
                 }
-                try onMaterialized(materialized)
+                try await onMaterialized(materialized)
             })
 
         if let userRoute, userRoute.app.processIdentifier != app.pid {
