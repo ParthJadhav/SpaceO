@@ -305,27 +305,67 @@ public struct SurvivingProcessInfo: Codable, Sendable, Equatable {
     }
 }
 
+/// A window that was still on the agent display after teardown evacuated what it could.
+///
+/// Evacuation is best effort — an app-modal sheet stays attached to its parent and refuses to
+/// move — so teardown re-reads authoritative bounds and reports what stayed behind.
+public struct StrandedWindowInfo: Codable, Sendable, Equatable {
+    public var windowID: UInt32
+    public var pid: Int32
+    public var title: String
+    /// True when the window is still inside the destroyed session's own tile, which is the
+    /// case that would leak into the next session's capture of that tile.
+    public var inTile: Bool
+
+    public init(window: WindowRef, inTile: Bool) {
+        windowID = window.windowID
+        pid = window.pid
+        title = window.title
+        self.inTile = inTile
+    }
+}
+
 /// Structured outcome of a session or daemon teardown.
 ///
 /// An incomplete report is deliberately retryable. Pending sessions and displays remain owned
 /// by the daemon until a later cleanup attempt proves their resources are gone.
 public struct TeardownReport: Codable, Sendable, Equatable {
     public var survivingProcesses: [SurvivingProcessInfo]
+    public var strandedWindows: [StrandedWindowInfo]
     public var stillAttachedDisplayIDs: [UInt32]
     public var pendingSessionIDs: [String]
 
     public init(
         survivingProcesses: [SurvivingProcessInfo] = [],
+        strandedWindows: [StrandedWindowInfo] = [],
         stillAttachedDisplayIDs: [UInt32] = [],
         pendingSessionIDs: [String] = []
     ) {
         self.survivingProcesses = survivingProcesses
+        self.strandedWindows = strandedWindows
         self.stillAttachedDisplayIDs = Array(Set(stillAttachedDisplayIDs)).sorted()
         self.pendingSessionIDs = Array(Set(pendingSessionIDs)).sorted()
     }
 
+    /// A daemon older than `strandedWindows` still reports the other three fields exactly, so
+    /// only the new key tolerates absence. Defaulting a *missing* surviving-process list to
+    /// empty would turn a truncated payload into a false "teardown complete".
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            survivingProcesses: try container.decode(
+                [SurvivingProcessInfo].self, forKey: .survivingProcesses),
+            strandedWindows: try container.decodeIfPresent(
+                [StrandedWindowInfo].self, forKey: .strandedWindows) ?? [],
+            stillAttachedDisplayIDs: try container.decode(
+                [UInt32].self, forKey: .stillAttachedDisplayIDs),
+            pendingSessionIDs: try container.decode(
+                [String].self, forKey: .pendingSessionIDs))
+    }
+
     public var isComplete: Bool {
         survivingProcesses.isEmpty
+            && strandedWindows.isEmpty
             && stillAttachedDisplayIDs.isEmpty
             && pendingSessionIDs.isEmpty
     }
@@ -340,6 +380,10 @@ public struct TeardownReport: Codable, Sendable, Equatable {
             ($0.pid, $0.identity.startedAtMicroseconds)
                 < ($1.pid, $1.identity.startedAtMicroseconds)
         }
+        let windows = Dictionary(
+            (strandedWindows + other.strandedWindows).map { ($0.windowID, $0) },
+            uniquingKeysWith: { current, _ in current })
+        strandedWindows = windows.values.sorted { ($0.pid, $0.windowID) < ($1.pid, $1.windowID) }
         stillAttachedDisplayIDs = Array(
             Set(stillAttachedDisplayIDs).union(other.stillAttachedDisplayIDs)
         ).sorted()
@@ -358,6 +402,16 @@ public struct TeardownReport: Codable, Sendable, Equatable {
             lines.append("  Processes still alive: \(listed).")
             lines.append(
                 "  Close any save dialogs or quit those exact processes, then retry cleanup.")
+        }
+        if !strandedWindows.isEmpty {
+            let listed = strandedWindows.map {
+                "\($0.title.isEmpty ? "untitled" : $0.title) "
+                    + "(window \($0.windowID), pid \($0.pid))"
+            }.joined(separator: ", ")
+            lines.append("  Windows still on the agent display: \(listed).")
+            lines.append(
+                "  These refused to move out, so SpaceO kept the tile rather than recycling it "
+                    + "under them. Close their dialogs or move them yourself, then retry cleanup.")
         }
         if !stillAttachedDisplayIDs.isEmpty {
             lines.append(

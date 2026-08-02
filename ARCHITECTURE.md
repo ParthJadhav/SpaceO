@@ -461,5 +461,6 @@ scale 1 returns one pixel per point, so the two spaces are the same numbers by c
 | Non-positive or non-integral display dimensions | rejected before calling the private display API |
 | Any positive tile density | accepted; the caller owns the usability tradeoff |
 | Daemon receives SIGTERM/SIGINT | sessions destroyed and their apps quit before exit |
+| A window refuses to leave the tile during teardown | reported in `TeardownReport.strandedWindows`; the tile, display, and app claim are retained for a retry rather than recycled |
 
 Report actual operation failures; do not reject control based on display or application class.

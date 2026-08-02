@@ -27,6 +27,24 @@ struct SessionAppTeardownDriver: Sendable {
     )
 }
 
+/// Injectable window geometry. Teardown's evacuation verdict depends on what the WindowServer
+/// says *after* a move, so a window that refuses to leave the tile must be reproducible in tests
+/// without a real display.
+struct SessionWindowDriver: Sendable {
+    let windows: @Sendable (pid_t) -> [WindowRef]
+    let userDisplayBounds: @Sendable () -> CGRect?
+    /// Best effort by contract: the caller verifies the outcome through `liveBounds`.
+    let move: @Sendable (WindowRef, CGRect) -> Void
+    /// Authoritative live bounds, or nil once the WindowServer no longer knows the window.
+    let liveBounds: @Sendable (CGWindowID) -> CGRect?
+
+    static let live = SessionWindowDriver(
+        windows: { WindowPlacement.windows(of: $0) },
+        userDisplayBounds: { Stage.preferredActiveUserDisplayBounds() },
+        move: { window, frame in _ = try? WindowPlacement.move(window, to: frame) },
+        liveBounds: { try? WindowPlacement.liveBounds(of: $0) })
+}
+
 /// Runtime policy for controller lease expiry and abandoned-session reclamation.
 ///
 /// The clock and liveness probe are injectable so expiry, PID reuse, and grace periods can be
@@ -122,6 +140,7 @@ public final class AgentSession {
     /// Serializes the initial destroy with later cleanup retries.
     private let teardownLock = NSLock()
     private let teardownDriver: SessionAppTeardownDriver
+    private let windowDriver: SessionWindowDriver
     private let capturesInputRouteDuringTeardown: Bool
     private let controllerLock = NSLock()
     private var controllerRuntime: ControllerRuntime?
@@ -147,6 +166,7 @@ public final class AgentSession {
         self.id = id
         self.slot = slot
         self.teardownDriver = .live
+        self.windowDriver = .live
         self.capturesInputRouteDuringTeardown = true
         self.ownerAtCreation = NSWorkspace.shared.frontmostApplication
     }
@@ -156,11 +176,13 @@ public final class AgentSession {
         id: String,
         slot: DisplayPool.Slot,
         teardownDriver: SessionAppTeardownDriver,
+        windowDriver: SessionWindowDriver = .live,
         initialApps: [LaunchedApp]
     ) throws {
         self.id = id
         self.slot = slot
         self.teardownDriver = teardownDriver
+        self.windowDriver = windowDriver
         self.capturesInputRouteDuringTeardown = false
         self.ownerAtCreation = nil
         var claimed: [LaunchedApp] = []
@@ -658,7 +680,7 @@ public final class AgentSession {
     public func refreshWindows() -> [WindowRef] {
         var live: [WindowRef] = []
         for app in apps where app.identity.isAlive {
-            live.append(contentsOf: WindowPlacement.windows(of: app.pid))
+            live.append(contentsOf: windowDriver.windows(app.pid))
         }
         if Self.sortedWindows(live) != Self.sortedWindows(windows) {
             invalidateAXSnapshot()
@@ -805,9 +827,12 @@ public final class AgentSession {
     ///
     ///   1. evacuate windows belonging to apps we are not quitting back to the user's display,
     ///   2. quit the apps we started and wait for them to actually exit,
-    ///   3. the pool then frees the tile, and retires the display if we were the last tenant.
+    ///   3. re-read live bounds and report every window still on the agent display,
+    ///   4. the pool then frees the tile, and retires the display if we were the last tenant.
     ///
-    /// Skipping step 2 leaves a phantom monitor attached until the process dies.
+    /// Skipping step 2 leaves a phantom monitor attached until the process dies. Skipping step 3
+    /// is worse: the report claims success, the caller recycles the tile, and the next session's
+    /// capture of that tile contains the previous agent's windows.
     ///
     /// - Parameter force: after `timeout`, force-terminate apps *we started* that refuse to quit
     ///   (a modal save sheet is the usual reason). Apps we merely adopted are never force-killed.
@@ -852,14 +877,13 @@ public final class AgentSession {
         // 1. Windows that will outlive this session must not vanish with the display.
         refreshWindows()
         let survivors = windows.filter { !quitApps || !ourPIDs.contains($0.pid) }
-        if !survivors.isEmpty, let userDisplay = Stage.preferredActiveUserDisplayBounds() {
+        if !survivors.isEmpty, let userDisplay = windowDriver.userDisplayBounds() {
             for (index, window) in survivors.enumerated() {
                 let offset = CGFloat(index) * 28
                 let target = WindowPlacement.defaultFrame(in: userDisplay)
                     .offsetBy(dx: offset, dy: offset)
-                // Best effort: a window that refuses to move still gets migrated by the
-                // WindowServer when the display goes away, just less tidily.
-                _ = try? WindowPlacement.move(window, to: target)
+                // Best effort — verified against authoritative bounds below, never assumed.
+                windowDriver.move(window, target)
             }
         }
 
@@ -883,6 +907,20 @@ public final class AgentSession {
         }
         let survivingIdentities = Set(pending.map(\.identity))
 
+        // 3. Prove the tile is actually empty. Evacuation is best effort — an app-modal save
+        // sheet stays attached to its parent and refuses to move (§3.2) — and every path that
+        // trusted it instead recycled the tile under live windows, putting the previous agent's
+        // screen inside the next agent's capture (§3.0). Authoritative bounds, re-read now, are
+        // the only acceptable evidence.
+        let strandedWindows = survivors.compactMap { window -> StrandedWindowInfo? in
+            guard let bounds = windowDriver.liveBounds(window.windowID) else { return nil }
+            // Anywhere on the agent display counts: our own tile is the context leak, and a
+            // neighbouring tile is both someone else's leak and a display that cannot retire.
+            guard bounds.intersects(stage.bounds) else { return nil }
+            return StrandedWindowInfo(window: window, inTile: bounds.intersects(frame))
+        }
+        let strandedPIDs = Set(strandedWindows.map(\.pid))
+
         // Hand focus back only if teardown left an agent route behind. If the user switched to
         // another ordinary app while cleanup was waiting, that newer choice takes precedence.
         let currentFrontmostPID =
@@ -898,8 +936,15 @@ public final class AgentSession {
             _ = owner.activate()
         }
 
+        // An app whose window is still on the agent display stays in the ledger even under
+        // `--keep-apps`. Releasing it would let the very next destroy retry find an empty app
+        // list, report success, and free the tile the window never left.
+        let retained = apps.filter {
+            survivingIdentities.contains($0.identity) || strandedPIDs.contains($0.pid)
+        }
+        let retainedIdentities = Set(retained.map(\.identity))
         let completedApps = apps.filter {
-            !survivingIdentities.contains($0.identity)
+            !retainedIdentities.contains($0.identity)
         }
         for app in completedApps {
             AgentActivity.release(pid: app.pid)
@@ -917,12 +962,12 @@ public final class AgentSession {
             }
             electronEditorBridges.removeValue(forKey: app.pid)
         }
-        apps = pending
-        let survivingPIDs = Set(pending.map(\.pid))
-        windows.removeAll { !survivingPIDs.contains($0.pid) }
+        apps = retained
+        let retainedPIDs = Set(retained.map(\.pid))
+        windows.removeAll { !retainedPIDs.contains($0.pid) }
         invalidateAXSnapshot()
 
-        if pending.isEmpty {
+        if retained.isEmpty {
             // Belt and braces: a completed teardown must not leave an unrepresented stale claim.
             ProcessOwnership.releaseAll(owner: id)
             for watcher in watchers.values { watcher.stop() }
@@ -933,9 +978,12 @@ public final class AgentSession {
             windows.removeAll()
         }
 
+        // A stranded window always retains the app that owns it, so `retained` is the single
+        // source of truth for whether this session still holds its display and tile.
         return TeardownReport(
             survivingProcesses: pending.map(SurvivingProcessInfo.init),
-            stillAttachedDisplayIDs: pending.isEmpty ? [] : [stage.displayID],
-            pendingSessionIDs: pending.isEmpty ? [] : [id])
+            strandedWindows: strandedWindows,
+            stillAttachedDisplayIDs: retained.isEmpty ? [] : [stage.displayID],
+            pendingSessionIDs: retained.isEmpty ? [] : [id])
     }
 }

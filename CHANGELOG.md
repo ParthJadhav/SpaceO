@@ -16,6 +16,15 @@ All notable user-visible changes are recorded here. SpaceO follows
   distribution verification automation.
 - Installation, upgrade, rollback, and uninstall guidance for verified release artifacts.
 
+### Fixed
+
+- `spaceo session destroy --keep-apps` no longer reports a complete teardown when a window
+  refused to leave the agent display. Evacuation was unverified, so a window that stays put —
+  an app-modal save sheet is the documented case — still freed the tile; the next session was
+  then allocated that tile and captured the previous agent's windows. Teardown now re-reads
+  authoritative window bounds, reports the stranded windows, keeps the tile and the app claim,
+  and stays retryable.
+
 ### Security
 
 - Public release now requires independent qualification of the exact signed artifact and explicit
