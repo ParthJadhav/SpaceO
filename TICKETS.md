@@ -921,7 +921,9 @@ Status definitions:
   state the fixture encodes in its window title. Cursor editor scroll requires both an adapter
   visible-range delta and an independent screenshot difference. The latest full run passes all
   25 steps.
-  Run it with `node scripts/computer-use-check.mjs [--suite=native|web|electron|all]`.
+  Run it with `node scripts/computer-use-check.mjs [--suite=native|web|electron|all]`. A suite
+  whose host application is missing is reported `SKIP` and holds the run at exit `2`; add
+  `--require-full` (or `make computer-use-check-full`) to make that a hard failure at release time.
   It found SPAO-172 through SPAO-178, none of which any unit test or the protocol smoke saw.
 - Regression coverage exists for transport double-start, doctor/version JSON, bounded display
   configuration, Viewer targeting semantics, and release qualification records.

@@ -3,7 +3,8 @@ BINDIR ?= $(PREFIX)/bin
 SWIFT ?= swift
 NODE ?= node
 
-.PHONY: build release test test-live verify-release computer-use-check install uninstall viewer \
+.PHONY: build release test test-live verify-release computer-use-check \
+		computer-use-check-full install uninstall viewer \
 		release-check release-dry-run release-preflight release-package verify-distribution \
 		verify-release-candidate
 
@@ -24,6 +25,10 @@ verify-release: release test
 
 computer-use-check: release
 	$(NODE) scripts/computer-use-check.mjs .build/release/spaceo --suite=all
+
+# Release-time gate: a suite skipped for a missing host application fails the run.
+computer-use-check-full: release
+	$(NODE) scripts/computer-use-check.mjs .build/release/spaceo --suite=all --require-full
 
 viewer: release
 	bash scripts/make-viewer-app.sh ".build/release/SpaceOViewer" ".build/SpaceO Viewer.app"

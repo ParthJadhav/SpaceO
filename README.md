@@ -391,9 +391,13 @@ not be confirmed does not become a pass merely because the request returned succ
 make computer-use-check
 ```
 
-The harness exits `0` only when every exercised capability passes, `1` for a regression, and `2`
-when the run is otherwise healthy but a documented product blocker remains. The current
-native/web/Electron matrix passes all 25 exercised checks.
+The harness exits `0` only when every capability was exercised and passed, `1` for a regression,
+and `2` when the run is otherwise healthy but a documented product blocker remains — or when a
+suite was skipped. A suite whose host application is missing (Chrome for web, Cursor for Electron)
+is reported as `SKIP`, counts toward no pass total, and keeps the run out of exit `0`: an
+unexercised capability is unknown, not working. Pass `--require-full` for release-time runs to
+turn any skip into an exit `1`. The current native/web/Electron matrix passes all 25 exercised
+checks.
 
 Known boundaries:
 

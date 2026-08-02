@@ -5,7 +5,12 @@
 // observable effect, the step asserts the effect rather than the call's return value — a tool
 // that reports success and changes nothing is the failure this harness exists to catch.
 //
-// usage: node scripts/computer-use-check.mjs [path-to-spaceo] [--suite=native|web|electron|all]
+// usage: node scripts/computer-use-check.mjs [path-to-spaceo]
+//          [--suite=native|web|electron|all] [--require-full]
+//
+// A suite whose host application is missing is recorded as SKIP, never as a pass: an unexercised
+// capability is unknown, not working. Skips keep the run out of exit 0, and --require-full (for
+// release-time runs) turns them into hard failures.
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -15,6 +20,16 @@ const argv = process.argv.slice(2);
 const binary = argv.find((a) => !a.startsWith("--")) ?? `${process.env.HOME}/.local/bin/spaceo`;
 const suiteArg = (argv.find((a) => a.startsWith("--suite")) ?? "--suite=all").split("=")[1];
 const suites = suiteArg === "all" ? ["native", "web", "electron"] : [suiteArg];
+const requireFull = argv.includes("--require-full");
+
+// Overridable so the skip path itself is testable without uninstalling the host application.
+const chromeApp = process.env.SPACEO_CU_CHROME_APP ?? "/Applications/Google Chrome.app";
+const cursorApp = process.env.SPACEO_CU_CURSOR_APP ?? "/Applications/Cursor.app";
+
+if (requireFull && suiteArg !== "all") {
+  console.error(`--require-full demands the full matrix; --suite=${suiteArg} cannot satisfy it.`);
+  process.exit(1);
+}
 
 const server = spawn(binary, ["mcp"], { stdio: ["pipe", "pipe", "pipe"] });
 let diagnostics = "";
@@ -65,6 +80,13 @@ function blocked(label, detail = "") {
   results.push({ label, status: "blocked" });
   const line = String(detail).split("\n")[0].slice(0, 150);
   console.log(`BLOCK ${label}${line ? `\n        ${line}` : ""}`);
+}
+/// A capability that was never exercised. Deliberately not a pass: it contributes to no pass
+/// count and keeps the run out of exit 0.
+function skipped(label, detail = "") {
+  results.push({ label, status: "skipped" });
+  const line = String(detail).split("\n")[0].slice(0, 150);
+  console.log(`SKIP  ${label}${line ? `\n        ${line}` : ""}`);
 }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
@@ -199,8 +221,9 @@ async function nativeSuite() {
 }
 
 async function webSuite() {
-  if (!existsSync("/Applications/Google Chrome.app")) {
-    step("[web] skipped: Google Chrome is not installed", true);
+  if (!existsSync(chromeApp)) {
+    skipped("[web] whole suite: the DevTools bridge went unexercised",
+            `Google Chrome is not installed at ${chromeApp}`);
     return;
   }
   const s = await newSession("cu-web");
@@ -269,8 +292,9 @@ async function webSuite() {
 }
 
 async function electronSuite() {
-  if (!existsSync("/Applications/Cursor.app")) {
-    step("[electron] skipped: Cursor is not installed", true);
+  if (!existsSync(cursorApp)) {
+    skipped("[electron] whole suite: renderer control went unexercised",
+            `Cursor is not installed at ${cursorApp}`);
     return;
   }
   const s = await newSession("cu-electron");
@@ -343,13 +367,21 @@ try {
   try { unlinkSync(electronFixture); } catch {}
   const failed = results.filter((r) => r.status === "fail");
   const blockers = results.filter((r) => r.status === "blocked");
+  const skips = results.filter((r) => r.status === "skipped");
   const passed = results.filter((r) => r.status === "pass");
-  console.log(`\n${passed.length}/${results.length} steps passed`
-    + `${blockers.length ? `; ${blockers.length} blocked` : ""}`);
+  console.log(`\n${passed.length}/${results.length - skips.length} exercised steps passed`
+    + `${blockers.length ? `; ${blockers.length} blocked` : ""}`
+    + `${skips.length ? `; ${skips.length} SKIPPED — this run is NOT a conformance pass` : ""}`);
   if (failed.length) console.log(`failed:\n  ${failed.map((f) => f.label).join("\n  ")}`);
   if (blockers.length) {
     console.log(`blocked:\n  ${blockers.map((b) => b.label).join("\n  ")}`);
   }
+  if (skips.length) {
+    console.log(`skipped (capability unknown, not working):\n  `
+      + skips.map((s) => s.label).join("\n  "));
+    if (requireFull) console.log("--require-full was passed, so a skip is a failure.");
+  }
   if (diagnostics.trim()) console.log(`\nserver stderr:\n${diagnostics.trim()}`);
-  process.exit(failed.length ? 1 : blockers.length ? 2 : 0);
+  const hardFail = failed.length || (requireFull && skips.length);
+  process.exit(hardFail ? 1 : blockers.length || skips.length ? 2 : 0);
 }
