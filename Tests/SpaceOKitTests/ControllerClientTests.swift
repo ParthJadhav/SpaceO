@@ -38,7 +38,7 @@ final class ControllerClientTests: XCTestCase {
 
         let returnedLease = UUID()
         var response = Response(ok: true)
-        response.session = try sessionInfo(id: "research")
+        response.session = try Self.sessionInfo(id: "research")
         response.controllerLeaseID = returnedLease
         context.record(response, for: request)
 
@@ -101,6 +101,167 @@ final class ControllerClientTests: XCTestCase {
         XCTAssertEqual(request.cmd, "session.destroy")
         XCTAssertEqual(request.session, "detached-from-prior-daemon")
         XCTAssertNil(request.controllerLeaseID)
+    }
+
+    func testMCPFullDestroyIsScopedToThisConnectionsLeasedSessions() throws {
+        let context = MCPControllerContext(owner: DurableSessionOwner(
+            id: "mcp-a",
+            kind: .mcp,
+            label: "SpaceO MCP"
+        ))
+        let leases = try [("alpha", UUID()), ("beta", UUID())].map { id, lease -> UUID in
+            let create = try context.prepare(MCPServer.toolRequest(
+                name: "spaceo_session_create",
+                arguments: ["name": id],
+                defaultControllerOwner: context.owner
+            ))
+            var response = Response(ok: true)
+            response.session = try Self.sessionInfo(id: id)
+            response.controllerLeaseID = lease
+            context.record(response, for: create)
+            return lease
+        }
+
+        let plan = try context.plan(MCPServer.toolRequest(
+            name: "spaceo_session_destroy",
+            arguments: ["all": true]
+        ))
+
+        guard case .ownedSessionDestroy(let requests) = plan else {
+            return XCTFail("a full destroy must never be forwarded to the daemon as written")
+        }
+        XCTAssertEqual(requests.map(\.session), ["alpha", "beta"])
+        XCTAssertEqual(requests.map(\.controllerLeaseID), leases)
+        XCTAssertTrue(requests.allSatisfy { $0.cmd == "session.destroy" && $0.full == nil },
+                      "every request must be a named, lease-authorized destroy")
+    }
+
+    func testMCPFullDestroyWithoutOwnedSessionsSweepsNothing() throws {
+        let context = MCPControllerContext(owner: DurableSessionOwner(
+            id: "mcp-observer",
+            kind: .mcp,
+            label: "SpaceO MCP"
+        ))
+
+        let plan = try context.plan(MCPServer.toolRequest(
+            name: "spaceo_session_destroy",
+            arguments: ["all": true]
+        ))
+
+        guard case .ownedSessionDestroy(let requests) = plan else {
+            return XCTFail("a full destroy must never be forwarded to the daemon as written")
+        }
+        XCTAssertTrue(requests.isEmpty)
+
+        let outcome = MCPServer.destroyOwnedSessions(
+            requests, socketPath: temporarySocketPath(), controller: context)
+        XCTAssertFalse(outcome.failed)
+        XCTAssertTrue(outcome.text.contains("nothing to destroy"), outcome.text)
+    }
+
+    /// Two agents share one daemon by design. One finishing its task must not quit the other's
+    /// apps mid-work, which is exactly what forwarding `full` to the daemon used to do.
+    func testMCPFullDestroyLeavesAnotherConnectionsSessionAlive() throws {
+        let daemon = StubDaemon()
+        let socketPath = temporarySocketPath()
+        let server = Transport.Server(path: socketPath) { daemon.handle($0) }
+        try server.start()
+        defer { server.stop() }
+
+        func connection(_ id: String, session: String) throws -> MCPControllerContext {
+            let context = MCPControllerContext(owner: DurableSessionOwner(
+                id: id, kind: .mcp, label: "SpaceO MCP"))
+            let request = try context.prepare(MCPServer.toolRequest(
+                name: "spaceo_session_create",
+                arguments: ["name": session],
+                defaultControllerOwner: context.owner
+            ))
+            let response = try Transport.send(request, to: socketPath, timeout: 5)
+            XCTAssertTrue(response.ok, response.error ?? "")
+            context.record(response, for: request)
+            return context
+        }
+
+        let agentA = try connection("mcp-a", session: "a-session")
+        _ = try connection("mcp-b", session: "b-session")
+        XCTAssertEqual(daemon.liveSessionIDs(), ["a-session", "b-session"])
+
+        let outcome: (text: String, failed: Bool)
+        switch try agentA.plan(MCPServer.toolRequest(
+            name: "spaceo_session_destroy", arguments: ["all": true])) {
+        case .ownedSessionDestroy(let requests):
+            outcome = MCPServer.destroyOwnedSessions(
+                requests, socketPath: socketPath, controller: agentA, timeout: 5)
+        case .single(let request):
+            // Send it anyway, so removing the scoping fails this test on the damage it causes
+            // rather than on a request shape the assertions below would never reach.
+            let response = try Transport.send(request, to: socketPath, timeout: 5)
+            agentA.record(response, for: request)
+            outcome = (response.message ?? response.error ?? "", !response.ok)
+        }
+
+        XCTAssertFalse(outcome.failed, outcome.text)
+        XCTAssertEqual(daemon.liveSessionIDs(), ["b-session"],
+                       "agent B's session and its apps must survive agent A's cleanup")
+        XCTAssertFalse(daemon.sawUnauthorizedFullDestroy,
+                       "the daemon's unauthorized machine-wide sweep must never be reached")
+        XCTAssertTrue(outcome.text.contains("a-session"), outcome.text)
+        XCTAssertFalse(outcome.text.contains("b-session"), outcome.text)
+    }
+
+    /// The lease-checking part of the daemon's `session.destroy` contract, without a window server.
+    private final class StubDaemon: @unchecked Sendable {
+        private let lock = NSLock()
+        private var sessions: [String: UUID] = [:]
+        private var unauthorizedFullDestroy = false
+
+        func liveSessionIDs() -> [String] {
+            lock.withLock { sessions.keys.sorted() }
+        }
+
+        var sawUnauthorizedFullDestroy: Bool {
+            lock.withLock { unauthorizedFullDestroy }
+        }
+
+        func handle(_ request: Request) -> Response {
+            func rejection(_ error: String) -> Response {
+                var response = Response(ok: false)
+                response.error = error
+                return response
+            }
+            return lock.withLock {
+                switch request.cmd {
+                case "session.create":
+                    guard let id = request.session, let lease = request.controllerLeaseID,
+                          let info = try? ControllerClientTests.sessionInfo(id: id) else {
+                        return rejection("create needs a session and lease")
+                    }
+                    sessions[id] = lease
+                    var response = Response(ok: true)
+                    response.session = info
+                    response.controllerLeaseID = lease
+                    response.message = "created '\(id)'"
+                    return response
+                case "session.destroy":
+                    if request.session == nil, request.full == true {
+                        // `destroyAllNow`: no `resolveForMutation`, no ownership check.
+                        unauthorizedFullDestroy = true
+                        sessions.removeAll()
+                        return .success("destroyed all sessions")
+                    }
+                    guard let id = request.session, let lease = sessions[id] else {
+                        return rejection("unknown session")
+                    }
+                    guard request.controllerLeaseID == lease else {
+                        return rejection("controller lease does not match session '\(id)'")
+                    }
+                    sessions.removeValue(forKey: id)
+                    return .success("destroyed '\(id)'")
+                default:
+                    return rejection("unexpected command '\(request.cmd)'")
+                }
+            }
+        }
     }
 
     func testMCPPublishesHeartbeatAndRejectsInvalidControllerCreateArguments() throws {
@@ -336,7 +497,7 @@ final class ControllerClientTests: XCTestCase {
         ), result.standardOutput)
     }
 
-    private func sessionInfo(id: String) throws -> SessionInfo {
+    private static func sessionInfo(id: String) throws -> SessionInfo {
         let json = """
         {
           "id": "\(id)",

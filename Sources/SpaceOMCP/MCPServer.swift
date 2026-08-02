@@ -18,6 +18,16 @@ enum MCPControllerError: Error, CustomStringConvertible, LocalizedError {
     var errorDescription: String? { description }
 }
 
+/// What one tool call turns into on the wire. Almost everything is a single daemon round trip;
+/// a full destroy is deliberately not, because the daemon's `full` path is an unauthorized
+/// machine-wide sweep and an agent must only ever tear down its own sessions.
+enum MCPRequestPlan {
+    case single(Request)
+    /// One authorized named destroy per session this connection holds a lease for. Empty when
+    /// the connection owns nothing, which is a no-op rather than a sweep.
+    case ownedSessionDestroy([Request])
+}
+
 /// Controller credentials belong to one MCP stdio connection. They are never placed in tool
 /// output or recovered from observer-facing session metadata.
 final class MCPControllerContext {
@@ -40,6 +50,25 @@ final class MCPControllerContext {
         )
     }
 
+    /// Translate one tool call into the daemon traffic it is allowed to produce.
+    ///
+    /// `session.destroy --all` is the one command that must not be forwarded as written: on the
+    /// daemon it reaches `destroyAllNow` without passing controller authorization, so it would
+    /// quit every app of every other agent sharing the pool. Agents share one daemon by design,
+    /// so this connection expands it into named destroys for the sessions it actually leases.
+    func plan(_ supplied: Request) throws -> MCPRequestPlan {
+        guard supplied.cmd == "session.destroy", supplied.full == true else {
+            return .single(try prepare(supplied))
+        }
+        return .ownedSessionDestroy(leases.keys.sorted().map { sessionID in
+            var request = supplied
+            request.full = nil
+            request.session = sessionID
+            request.controllerLeaseID = leases[sessionID]
+            return request
+        })
+    }
+
     func prepare(_ supplied: Request) throws -> Request {
         var request = supplied
         switch request.cmd {
@@ -59,6 +88,7 @@ final class MCPControllerContext {
             // A lease is required for a live explicitly owned session, but named detached
             // recovery records intentionally have no renewable credential. Forward a stored
             // connection-local lease when one exists and let the daemon distinguish those cases.
+            // `plan` has already expanded any `full` destroy into named requests by this point.
             if request.full != true {
                 request.controllerLeaseID = lease(for: request.session)
             }
@@ -458,9 +488,15 @@ public enum MCPServer {
                 End a session: quit the apps it started and free its tile. Always do this when \
                 you are finished, or the apps keep running invisibly. If cleanup reports \
                 surviving processes or displays, resolve the named resource and call this tool \
-                again; SpaceO retains ownership specifically so the retry is safe.
+                again; SpaceO retains ownership specifically so the retry is safe. This only ever \
+                ends sessions this MCP connection created; other agents share the same pool and \
+                keep their sessions and apps.
                 """, ["session": sessionArg,
-                      "all": ["type": "boolean", "description": "Destroy every session."]]),
+                      "all": [
+                          "type": "boolean",
+                          "description": "Destroy every session this MCP connection created. "
+                              + "Sessions belonging to other agents are left running.",
+                      ]]),
 
             tool("spaceo_open_app", """
                 Launch an app into the session's off-screen tile without activating it, so the \
@@ -617,17 +653,31 @@ public enum MCPServer {
         controller: MCPControllerContext,
         id: Any?
     ) {
-        let request: Request
+        let plan: MCPRequestPlan
         do {
             let translated = try toolRequest(
                 name: name,
                 arguments: arguments,
                 defaultControllerOwner: controller.owner
             )
-            request = try controller.prepare(translated)
+            plan = try controller.plan(translated)
         } catch {
             respond(result: toolError((error as? MCPInputError)?.description
                                       ?? error.localizedDescription), id: id)
+            return
+        }
+
+        let request: Request
+        switch plan {
+        case .single(let single):
+            request = single
+        case .ownedSessionDestroy(let requests):
+            let outcome = destroyOwnedSessions(
+                requests, socketPath: socketPath, controller: controller)
+            respond(result: outcome.failed
+                    ? toolError(outcome.text)
+                    : ["content": [["type": "text", "text": outcome.text]]],
+                    id: id)
             return
         }
 
@@ -674,6 +724,52 @@ public enum MCPServer {
         }
 
         respond(result: ["content": [["type": "text", "text": render(response)]]], id: id)
+    }
+
+    /// Tear down exactly the sessions this connection leases, one authorized request each.
+    ///
+    /// Every session is attempted even after one fails, so a single stuck teardown cannot strand
+    /// the rest, and the report names what survived. Internal so the multi-connection isolation
+    /// test can drive this without stdio.
+    static func destroyOwnedSessions(
+        _ requests: [Request],
+        socketPath: String,
+        controller: MCPControllerContext,
+        timeout: TimeInterval = 120
+    ) -> (text: String, failed: Bool) {
+        guard !requests.isEmpty else {
+            return ("no sessions belong to this MCP connection; nothing to destroy. "
+                    + "Sessions created by other agents are never destroyed by this tool.",
+                    false)
+        }
+
+        var destroyed: [String] = []
+        var failures: [String] = []
+        for request in requests {
+            let sessionID = request.session ?? "?"
+            do {
+                let response = try Transport.send(request, to: socketPath, timeout: timeout)
+                guard response.ok else {
+                    failures.append("\(sessionID): \(renderFailure(response))")
+                    continue
+                }
+                controller.record(response, for: request)
+                destroyed.append(sessionID)
+            } catch {
+                failures.append("\(sessionID): \(error)")
+            }
+        }
+
+        var lines: [String] = []
+        if !destroyed.isEmpty {
+            lines.append("destroyed \(destroyed.count) session(s) owned by this MCP "
+                         + "connection: \(destroyed.joined(separator: ", "))")
+        }
+        if !failures.isEmpty {
+            lines.append("failed to destroy \(failures.count) session(s):")
+            lines.append(contentsOf: failures.map { "  \($0)" })
+        }
+        return (lines.joined(separator: "\n"), !failures.isEmpty)
     }
 
     /// Read only the temporary PNG this MCP process asked the daemon to create.
