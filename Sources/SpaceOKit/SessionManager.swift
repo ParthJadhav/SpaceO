@@ -56,6 +56,7 @@ public actor SessionManager {
     private let idleDisplayGraceNanoseconds: UInt64 = 15_000_000_000
     private var displayLifecycleFailures: Set<CGDirectDisplayID> = []
     private var janitor: Task<Void, Never>?
+    private let janitorEnabled: Bool
     private let janitorIntervalNanoseconds: UInt64 = 3_000_000_000
 
     public init(pool: DisplayPool = DisplayPool(), runJanitor: Bool = true) {
@@ -68,6 +69,7 @@ public actor SessionManager {
         self.successfulMutationHook = {}
         self.livePersistence = nil
         self.recoveryCoordinator = nil
+        self.janitorEnabled = runJanitor
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
@@ -99,6 +101,7 @@ public actor SessionManager {
         self.livePersistence = persistence
         self.recoveryCoordinator = recoveryCoordinator
         self.counter = max(0, (ledger?.nextAutomaticSessionNumber ?? 1) - 1)
+        self.janitorEnabled = runJanitor
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
@@ -122,6 +125,7 @@ public actor SessionManager {
         self.successfulMutationHook = successfulMutationHook
         self.livePersistence = nil
         self.recoveryCoordinator = nil
+        self.janitorEnabled = runJanitor
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
@@ -151,6 +155,7 @@ public actor SessionManager {
         self.livePersistence = livePersistence
         self.recoveryCoordinator = recoveryCoordinator
         self.counter = max(0, (ledger?.nextAutomaticSessionNumber ?? 1) - 1)
+        self.janitorEnabled = runJanitor
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
     }
@@ -165,6 +170,10 @@ public actor SessionManager {
     /// cancellable, so daemon shutdown leaves no task behind.
     private func startJanitor() {
         janitor?.cancel()
+        janitor = nil
+        // A committed shutdown is the one state that must never grow a new background task,
+        // including from the start hop `init` scheduled before the stop arrived.
+        guard !isShuttingDown else { return }
         let interval = janitorIntervalNanoseconds
         janitor = Task { [weak self] in
             while !Task.isCancelled {
@@ -830,11 +839,21 @@ public actor SessionManager {
                         Self.detachedRecoveryGuidance(records: detached))
                 }
             }
+            // Quiesce first so nothing races the teardown, but treat that quiescence as
+            // provisional: a stop that fails leaves apps and displays alive, so the daemon
+            // that still owns them has to keep serving `ping`, `session.list`, and cleanup
+            // retries instead of refusing every command until someone `kill -9`s it.
             isShuttingDown = true
             stopJanitor()
-            let report = try destroyAllNow(quitApps: true)
-            guard report.isComplete else {
-                throw SpaceOError.teardownIncomplete(report)
+            do {
+                let report = try destroyAllNow(quitApps: true)
+                guard report.isComplete else {
+                    throw SpaceOError.teardownIncomplete(report)
+                }
+            } catch {
+                isShuttingDown = false
+                if janitorEnabled { startJanitor() }
+                throw error
             }
             return .success("stopping SpaceO daemon")
 

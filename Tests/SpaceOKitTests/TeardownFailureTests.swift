@@ -214,7 +214,7 @@ final class TeardownFailureTests: XCTestCase {
 
     func testDaemonStopFailureDoesNotReportSuccessAndCanBeRetried() async {
         let display = makePool(displayID: 90_003, failures: 1)
-        let manager = SessionManager(pool: display.pool, runJanitor: false)
+        let manager = SessionManager(pool: display.pool, runJanitor: true)
         let created = await manager.handle(Request(cmd: "session.create"))
         XCTAssertTrue(created.ok)
 
@@ -223,13 +223,52 @@ final class TeardownFailureTests: XCTestCase {
         XCTAssertEqual(first.teardown?.stillAttachedDisplayIDs, [90_003])
         XCTAssertTrue(first.error?.contains("Retry") == true)
 
-        let rejected = await manager.handle(Request(cmd: "ping"))
-        XCTAssertFalse(rejected.ok, "shutdown remains terminal for new work")
+        let stillServing = await manager.handle(Request(cmd: "ping"))
+        XCTAssertTrue(
+            stillServing.ok,
+            "a failed stop still owns apps and displays, so it must keep serving")
+        let janitorAfterFailure = await manager.janitorIsRunning
+        XCTAssertTrue(janitorAfterFailure, "containment must resume after a failed stop")
 
         let retry = await manager.handle(Request(cmd: "daemon.stop"))
         XCTAssertTrue(retry.ok, retry.error ?? "")
         let displaysAfterRetry = await manager.displayCount
         XCTAssertEqual(displaysAfterRetry, 0)
+
+        let rejected = await manager.handle(Request(cmd: "ping"))
+        XCTAssertFalse(rejected.ok, "a completed shutdown remains terminal for new work")
+        let janitorAfterSuccess = await manager.janitorIsRunning
+        XCTAssertFalse(janitorAfterSuccess)
+    }
+
+    /// The failure `ARCHITECTURE.md` §3.1 records on the macOS 27 preview host: a display that
+    /// never leaves the online list. Every `daemon.stop` retry fails identically, so if the first
+    /// failure latched shutdown the daemon would refuse all work forever and `kill -9` would be
+    /// the only exit — abandoning exactly the apps and displays teardown kept ownership of.
+    func testPermanentlyStuckDisplayDoesNotBrickTheDaemon() async {
+        let display = makePool(displayID: 90_005, failures: Int.max)
+        let manager = SessionManager(pool: display.pool, runJanitor: true)
+        let seeded = await manager.handle(Request(cmd: "session.create"))
+        XCTAssertTrue(seeded.ok, seeded.error ?? "")
+
+        for attempt in 1...3 {
+            let stop = await manager.handle(Request(cmd: "daemon.stop"))
+            XCTAssertFalse(stop.ok, "attempt \(attempt)")
+            XCTAssertFalse(
+                stop.teardown?.stillAttachedDisplayIDs.isEmpty ?? true,
+                "attempt \(attempt) must report the stuck display")
+
+            let ping = await manager.handle(Request(cmd: "ping"))
+            XCTAssertTrue(ping.ok, "attempt \(attempt): \(ping.error ?? "")")
+            let listed = await manager.handle(Request(cmd: "session.list"))
+            XCTAssertTrue(listed.ok, "attempt \(attempt): \(listed.error ?? "")")
+            let janitorRunning = await manager.janitorIsRunning
+            XCTAssertTrue(janitorRunning, "attempt \(attempt)")
+        }
+
+        let created = await manager.handle(Request(cmd: "session.create"))
+        XCTAssertTrue(created.ok, created.error ?? "")
+        await manager.stopJanitor()
     }
 
     func testWireAndMCPPreserveStructuredIncompleteTeardown() throws {

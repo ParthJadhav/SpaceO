@@ -16,6 +16,14 @@ All notable user-visible changes are recorded here. SpaceO follows
   distribution verification automation.
 - Installation, upgrade, rollback, and uninstall guidance for verified release artifacts.
 
+### Fixed
+
+- A `spaceo daemon stop` that reports incomplete teardown no longer disables the daemon. It
+  previously latched shutdown before running teardown, so every later command — including `ping`,
+  `session list`, and cleanup retries — was refused and the janitor stayed stopped, leaving
+  `kill -9` (which abandons the surviving apps and displays) as the only exit. Shutdown state and
+  the janitor are now restored on every failed stop; a successful stop remains terminal.
+
 ### Security
 
 - Public release now requires independent qualification of the exact signed artifact and explicit
