@@ -65,7 +65,7 @@ jobs:
       SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
       SPACEO_RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.release_tag }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # A manual input is data, not a generic Git checkout expression. Fully qualifying the
           # tag prevents a same-named branch from supplying code to this credentialed job.
@@ -249,7 +249,7 @@ jobs:
       SPACEO_RELEASE_WORKFLOW_RUN_ID: ${{ github.run_id }}
       SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ needs.candidate.outputs.tag }}
           fetch-depth: 0
