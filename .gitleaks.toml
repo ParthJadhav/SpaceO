@@ -1,0 +1,10 @@
+title = "SpaceO secret scanning"
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic password used to verify browser observations redact secret fields"
+paths = ['''^Tests/SpaceOKitTests/ChromiumFieldStateTests\.swift$''']
+regexTarget = "secret"
+regexes = ['''^hunter2-SECRET$''']
+condition = "AND"

@@ -1,0 +1,24 @@
+.build/
+.release/
+.artifacts/
+.DS_Store
+*.dSYM/
+
+# Locally compiled research probes; keep their Objective-C sources.
+/probes/probe[0-9]
+/probes/vdisplay
+
+# Demo and test captures.
+/spaceo-*.png
+
+# Private local work and marketing experiments.
+/.claude/
+/marketing/
+# Signing material and generated distributions.
+.env
+.env.*
+*.p12
+*.p8
+*.pem
+*.keychain-db
+*.dmg

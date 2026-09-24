@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan history for credentials
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            -o gitleaks.tar.gz
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz' | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/gitleaks" git . --log-opts=--all --redact
+
+  release:
+    # Disposable GitHub-hosted Apple Silicon runner; PR code never runs on a personal Mac.
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      SPACEO_REQUIRED_XCODE_VERSION: "26.3"
+      SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Require pinned release toolchain
+        run: bash scripts/check-swift-toolchain.sh
+      - name: Release configuration dry run
+        run: |
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          bash -n scripts/build-brand-assets.sh scripts/check-swift-toolchain.sh \
+            scripts/make-viewer-app.sh scripts/release.sh scripts/test.sh
+          bash -n scripts/check-live-test-run.sh
+          node --check scripts/mcp-smoke.mjs
+          bash scripts/release.sh check
+          bash scripts/release.sh dry-run
+      # The live suite cannot run on a hosted runner, but the gate that stops a skipped live run
+      # from reading as a pass is pure shell, so it is verified on every push. Without this, the
+      # gate could silently stop catching anything and nothing would notice.
+      - name: Release security tests
+        run: bash Tests/ReleaseSecurityTests.sh
+      - name: Live test skip-gate tests
+        run: bash Tests/LiveTestGateTests.sh
+      - name: Safe tests (no WindowServer, apps, or input)
+        run: bash scripts/test.sh safe
+      - name: Release build
+        run: swift build -c release
+      - name: Viewer bundle smoke test
+        env:
+          # CI is verifying bundle structure, resources, and strict code-sign validity. Public
+          # distribution still requires the explicit Developer ID identity in release.yml.
+          SPACEO_CODESIGN_IDENTITY: "-"
+        run: |
+          make viewer
+          test -f ".build/SpaceO Viewer.app/Contents/Resources/SpaceO.icns"
+          test -f ".build/SpaceO Viewer.app/Contents/Resources/spaceo-logo.png"
+          test "$(plutil -extract CFBundleIconFile raw -o - ".build/SpaceO Viewer.app/Contents/Info.plist")" = "SpaceO.icns"
+          codesign --verify --deep --strict --verbose=2 ".build/SpaceO Viewer.app"
+      - name: MCP black-box smoke test
+        run: node scripts/mcp-smoke.mjs .build/release/spaceo
