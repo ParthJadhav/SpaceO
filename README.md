@@ -2,11 +2,11 @@
   <img src="Assets/Brand/spaceo-logo.png" width="96" alt="SpaceO logo">
 </p>
 
-<h1 align="center">Your agent’s screen. Your Mac stays yours.</h1>
+<h1 align="center">Give AI agents their own screen on your Mac.</h1>
 
 <p align="center">
-  SpaceO gives AI agents headless macOS displays for working in real apps.<br>
-  Keep using your screen while agents work on theirs.
+  Let agents work in real apps while you keep using your computer.<br>
+  SpaceO runs agent apps on separate, headless displays.
 </p>
 
 <p align="center">

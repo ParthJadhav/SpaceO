@@ -127,7 +127,8 @@ repository proves that a Developer ID-signed, notarized, stapled, qualified publ
 artifact has completed these gates. The source version is `1.1.1`; the historical source-only
 `v1.1.0` prerelease and empty `v1.1.1` draft were removed during open-source history cleanup.
 Neither contained binary assets or qualified a distribution. Release workflows
-remain disabled during private open-source preparation. The additional `SPACEO_RELEASE_ENABLED`
+remain disabled pending candidate preparation and qualification. Source publication and
+repository protection are complete. The additional `SPACEO_RELEASE_ENABLED`
 switch defaults off, and the workflow verifies reviewer and tag restrictions before accessing
 the signing environment. Follow
 [docs/INSTALL.md](INSTALL.md) for artifact verification and maintainer commands, and do not

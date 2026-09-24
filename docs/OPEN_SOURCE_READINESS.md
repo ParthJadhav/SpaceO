@@ -1,6 +1,6 @@
 # Open-source readiness
 
-Preparation date: 2026-09-24. **Repository remains private. Public release remains NO-GO.**
+Preparation date: 2026-09-24. **Source is public. Binary release qualification is pending.**
 This record describes preparation, not authorization to publish or evidence that all defects
 have been eliminated.
 
@@ -55,17 +55,16 @@ cleanup, disabled wiki/projects, read-only workflow tokens, disabled workflow PR
 SHA-pinning enforcement, and GitHub-owned actions only. The personal runner was unregistered;
 no self-hosted runner remains registered with this repository.
 
-GitHub rejected both ruleset creation (HTTP 403) and required environment reviewers (HTTP 422)
-because this private repository's billing plan does not support them. Fork-contributor approval
-settings are also unavailable while private. Configuration is prepared in:
+After the owner explicitly authorized open sourcing, the repository was made public on
+2026-09-24. GitHub now confirms both rulesets are active. Required owner reviewers and no admin
+bypass are configured on `release`, `release-publication`, and `live-qualification`. Release
+environments allow only `v*` tags; live qualification allows only `main`. All external contributors
+require approval before fork workflows run. Private vulnerability reporting, secret scanning,
+and secret push protection are enabled. The earlier private-plan restrictions are resolved.
 
-- `.github/main-ruleset.json`: PRs, required CI and secret checks, resolved discussions,
-  code-owner review, linear history, no force pushes, no deletion.
-- `.github/release-tags-ruleset.json`: immutable `v*` tags.
-
-Do not describe these rules as active. Use a plan supporting these private controls to apply them while private, or apply
-and verify them immediately after separately authorized public visibility. The source and
-runtime signing checks intentionally fail closed while the release environments are unprotected.
+Hosted CI was restarted after the visibility change and is running on GitHub-hosted runners;
+its secret scan has passed. The workflow result, not this status note, is the build evidence.
+Binary publication still requires qualification and explicit owner GO under the release policy.
 
 ## Validation
 
@@ -95,15 +94,14 @@ never push them. Closed pull requests and GitHub cached commit views can still r
 history. That history was scanned, but is not purged by the rewrite. Existing historical audit
 records retain old commit identifiers as evidence identifiers, not current checkout instructions.
 
-## Before public visibility or a downloadable release
+## Remaining binary-release work
 
 1. Review the single-commit source and remaining closed pull-request refs/cached historical
    views and old Actions logs. Keep recovery history private and local. If historical content
    must be purged from GitHub caches, coordinate with GitHub support before visibility changes.
    No credential leak was found that would justify rotation from this scan.
-2. Enable and verify branch/tag rules, fork-contributor approvals, private vulnerability reporting,
-   and GitHub secret scanning/push protection where available. Check billing/hosted CI on the
-   final source; local success does not prove the hosted image can build it.
+2. Retain successful hosted CI on the final source. Visibility and repository protection
+   configuration are complete; local success does not prove the hosted image can build it.
 3. Protect `release` and `release-publication` with the release owner as required reviewer,
    disable admin bypass, and restrict deployments to **tags** matching `v*`. Keep signing
    credentials solely in `release`. Approving your own deployment is intentional for a solo
@@ -116,5 +114,5 @@ records retain old commit identifiers as evidence identifiers, not current check
 6. Record release-owner GO and approve `release-publication`. The workflow then uploads the DMG,
    checksum, signature, and provenance record to the GitHub Releases page. A tag alone is not GO.
 
-Public visibility and binary release approval are separate decisions. Neither is authorized by
-this preparation record.
+Public visibility was explicitly authorized and completed. Binary release approval remains a
+separate decision after candidate verification; this preparation record is not a release GO.
