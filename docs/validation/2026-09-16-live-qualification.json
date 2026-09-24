@@ -1,0 +1,203 @@
+{
+  "date": "2026-09-16",
+  "tester": "Codex implementer in owner-authorized existing login",
+  "status": "NO-GO; diagnostic evidence only",
+  "baseCommit": "e44f73297723f374c467b5fe3c6de5cad471403c",
+  "sourceChanges": [
+    "IntegrationTests launch isolation checkpoint",
+    "computer-use matrix 23-tool expectation and per-suite failure continuation"
+  ],
+  "host": {
+    "macOS": "Version 27.0 (Build 26A428)",
+    "architecture": "arm64",
+    "xcode": "26.6 (17F113)",
+    "swift": "6.3.3",
+    "canDrive": true,
+    "canCapture": true
+  },
+  "binary": {
+    "canCapture": true,
+    "canDrive": true,
+    "executableBuildUUID": "1d42dda6-8810-389c-9b33-2a7cf550aaf2",
+    "executableSHA256": "30e4820adc0385cab77a1a0197cb3c9fe3596f59c944efdb962dfdacb2aa107c",
+    "version": "1.0.0"
+  },
+  "liveSuite": {
+    "tests": 16,
+    "failedTests": 1,
+    "skipped": 0,
+    "failure": "Chromium launch changed menu-bar owner, WindowServer front process and active Space"
+  },
+  "focusedReproduction": {
+    "failed": true,
+    "breachBeforeDevToolsInput": true,
+    "commandLineDocumentTrial": "failed; production edit reverted"
+  },
+  "matrix": {
+    "summary": {
+      "passed": 15,
+      "failed": 4,
+      "blocked": 0,
+      "skipped": 0,
+      "parityPercent": 78.9,
+      "toolCalls": 17,
+      "mcpDiagnosticBytes": 2732
+    },
+    "steps": [
+      {
+        "label": "initialize",
+        "status": "pass",
+        "atMs": 6
+      },
+      {
+        "label": "tools/list advertises 23 tools",
+        "status": "pass",
+        "atMs": 7
+      },
+      {
+        "label": "[native] launch TextEdit onto the agent display",
+        "status": "pass",
+        "atMs": 1352
+      },
+      {
+        "label": "[native] the document window is identifiable",
+        "status": "pass",
+        "atMs": 3376
+      },
+      {
+        "label": "[native] every published window is contained on the agent display",
+        "status": "pass",
+        "atMs": 3377
+      },
+      {
+        "label": "[native] screenshot states pixels are click coordinates",
+        "status": "pass",
+        "atMs": 3511
+      },
+      {
+        "label": "[native] scroll moves the document",
+        "status": "pass",
+        "atMs": 4519
+      },
+      {
+        "label": "[native] a clipped screen read discloses that it was clipped",
+        "status": "pass",
+        "atMs": 4544
+      },
+      {
+        "label": "[native] unconfirmable click says so",
+        "status": "pass",
+        "atMs": 4656
+      },
+      {
+        "label": "[native] type reaches the document",
+        "status": "pass",
+        "atMs": 4815
+      },
+      {
+        "label": "[cu-native] destroy",
+        "status": "pass",
+        "atMs": 4950
+      },
+      {
+        "label": "[web] launch Chrome with a DevTools port",
+        "status": "fail",
+        "atMs": 6045
+      },
+      {
+        "label": "[cu-web] destroy",
+        "status": "pass",
+        "atMs": 6196
+      },
+      {
+        "label": "[web] suite error",
+        "status": "fail",
+        "atMs": 6196
+      },
+      {
+        "label": "[electron] launch Cursor onto the agent display",
+        "status": "fail",
+        "atMs": 7515
+      },
+      {
+        "label": "[cu-electron] destroy",
+        "status": "pass",
+        "atMs": 7519
+      },
+      {
+        "label": "[electron] suite error",
+        "status": "fail",
+        "atMs": 7519
+      },
+      {
+        "label": "[cleanup] the idle pool retires every virtual display",
+        "status": "pass",
+        "atMs": 23607
+      },
+      {
+        "label": "[cleanup] the user's display topology is unchanged",
+        "status": "pass",
+        "atMs": 23676
+      }
+    ],
+    "limitations": [
+      "Web actions after failed launch were not exercised",
+      "Electron actions after failed launch were not exercised"
+    ],
+    "electronFailure": "Cursor.app exited before process identification"
+  },
+  "cleanup": {
+    "before": {
+      "mirroredUser": [],
+      "orphanedSpaceO": [],
+      "spaceO": [],
+      "userActive": [
+        1
+      ],
+      "userOnline": [
+        1
+      ]
+    },
+    "after": {
+      "mirroredUser": [],
+      "orphanedSpaceO": [],
+      "spaceO": [],
+      "userActive": [
+        1
+      ],
+      "userOnline": [
+        1
+      ]
+    },
+    "topologyUnchanged": true,
+    "testDaemonShutdownConfirmed": true,
+    "unrelatedDefaultDaemonAppeared": true,
+    "unrelatedDefaultDaemonLeftUntouched": true,
+    "applicationProcessObservation": {
+      "originalMainApplicationProcesses": 107,
+      "stillAlive": 105,
+      "missingCount": 2
+    }
+  },
+  "qualificationLimits": [
+    "Live suite and full matrix failed",
+    "Graphical login was not demonstrably undisturbed: another default-socket daemon appeared",
+    "Installed toolchain differs from pinned release toolchain",
+    "Development binary is not an immutable notarized distribution candidate",
+    "Human confirmation of normal pointer/keyboard behavior is not recorded"
+  ],
+  "localLogSHA256": {
+    "live.log": "8dbc3ea193ecde936a7a36916715e133f9a37267d2866d3849d2f931f3811557",
+    "chromium-diagnostic.log": "0c37e7db839c5c0b948a6cdedc474033ef7f9a544fa239d0f389d08d540c6bbf",
+    "chromium-argument-trial.log": "a6677f71b2101fd64763811167bbce99b4c9624bae6a94e025ad850369e83965",
+    "matrix.log": "ba0ca532d2ce73933e9cac3e38ed1aae542dfbbf83e69ac3e76110410c2a9460",
+    "matrix-repeat.log": "df4656aacb5964fe1c4c523ef0da0c47c4d2805fd30efcc399af637570d5beed",
+    "safe-verification-final.log": "31570226f1b5994ebaee9b0add2c4a3de0f495959ced0ed77ba61fbc0327f8d3"
+  },
+  "deterministicVerification": {
+    "makeVerifyRelease": "passed",
+    "swiftTests": 611,
+    "javaScriptTests": 11,
+    "mcpTools": 23
+  }
+}

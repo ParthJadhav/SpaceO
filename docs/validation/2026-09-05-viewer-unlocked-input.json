@@ -1,0 +1,45 @@
+{
+  "viewerTypedMarkerInAX": true,
+  "secondTypedMarkerInAX": true,
+  "agentTypedMarkerInAX": true,
+  "selectAllReplacedDocument": false,
+  "saveShortcut": "unconfirmed",
+  "firstMarkerPersisted": true,
+  "agentInputRefusedDuringControl": true,
+  "agentInputAcceptedAfterRelease": true,
+  "agentTypeEventVisible": true,
+  "date": "2026-09-05",
+  "tester": "Codex implementer, owner-authorized existing login after external lock controller unlock",
+  "binarySHA256": "0fb5914382a3f90e0ec7fe9aa5e38985525a11dcd497a5369aef49a5833aa4ae",
+  "binaryBuildUUID": "4340980a-53f2-3fa2-910d-a7fed56cac90",
+  "macOS": "Version 27.0 (Build 26A5406e)",
+  "before": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      2
+    ],
+    "userOnline": [
+      2
+    ]
+  },
+  "after": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      2
+    ],
+    "userOnline": [
+      2
+    ]
+  },
+  "cleanupOK": true,
+  "daemonStopped": true,
+  "limits": [
+    "An initial action batch was rejected because the user changed the Viewer; it was excluded and the state was refreshed.",
+    "Native typing is verified by synthetic marker presence in Accessibility data. Command-A did not produce replacement; Command-S persistence is unconfirmed.",
+    "No raw Accessibility content, screenshots, or controller leases are retained in this public record."
+  ]
+}

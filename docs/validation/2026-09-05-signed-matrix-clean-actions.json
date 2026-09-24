@@ -1,0 +1,497 @@
+{
+  "schemaVersion": 1,
+  "runID": "cu-9c76c61c-fa06-4774-b1dd-5864c615c7b7",
+  "startedAt": "2026-09-05T13:05:50.812Z",
+  "finishedAt": "2026-09-05T13:06:50.839Z",
+  "durationMs": 60025,
+  "host": {
+    "platform": "darwin",
+    "release": "27.0.0",
+    "arch": "arm64"
+  },
+  "binary": {
+    "path": "/path/to/SpaceO/.build/signed/spaceo",
+    "bytes": 3623792,
+    "sha256": "458339f0cc69d3e66f1d71cb43a9842c0160390b080bd996412363b49dc2530d"
+  },
+  "configuration": {
+    "suite": "all",
+    "requireFull": true,
+    "verifyDisplayCleanup": true
+  },
+  "summary": {
+    "passed": 36,
+    "failed": 0,
+    "blocked": 0,
+    "skipped": 0,
+    "parityPercent": 100,
+    "toolCalls": 47,
+    "mcpDiagnosticBytes": 5219
+  },
+  "steps": [
+    {
+      "label": "initialize",
+      "status": "pass",
+      "atMs": 8
+    },
+    {
+      "label": "tools/list advertises 19 tools",
+      "status": "pass",
+      "atMs": 9
+    },
+    {
+      "label": "[native] launch TextEdit onto the agent display",
+      "status": "pass",
+      "atMs": 5121
+    },
+    {
+      "label": "[native] the document window is identifiable",
+      "status": "pass",
+      "atMs": 7147
+    },
+    {
+      "label": "[native] every published window is contained on the agent display",
+      "status": "pass",
+      "atMs": 7147
+    },
+    {
+      "label": "[native] screenshot states pixels are click coordinates",
+      "status": "pass",
+      "atMs": 7465
+    },
+    {
+      "label": "[native] scroll moves the document",
+      "status": "pass",
+      "atMs": 8949
+    },
+    {
+      "label": "[native] a clipped screen read discloses that it was clipped",
+      "status": "pass",
+      "atMs": 9000
+    },
+    {
+      "label": "[native] unconfirmable click says so",
+      "status": "pass",
+      "atMs": 9125
+    },
+    {
+      "label": "[native] type reaches the document",
+      "status": "pass",
+      "atMs": 9259
+    },
+    {
+      "label": "[cu-native] destroy",
+      "status": "pass",
+      "atMs": 9470
+    },
+    {
+      "label": "[web] launch Chrome with a DevTools port",
+      "status": "pass",
+      "atMs": 12949
+    },
+    {
+      "label": "[web] page elements appear under wN references",
+      "status": "pass",
+      "atMs": 18010
+    },
+    {
+      "label": "[web] every published window is contained on the agent display",
+      "status": "pass",
+      "atMs": 18011
+    },
+    {
+      "label": "[web] click a page element by reference fires a DOM click",
+      "status": "pass",
+      "atMs": 18610
+    },
+    {
+      "label": "[web] scroll actually moves the page",
+      "status": "pass",
+      "atMs": 19629
+    },
+    {
+      "label": "[web] page elements carry usable coordinates",
+      "status": "pass",
+      "atMs": 20462
+    },
+    {
+      "label": "[web] hover at viewport coordinates fires mouseenter",
+      "status": "pass",
+      "atMs": 21349
+    },
+    {
+      "label": "[web] drag selects text in the page",
+      "status": "pass",
+      "atMs": 22172
+    },
+    {
+      "label": "[web] type reaches a page input field",
+      "status": "pass",
+      "atMs": 22700
+    },
+    {
+      "label": "[web] slider exposes usable viewport coordinates",
+      "status": "pass",
+      "atMs": 22700
+    },
+    {
+      "label": "[web] dragging a slider changes its value",
+      "status": "pass",
+      "atMs": 23514
+    },
+    {
+      "label": "[web] multi-select exposes usable viewport coordinates",
+      "status": "pass",
+      "atMs": 23515
+    },
+    {
+      "label": "[web] modifier-click extends a multi-select selection",
+      "status": "pass",
+      "atMs": 24091
+    },
+    {
+      "label": "[web] context target exposes usable viewport coordinates",
+      "status": "pass",
+      "atMs": 24091
+    },
+    {
+      "label": "[web] right-click opens the page context action",
+      "status": "pass",
+      "atMs": 24669
+    },
+    {
+      "label": "[cu-web] destroy",
+      "status": "pass",
+      "atMs": 24993
+    },
+    {
+      "label": "[electron] launch Cursor onto the agent display",
+      "status": "pass",
+      "atMs": 29727
+    },
+    {
+      "label": "[electron] every published window is contained on the agent display",
+      "status": "pass",
+      "atMs": 31742
+    },
+    {
+      "label": "[electron] accessibility tree is readable",
+      "status": "pass",
+      "atMs": 31784
+    },
+    {
+      "label": "[electron] window renders on the virtual display",
+      "status": "pass",
+      "atMs": 32024
+    },
+    {
+      "label": "[electron] pointer scroll changes renderer pixels",
+      "status": "pass",
+      "atMs": 33429
+    },
+    {
+      "label": "[electron] isolation checks are intact",
+      "status": "pass",
+      "atMs": 33435
+    },
+    {
+      "label": "[cu-electron] destroy",
+      "status": "pass",
+      "atMs": 33893
+    },
+    {
+      "label": "[cleanup] the idle pool retires every virtual display",
+      "status": "pass",
+      "atMs": 59938
+    },
+    {
+      "label": "[cleanup] the user's display topology is unchanged",
+      "status": "pass",
+      "atMs": 60019
+    }
+  ],
+  "tools": [
+    {
+      "tool": "spaceo_session_create",
+      "ms": 1044,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_open_app",
+      "ms": 3989,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 23,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_screenshot",
+      "ms": 318,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_screenshot",
+      "ms": 289,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_scroll",
+      "ms": 226,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_screenshot",
+      "ms": 269,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_read_screen",
+      "ms": 51,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_click",
+      "ms": 125,
+      "ok": true,
+      "unconfirmed": true
+    },
+    {
+      "tool": "spaceo_type",
+      "ms": 133,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_session_destroy",
+      "ms": 211,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_session_create",
+      "ms": 2,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_open_app",
+      "ms": 3476,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_read_screen",
+      "ms": 60,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 2,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_click",
+      "ms": 57,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 40,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_scroll",
+      "ms": 115,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 2,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_scroll",
+      "ms": 105,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_read_screen",
+      "ms": 27,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_move",
+      "ms": 381,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 5,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_drag",
+      "ms": 220,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 2,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_click",
+      "ms": 16,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_type",
+      "ms": 10,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 2,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_drag",
+      "ms": 261,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 53,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_click",
+      "ms": 12,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_click",
+      "ms": 62,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 1,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_click",
+      "ms": 72,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 4,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_session_destroy",
+      "ms": 324,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_session_create",
+      "ms": 1,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_open_app",
+      "ms": 4733,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 1,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_list_windows",
+      "ms": 12,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_read_screen",
+      "ms": 42,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_screenshot",
+      "ms": 240,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_screenshot",
+      "ms": 151,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_scroll",
+      "ms": 41,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_screenshot",
+      "ms": 311,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_verify_isolation",
+      "ms": 6,
+      "ok": true,
+      "unconfirmed": false
+    },
+    {
+      "tool": "spaceo_session_destroy",
+      "ms": 458,
+      "ok": true,
+      "unconfirmed": false
+    }
+  ]
+}
