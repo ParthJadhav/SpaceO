@@ -1,0 +1,67 @@
+{
+  "date": "2026-09-05",
+  "tester": "Codex implementer, owner-authorized existing login",
+  "existingPermissions": true,
+  "elapsedSeconds": 1.341,
+  "setupOK": true,
+  "steps": [
+    {
+      "name": "runtime apis",
+      "status": "pass"
+    },
+    {
+      "name": "accessibility",
+      "status": "pass"
+    },
+    {
+      "name": "screen recording",
+      "status": "pass"
+    },
+    {
+      "name": "daemon",
+      "status": "pass"
+    },
+    {
+      "name": "daemon build",
+      "status": "pass"
+    },
+    {
+      "name": "daemon input",
+      "status": "pass"
+    },
+    {
+      "name": "daemon capture",
+      "status": "pass"
+    },
+    {
+      "name": "self-test",
+      "status": "pass"
+    }
+  ],
+  "sessionsAfterSetup": 0,
+  "daemonStopOK": true,
+  "before": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      1
+    ],
+    "userOnline": [
+      1
+    ]
+  },
+  "after": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      1
+    ],
+    "userOnline": [
+      1
+    ]
+  },
+  "binarySHA256": "d82742db4cca00a001d9e7a55b6d506de749641ee9679a3c8a4ea6dde28beb1d",
+  "macOS": "Version 27.0 (Build 26A5406e)"
+}

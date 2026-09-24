@@ -1,0 +1,140 @@
+{
+  "binarySHA256": "9462d04a8e379157c3ddd6533c422de7c2aea543c51d6bcd06e033672fcc2623",
+  "status": "passed",
+  "before": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      1
+    ],
+    "userOnline": [
+      1
+    ]
+  },
+  "tiles": [
+    {
+      "id": "marker-a",
+      "displayID": 213,
+      "tileIndex": 0,
+      "x": 1512,
+      "y": 0,
+      "width": 1280,
+      "height": 1440
+    },
+    {
+      "id": "neighbor-b",
+      "displayID": 213,
+      "tileIndex": 1,
+      "x": 2792,
+      "y": 0,
+      "width": 1280,
+      "height": 1440
+    }
+  ],
+  "launchOK": true,
+  "fixturePID": 77498,
+  "positive": {
+    "foreignWindowIDs": [
+      34184
+    ],
+    "markerPixels": 743606,
+    "overlapArea": 761600
+  },
+  "protectedMarkerPixels": 0,
+  "daemonStopOK": true,
+  "after": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      1
+    ],
+    "userOnline": [
+      1
+    ]
+  },
+  "topologyUnchanged": true,
+  "zeroRemainingDisplays": true,
+  "oversizedWindow": {
+    "windowID": 34184,
+    "pid": 77498,
+    "x": 1552,
+    "y": 40,
+    "width": 1800,
+    "height": 1360,
+    "onStage": false
+  },
+  "sessionHealth": {
+    "ok": false,
+    "findings": [
+      "window 34184 (SpaceO oversized marker fixture) drifted into a neighbouring session's tile"
+    ],
+    "isolation": {
+      "failures": [],
+      "checks": [
+        {
+          "coverage": "observed",
+          "required": true,
+          "dimension": "menu_bar_owner",
+          "status": "passed",
+          "evidence": "NSWorkspace frontmost application",
+          "failures": []
+        },
+        {
+          "status": "passed",
+          "evidence": "inferred from AppKit; no safe WindowServer front-process getter is available",
+          "coverage": "inferred",
+          "dimension": "window_server_front_process",
+          "required": true,
+          "failures": []
+        },
+        {
+          "status": "passed",
+          "evidence": "inferred from the public Accessibility focused application; this does not identify a specific key window or text field",
+          "coverage": "inferred",
+          "dimension": "key_input_route",
+          "required": true,
+          "failures": []
+        },
+        {
+          "status": "passed",
+          "evidence": "inferred from the public Accessibility focused application; this does not identify a specific key window or text field",
+          "coverage": "inferred",
+          "dimension": "text_input_route",
+          "required": true,
+          "failures": []
+        },
+        {
+          "status": "passed",
+          "evidence": "CoreGraphics event location",
+          "coverage": "observed",
+          "dimension": "cursor_location",
+          "required": true,
+          "failures": []
+        },
+        {
+          "status": "passed",
+          "evidence": "WindowServer active Space",
+          "coverage": "observed",
+          "dimension": "active_space",
+          "required": true,
+          "failures": []
+        }
+      ],
+      "verdict": "intact"
+    }
+  },
+  "fixtureExited": true,
+  "date": "2026-09-05",
+  "macOS": "27.0 (26A5406e)",
+  "architecture": "arm64",
+  "baseCommit": "e95b5a02be0dd5f016b1d684fe16161a74e66140",
+  "workingTreeChanges": true,
+  "tester": "Codex implementer, owner-authorized existing login",
+  "pixelPredicate": "RGBA8: red > 120, green < 40, blue > 120; calibrated against the visible positive control",
+  "imageSHA256": {
+    "positive.png": "e1a54122cd64794047ec4afbfd9f6f76878adf8e38c3359cfc0ba2000f43ca30",
+    "protected.png": "81e4bde3279931a7cac53be0f21b3d43c2bb2c09acfd800525b102a56930a302"
+  }
+}

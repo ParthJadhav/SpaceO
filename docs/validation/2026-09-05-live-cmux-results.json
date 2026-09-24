@@ -1,0 +1,89 @@
+{
+  "date": "2026-09-05",
+  "launcher": "cmux",
+  "command": "SPACEO_LIVE_LOG=<retained local log> make test-live-full",
+  "exitCode": 0,
+  "tests": [
+    {
+      "name": "testAdoptedBrowserIsRefusedRatherThanSilentlyIgnored",
+      "outcome": "passed",
+      "seconds": 11.06
+    },
+    {
+      "name": "testAmbiguousSessionIsRejectedRatherThanGuessed",
+      "outcome": "passed",
+      "seconds": 2.378
+    },
+    {
+      "name": "testAuditReportsAnAppThatExited",
+      "outcome": "passed",
+      "seconds": 23.377
+    },
+    {
+      "name": "testCaptureOfAgentScreenIsActuallyRendered",
+      "outcome": "passed",
+      "seconds": 14.392
+    },
+    {
+      "name": "testChromiumWebContentIsDrivenThroughDevTools",
+      "outcome": "passed",
+      "seconds": 18.362
+    },
+    {
+      "name": "testDisplayIsRetiredOnlyWhenTheLastTenantLeaves",
+      "outcome": "passed",
+      "seconds": 10.718
+    },
+    {
+      "name": "testFullWorkflowHasNoCoveredIsolationBreach",
+      "outcome": "passed",
+      "seconds": 14.253
+    },
+    {
+      "name": "testJanitorReapsAnExitedAppAndReleasesItsClaim",
+      "outcome": "passed",
+      "seconds": 13.645
+    },
+    {
+      "name": "testMultipleStagesCoexist",
+      "outcome": "passed",
+      "seconds": 13.79
+    },
+    {
+      "name": "testReleaseAllClearsOwnedSpaceBookkeeping",
+      "outcome": "passed",
+      "seconds": 10.919
+    },
+    {
+      "name": "testSessionsShareOneDisplayUntilItIsFull",
+      "outcome": "passed",
+      "seconds": 11.659
+    },
+    {
+      "name": "testStageCreateAndDestroyLeavesNoDisplay",
+      "outcome": "passed",
+      "seconds": 11.477
+    },
+    {
+      "name": "testStageOwnsItsOwnSpace",
+      "outcome": "passed",
+      "seconds": 10.905
+    },
+    {
+      "name": "testTwoSessionsOnOneDisplayStayInTheirOwnTiles",
+      "outcome": "passed",
+      "seconds": 16.829
+    },
+    {
+      "name": "testUnknownSessionIsRejected",
+      "outcome": "passed",
+      "seconds": 0.04
+    },
+    {
+      "name": "testWindowWatcherContainsLateWindowsWithoutBeingSweptByHand",
+      "outcome": "passed",
+      "seconds": 14.587
+    }
+  ],
+  "note": "Development-host evidence; Xcode 26.6/Swift 6.3.3 differs from release pin."
+}

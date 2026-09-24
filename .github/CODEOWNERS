@@ -1,0 +1,5 @@
+# Changes to release automation and private APIs require maintainer review.
+* @ParthJadhav
+/.github/ @ParthJadhav
+/scripts/release.sh @ParthJadhav
+/Sources/SpaceOPrivate/ @ParthJadhav

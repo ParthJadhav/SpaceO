@@ -1,0 +1,151 @@
+{
+  "binarySHA256": "05213e99fdbdc3014e1c88b5564a8a82dd0b7852dd96cecbc6047bc5909089bb",
+  "status": "passed",
+  "before": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      1
+    ],
+    "userOnline": [
+      1
+    ]
+  },
+  "tiles": [
+    {
+      "id": "marker-a",
+      "displayID": 216,
+      "tileIndex": 0,
+      "x": 1512,
+      "y": 0,
+      "width": 1280,
+      "height": 1440
+    },
+    {
+      "id": "neighbor-b",
+      "displayID": 216,
+      "tileIndex": 1,
+      "x": 2792,
+      "y": 0,
+      "width": 1280,
+      "height": 1440
+    }
+  ],
+  "launchOK": true,
+  "fixturePID": 32271,
+  "positive": {
+    "foreignWindowIDs": [
+      34426
+    ],
+    "markerPixels": 743606,
+    "overlapArea": 761600
+  },
+  "sessionHealth": {
+    "ok": false,
+    "findings": [
+      "window 34426 (SpaceO oversized marker fixture) drifted into a neighbouring session's tile"
+    ],
+    "isolation": {
+      "failures": [],
+      "checks": [
+        {
+          "coverage": "observed",
+          "status": "passed",
+          "failures": [],
+          "dimension": "menu_bar_owner",
+          "evidence": "NSWorkspace frontmost application",
+          "required": true
+        },
+        {
+          "evidence": "inferred from AppKit; no safe WindowServer front-process getter is available",
+          "failures": [],
+          "status": "passed",
+          "dimension": "window_server_front_process",
+          "required": true,
+          "coverage": "inferred"
+        },
+        {
+          "evidence": "inferred from the public Accessibility focused application; this does not identify a specific key window or text field",
+          "failures": [],
+          "status": "passed",
+          "dimension": "key_input_route",
+          "required": true,
+          "coverage": "inferred"
+        },
+        {
+          "evidence": "inferred from the public Accessibility focused application; this does not identify a specific key window or text field",
+          "failures": [],
+          "status": "passed",
+          "dimension": "text_input_route",
+          "required": true,
+          "coverage": "inferred"
+        },
+        {
+          "evidence": "CoreGraphics event location",
+          "failures": [],
+          "status": "passed",
+          "dimension": "cursor_location",
+          "required": true,
+          "coverage": "observed"
+        },
+        {
+          "evidence": "WindowServer active Space",
+          "failures": [],
+          "status": "passed",
+          "dimension": "active_space",
+          "required": true,
+          "coverage": "observed"
+        }
+      ],
+      "verdict": "intact"
+    }
+  },
+  "fixtureWindows": [
+    {
+      "pid": 32271,
+      "windowID": 34426,
+      "width": 1800,
+      "onStage": false,
+      "x": 1552,
+      "y": 40,
+      "height": 1360,
+      "spaces": [
+        1320
+      ]
+    }
+  ],
+  "protectedMarkerPixels": 0,
+  "daemonStopOK": true,
+  "after": {
+    "mirroredUser": [],
+    "orphanedSpaceO": [],
+    "spaceO": [],
+    "userActive": [
+      1
+    ],
+    "userOnline": [
+      1
+    ]
+  },
+  "fixtureExited": true,
+  "topologyUnchanged": true,
+  "zeroRemainingDisplays": true,
+  "date": "2026-09-05",
+  "tester": "Codex implementer, owner-authorized existing login",
+  "macOS": "27.0 (26A5406e)",
+  "architecture": "arm64",
+  "workingTreeChanges": true,
+  "baseCommit": "e95b5a02be0dd5f016b1d684fe16161a74e66140",
+  "fixtureSourceSHA256": {
+    "RunCaptureIsolation.py": "bca38ddde92c82e2acc4873e2275ad1d0d4d066b6afaff42fe1a36a2da84616e",
+    "CaptureMarker.swift": "87f4476ba87112ea97bd646c84a53cee38d3bb76bbe8a0dd966e0b990ef55166",
+    "README.md": "2b555987c654d07c27fd3865abd63ff75f621d0380d72794bc62040ff1e47ccf",
+    "OversizedWindow.swift": "0bfb1627311213ed175901e576471d275a542a8d82591a75824dc76ba1dbd5ac"
+  },
+  "imageSHA256": {
+    "positive.png": "991a5f31d1148f8904d056dc54bc7f6947852188c41fde0df407eda8ccf91862",
+    "protected.png": "62df7611a2c414fb7a303d007e283a19a7441f119a13a26dbac2b5927bd5eb67"
+  },
+  "sourceFollowup": "After this run, the Python runner received formatting/import cleanup and a refusal for disabled assertions (-O/PYTHONOPTIMIZE); the retained hashes identify the executed source."
+}
