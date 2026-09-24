@@ -4,5 +4,4 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # Keep the initial public history to one commit. Set to 5 after the visibility review.
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 5

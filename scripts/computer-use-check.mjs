@@ -579,7 +579,8 @@ try {
 
   const listed = await rpc("tools/list");
   const names = (listed.result?.tools ?? []).map((t) => t.name);
-  step(`tools/list advertises ${names.length} tools`, names.length === 23);
+  step(`tools/list advertises ${names.length} tools`,
+       names.length === 34 && new Set(names).size === names.length);
 
   let displayBaseline;
   if (verifyDisplayCleanup) {

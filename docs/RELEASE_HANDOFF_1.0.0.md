@@ -1,5 +1,12 @@
 # SpaceO 1.0.0 release handoff
 
+> Historical record, superseded for current repository settings by
+> [open-source readiness](OPEN_SOURCE_READINESS.md) and [release policy](RELEASE_POLICY.md).
+> As of September 24, 2026, required reviewers, no admin bypass, and tag-only restrictions
+> are configured on both release environments. The missing-protection statements below
+> describe earlier observations, not current blockers. Version 1.1.1 remains unreleased;
+> live safety failures and signed-candidate qualification still block publication.
+
 Prepared: 2026-08-29  
 Last updated: 2026-09-16
 Repository: `ParthJadhav/SpaceO`  

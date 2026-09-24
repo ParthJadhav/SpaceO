@@ -26,6 +26,9 @@ Status definitions:
   isolation check. A focused checkpoint reproduced the breach before DevTools input. Passing
   documents on the command line did not fix it; that production trial was reverted. The public
   MCP launch correctly refused with `isolation_breached`, but the disturbance had already occurred.
+- September 24: the full source suite reproduced the same launch-time breach (15/16 passed,
+  zero skipped); physical display topology and zero test-display cleanup were verified. See
+  [the refreshed evidence](docs/validation/2026-09-24-source-live.md).
 - Acceptance: identify and prevent launch-time activation without blind foreground restoration,
   then repeat the full no-skip live suite and matrix on an undisturbed authorized login and the
   exact release candidate. Retain pre/post focus, Space, display, and cleanup evidence.

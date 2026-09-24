@@ -78,7 +78,7 @@ createInterface({input: process.stdin}).on('line', line => {
   const request = JSON.parse(line);
   let response = {jsonrpc:'2.0', id:request.id};
   if (request.method === 'initialize') response.result = {protocolVersion:'2025-11-25'};
-  else if (request.method === 'tools/list') response.result = {tools:Array.from({length:23}, () => ({name:'test'}))};
+  else if (request.method === 'tools/list') response.result = {tools:Array.from({length:34}, (_, index) => ({name:'test' + index}))};
   else response.error = {code:-32602, message:'PRIVATE-DIAGNOSTIC'};
   console.log(JSON.stringify(response));
 });

@@ -8,6 +8,12 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Open-source preparation
 
+- Finish retired daemon socket cleanup before allowing the same server to restart, avoiding
+  an intermittent stale-socket removal failure.
+
+- Fix CLI argument normalization for the hosted Swift 6.2 compiler and align the live
+  conformance harness with the current 34-tool MCP catalogue.
+
 - GitHub-hosted Apple Silicon CI and signing, pinned actions, history secret scanning, and
   explicit release-environment checks. Releases remain disabled pending owner approval.
 - Developer ID signing and publisher verification for the DMG container as well as its payload.
