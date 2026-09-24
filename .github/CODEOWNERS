@@ -1,4 +1,4 @@
-# Changes to release automation and private APIs require maintainer review.
+# Route review requests to the maintainer; approval is optional under the solo-maintainer policy.
 * @ParthJadhav
 /.github/ @ParthJadhav
 /scripts/release.sh @ParthJadhav

@@ -116,3 +116,12 @@ records retain old commit identifiers as evidence identifiers, not current check
 
 Public visibility was explicitly authorized and completed. Binary release approval remains a
 separate decision after candidate verification; this preparation record is not a release GO.
+
+## Solo-maintainer branch policy
+
+On 2026-09-24 the owner approved optional code-owner approval because GitHub does not allow
+a pull-request author to approve their own changes. Main still requires a pull request,
+passing GitHub Actions `release` and `secrets` checks against an up-to-date branch, resolved
+review threads, and linear history. Force pushes and deletion remain prohibited, with no
+bypass actors. CODEOWNERS continues routing review requests. Required release-environment
+approval is unchanged; this branch policy does not authorize binary publication.
