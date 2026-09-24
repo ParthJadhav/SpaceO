@@ -59,10 +59,15 @@ run_live() {
     if (( ! skip_build )); then
         "$SWIFT" build --build-tests ${swift_arguments+"${swift_arguments[@]}"}
     fi
-    local bin_path xctest
+    local bin_path xctest test_bundle
     bin_path="$("$SWIFT" build --show-bin-path ${swift_arguments+"${swift_arguments[@]}"})"
     xctest="$(xcrun --find xctest)"
-    [[ -d "$bin_path/SpaceOKitTests.xctest" ]] || fail "built XCTest bundle is missing"
+    # SwiftPM versions differ in whether the product uses the package or test-target name.
+    # Resolve the sole generated bundle and fail closed on ambiguity or a stale second product.
+    local -a test_bundles=("$bin_path"/*.xctest)
+    (( ${#test_bundles[@]} == 1 )) && [[ -d "${test_bundles[0]}" ]] \
+        || fail "expected exactly one built XCTest bundle"
+    test_bundle="${test_bundles[0]}"
     local log="${SPACEO_LIVE_LOG:-}"
     if [[ -z "$log" ]]; then
         # BSD mktemp(1) requires the X placeholder to end the template. A suffix after the Xs
@@ -74,7 +79,7 @@ run_live() {
 
     local status=0
     NSUnbufferedIO=YES python3 "$SCRIPT_DIR/live-test-supervisor.py" --log "$log" -- \
-        "$xctest" -XCTest "$test_filter" "$bin_path/SpaceOKitTests.xctest" || status=$?
+        "$xctest" -XCTest "$test_filter" "$test_bundle" || status=$?
     if (( require_full )); then
         bash "$SCRIPT_DIR/check-live-test-run.sh" "$log" || return 1
     fi

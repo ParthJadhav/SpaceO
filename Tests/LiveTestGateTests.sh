@@ -174,7 +174,7 @@ cat >"$STUB_BIN/xcrun" <<'STUB'
 [[ "$*" == "--find xctest" ]] || exit 99
 echo "$(dirname "$0")/xctest"
 STUB
-mkdir -p "$STUB_BIN/SpaceOKitTests.xctest"
+mkdir -p "$STUB_BIN/SpaceOPackageTests.xctest"
 chmod +x "$STUB_BIN/swift" "$STUB_BIN/xctest" "$STUB_BIN/xcrun"
 
 # The fixture compiler never touches macOS. Exercise the wrapper on the Ubuntu CI preflight
@@ -209,6 +209,14 @@ grep -Fq -- "-XCTest SpaceOKitTests.IntegrationTests" "$TEST_ROOT/invocation.txt
     || fail "test.sh did not filter to the live suite: $(cat "$TEST_ROOT/invocation.txt")"
 
 # Parallel workers must be rejected before they reach the compiler.
+grep -Fq -- "/SpaceOPackageTests.xctest" "$TEST_ROOT/invocation.txt" \
+    || fail "test.sh did not discover the package test product"
+mkdir -p "$STUB_BIN/StaleTests.xctest"
+if run_test_sh_live "$TEST_ROOT/real-count.log" 0 >/dev/null 2>&1; then
+    fail "ambiguous test products must be rejected"
+fi
+rmdir "$STUB_BIN/StaleTests.xctest"
+mv "$STUB_BIN/SpaceOPackageTests.xctest" "$STUB_BIN/SpaceOKitTests.xctest"
 run_test_sh_live "$TEST_ROOT/real-count.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null
 grep -Fq -- "-XCTest SpaceOKitTests.IntegrationTests/testStageCreateAndDestroyLeavesNoDisplay" "$TEST_ROOT/invocation.txt" \
     || fail "test.sh did not select exactly the requested case"

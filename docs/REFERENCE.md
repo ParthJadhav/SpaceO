@@ -374,11 +374,11 @@ host-compatibility coverage. It explicitly excludes `IntegrationTests`: ordinary
 tests never create virtual displays, launch GUI applications, or send input.
 
 The live target creates real virtual displays and drives installed applications. It runs in the
-current graphical login and needs Accessibility and Screen Recording granted, with no opt-in
-environment variables:
+current graphical login, requires a reserved desktop plus Accessibility and Screen Recording
+grants, and requires explicit opt-in. Read [display safety](DISPLAY_SAFETY.md) first:
 
 ```bash
-make test-live
+SPACEO_LIVE_TESTS=1 make test-live
 ```
 
 The live suite asserts the isolation invariant end-to-end, proves DOM clicks actually reach a
@@ -406,7 +406,7 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 
 | | |
 |---|---|
-| headless displays | enabled without a pool count cap or display-graph preflight refusal |
+| headless displays | runtime capability checks, display-graph admission, bounded lifecycle waits, and persistent creation/failure limits; see [display safety](DISPLAY_SAFETY.md) |
 | tiling | any positive density, non-overlapping tiles, per-tile capture, spill when full |
 | Spaces | each display owns its own; windows placed there stay composited |
 | launch | isolated new application instances placed into the session tile |
@@ -432,7 +432,7 @@ The native + Chromium preview matrix also verifies that managed Electron launche
 refused before startup. It does not claim Electron renderer qualification.
 
 ```bash
-make computer-use-check
+SPACEO_LIVE_TESTS=1 make computer-use-check
 ```
 
 The harness exits `0` only when every capability was exercised and passed, `1` for a regression,

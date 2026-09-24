@@ -60,6 +60,24 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         wait(for: [completed], timeout: 1)
     }
 
+    func testBlockedFailurePersistenceCannotExtendTheCallerDeadlineIndefinitely() {
+        let unblockWorker = DispatchSemaphore(value: 0)
+        let unblockFailure = DispatchSemaphore(value: 0)
+        let saved = expectation(description: "failure persistence released")
+        let coordinator = DisplayLifecycleCoordinator { _ in
+            unblockFailure.wait()
+            saved.fulfill()
+        }
+        let start = ContinuousClock.now
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.1) { _ in unblockWorker.wait() })
+        XCTAssertLessThan(start.duration(to: .now), .seconds(1))
+        XCTAssertNotNil(coordinator.failureReason)
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.1) { _ in XCTFail("must not restart work") })
+        unblockWorker.signal()
+        unblockFailure.signal()
+        wait(for: [saved], timeout: 1)
+    }
+
     func testFailedInventoryIsUnknownRatherThanSuccessfulRemoval() {
         let stage = Stage(testingBacking: Backing(), onlineDisplayIDs: {
             throw SpaceOError.stageCreationFailed("injected display service failure")
@@ -175,6 +193,34 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
                 let restarted = DisplayLifecycleLease(path: path)
                 XCTAssertThrowsError(try restarted.acquire())
             }
+        }
+    }
+
+    func testLiveFailureBeforeAnyDisplayMutationSurvivesRestart() throws {
+        try withJournal { path in
+            var owner: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)
+            try owner!.acquire()
+            try owner!.beginLiveTest()
+            // No Stage, mutation or failure callback is needed for interruption to persist.
+            owner = nil
+            let restarted = DisplayLifecycleLease(path: path)
+            XCTAssertThrowsError(try restarted.acquire())
+            XCTAssertThrowsError(try restarted.acquire(), "a second acquire must not bypass the latch")
+        }
+    }
+
+    func testCompletedLiveCaseAllowsMutationAndAnotherCaseAndRestart() throws {
+        try withJournal { path in
+            var owner: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)
+            try owner!.acquire()
+            for _ in 0..<2 {
+                try owner!.beginLiveTest()
+                try owner!.begin(creation: true)
+                try owner!.finish()
+                try owner!.finishLiveTest()
+            }
+            owner = nil
+            try DisplayLifecycleLease(path: path).acquire()
         }
     }
 

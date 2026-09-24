@@ -24,6 +24,7 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
     }
 
     private let queue = DispatchQueue(label: "spaceo.display-lifecycle")
+    private let failureQueue = DispatchQueue(label: "spaceo.display-lifecycle-failure")
     private let lock = NSLock()
     private var failure: String?
     private var operations: [UUID: Operation] = [:]
@@ -47,7 +48,17 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
                 + "docs/DISPLAY_SAFETY.md before recovery"
             return true
         }
-        if first { onFailure(reason) }
+        if first {
+            // The lifecycle worker may be stuck holding the journal lock in fsync. Never
+            // make the timeout caller wait for that same lock (or for logging/filesystem I/O).
+            // Give normal persistence a short bounded chance to finish before returning.
+            let saved = DispatchSemaphore(value: 0)
+            failureQueue.async { [onFailure] in
+                onFailure(reason)
+                saved.signal()
+            }
+            _ = saved.wait(timeout: .now() + .milliseconds(100))
+        }
     }
 
     func perform<T>(

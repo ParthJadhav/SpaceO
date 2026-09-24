@@ -37,6 +37,7 @@ final class IntegrationTests: XCTestCase {
         guard capabilities.canDrive else {
             throw XCTSkip("SpaceO cannot drive sessions on this host: \(capabilities.report)")
         }
+        try Stage.beginLiveTestCase()
         // Conservative pacing for the shared 4/minute, 12/ten-minute creation budget. This is
         // not proof that ColorSync has settled. The supervisor still bounds a stuck case.
         Thread.sleep(forTimeInterval: 90)
@@ -67,6 +68,8 @@ final class IntegrationTests: XCTestCase {
                 changes.isEmpty,
                 "SpaceO changed the user's display configuration: \(changes.joined(separator: "; "))")
         }
+        guard !Self.failureLock.withLock({ Self.stopped }) else { return }
+        try Stage.finishLiveTestCase()
     }
 
     // MARK: - Stage lifecycle

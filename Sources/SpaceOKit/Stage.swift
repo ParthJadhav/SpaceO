@@ -153,6 +153,17 @@ public final class Stage: @unchecked Sendable {
     static func stopLiveDisplayWork() {
         lifecycle.trip("live integration test failed; do not continue or automatically rerun")
     }
+
+    static func beginLiveTestCase() throws {
+        try lifecycle.perform(timeout: 10) { _ in
+            try lease.acquire()
+            try lease.beginLiveTest()
+        }
+    }
+
+    static func finishLiveTestCase() throws {
+        try lifecycle.perform(timeout: 10) { _ in try lease.finishLiveTest() }
+    }
     private let backing: any StageDisplayBacking
     private let onlineDisplayIDsProvider: @Sendable () throws -> [CGDirectDisplayID]
     private let configurationProvider: @Sendable () throws -> UserDisplayConfiguration?

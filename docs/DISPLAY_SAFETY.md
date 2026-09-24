@@ -35,11 +35,17 @@ Do not reproduce this incident on a daily-use desktop.
 - Before a mutation, the journal records it as pending. Success clears pending only after
   verification. Interrupted mutation, unknown removal, configuration drift, or a service timeout
   leaves a latch that prevents subsequent work and survives process restarts.
+  Live cases separately persist a pending marker before their baseline or test body, including
+  cases that create no display; only a successful teardown clears it.
 - Lifecycle callers wait on a bounded worker completion, rather than a deadline checked only
   after IPC returns. The underlying OS call **cannot be cancelled**. A timed-out worker and its
   display references are retained; no replacement worker or automatic mutation retry runs.
   Late results cannot publish success or trigger ARC teardown. Queries returning errors are
   unknown, never proof of removal. Cleanup uses cached Space IDs before the bounded path.
+  Failure persistence/logging runs separately with at most 100 ms of caller wait, so a worker
+  stalled while holding the journal lock cannot also trap the timeout caller. If storage stalls,
+  the failure write may remain outstanding; the already-persisted pending markers protect
+  interrupted mutations and live cases.
 - Display identities remain randomized. Persistent identity churn is a plausible contributor
   to ColorSync work, but blindly restoring stable IDs reintroduces a documented stale-display
   failure. The creation budget and existing pool reuse reduce exposure without that regression.

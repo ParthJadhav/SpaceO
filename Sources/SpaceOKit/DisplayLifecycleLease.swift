@@ -8,6 +8,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     private struct Journal: Codable {
         var attempts: [TimeInterval] = []
         var pending = false
+        var liveTestPending: Bool?
         var failure: String?
     }
 
@@ -15,6 +16,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     private let path: String
     private var descriptor: Int32 = -1
     private var journal = Journal()
+    private var ownsLiveTest = false
 
     init(path: String = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/SpaceO/display-safety.json").path) {
@@ -86,6 +88,30 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         }
     }
 
+    /// Persist admission before any case can fail, including cases that never create a Stage.
+    /// This is separate from a display mutation so normal lifecycle operations can still run
+    /// inside the admitted case. Another process must refuse an interrupted/failed case.
+    func beginLiveTest() throws {
+        try lock.withLock {
+            guard descriptor >= 0 else { throw refused("lifecycle lease was not acquired") }
+            try requireHealthy()
+            guard !ownsLiveTest else { throw refused("a live test is already in progress") }
+            journal.liveTestPending = true
+            try save()
+            ownsLiveTest = true
+        }
+    }
+
+    func finishLiveTest() throws {
+        try lock.withLock {
+            try requireHealthy()
+            guard ownsLiveTest else { throw refused("no live test was admitted") }
+            journal.liveTestPending = nil
+            try save()
+            ownsLiveTest = false
+        }
+    }
+
     func finish() throws {
         try lock.withLock {
             guard journal.failure == nil else { throw refused("display safety circuit is open") }
@@ -104,7 +130,8 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     }
 
     private func requireHealthy() throws {
-        guard journal.failure == nil, !journal.pending else {
+        guard journal.failure == nil, !journal.pending,
+              journal.liveTestPending != true || ownsLiveTest else {
             throw refused("an earlier display mutation failed or never completed; "
                 + "inspect docs/DISPLAY_SAFETY.md before recovery")
         }
