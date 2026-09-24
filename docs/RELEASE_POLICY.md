@@ -42,6 +42,14 @@ slices and the combined artifact are independently verified.
 
 ## Required artifact qualification
 
+The release owner selected a **native-app and Chromium preview** on 2026-09-24.
+Managed Electron launches are outside this preview's support scope and must return
+`unsupported_target` before starting a process. The full computer-use matrix must exercise
+native and Chromium behavior and verify Electron refusal; refusal is an enforced product
+limit, not a skipped renderer qualification. Electron support requires separate live
+qualification before this limit can be removed. Publish this first DMG as a GitHub prerelease.
+All signing, notarization, isolation, cleanup, and owner approval gates below still apply.
+
 Before public approval, exercise the exact Developer ID-signed, notarized, and stapled candidate
 obtained through the intended distribution path, not binaries left in `.build`. By explicit owner
 direction on 2026-09-05, the implementer may perform this qualification in the owner-authorized

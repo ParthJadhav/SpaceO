@@ -6,6 +6,13 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+### Release qualification fixes
+
+- Create managed Chromium pages in the background through DevTools instead of allowing the
+  first browser window to activate the user’s desktop during launch.
+- Scope the first DMG to a native-app and Chromium preview. Refuse managed Electron launches
+  before startup because Cursor can take desktop focus; MCP clients in those editors remain usable.
+
 ### Open-source preparation
 
 - Finish retired daemon socket cleanup before allowing the same server to restart, avoiding

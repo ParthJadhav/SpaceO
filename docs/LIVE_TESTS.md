@@ -73,8 +73,9 @@ interpreting a run; an installed file can be newer than the executable image alr
 socket. A signed Viewer helper and the standalone CLI can have different SHA-256 values while still
 matching by Mach-O build UUID. With `--require-full`, the matrix additionally waits through the
 idle grace and fails unless every virtual display retires, no orphan remains, and the user's
-online/active/mirrored topology is unchanged. Each native, Chromium, and Electron suite also fails
-if any published app window lies outside its SpaceO tile. The daemon log and action report are
+online/active/mirrored topology is unchanged. Native and Chromium suites also fail
+if any published app window lies outside its SpaceO tile. The preview's Electron suite verifies
+pre-launch refusal and absence of published windows, not renderer support. The daemon log and action report are
 created owner-only (`0600`).
 
 ## The CI job

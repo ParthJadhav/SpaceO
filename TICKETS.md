@@ -21,7 +21,10 @@ Status definitions:
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 
 - Priority: P0
-- Status: Open; release blocker
+- Status: In verification; signed-candidate qualification still required
+- September 24 fix: launch without a startup window, then create bounded background CDP targets
+  on the agent display. Two focused Chromium live runs and a complete 16/16 no-skip
+  WindowServer run passed. This source evidence does not qualify a signed distribution.
 - Evidence: the September 16 full live suite ran 16 tests with no skips and failed the Chromium
   isolation check. A focused checkpoint reproduced the breach before DevTools input. Passing
   documents on the command line did not fix it; that production trial was reverted. The public
@@ -37,7 +40,14 @@ Status definitions:
 ### SPAO-193 — Diagnose Cursor exiting before launch process identification
 
 - Priority: P1
-- Status: Open; release blocker
+- Status: Open for Electron support; preview excludes managed Electron launches
+- Owner decision on September 24: ship a native + Chromium preview. A pre-launch refusal
+  prevents Electron startup entirely; deterministic and full-matrix tests must verify this
+  boundary. This mitigates the preview risk without claiming Electron qualification.
+- September 24 diagnosis: inherited `ELECTRON_RUN_AS_NODE` causes the premature exit; an
+  explicit empty launch override restores GUI startup. Cursor can then self-activate, so
+  clearing the environment flag does not close this release blocker. A private-profile
+  experiment did not prevent activation and was not retained.
 - Evidence: the September 16 matrix returned `launch_failed`: Cursor.app exited before SpaceO
   could identify it. Subsequent Electron actions were not exercised. This run cannot qualify the
   host because an unrelated default-socket daemon appeared during testing.

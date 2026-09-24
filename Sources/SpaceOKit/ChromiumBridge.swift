@@ -126,6 +126,52 @@ public actor ChromiumBridge {
         try await targets(budget: nil)
     }
 
+    /// Startup-only bridge for the private browser process, discarded before page binding.
+    /// One deadline covers discovery and every requested page; foreground fallback is forbidden.
+    func createBackgroundPages(files: [URL], region: CGRect, timeout: TimeInterval = 10,
+                               validate: @Sendable () throws -> Void = {}) async throws {
+        guard (1...65_535).contains(port), files.count <= 256, socket == nil else {
+            throw SpaceOError.badRequest("invalid browser startup request")
+        }
+        try WindowPlacement.validate(frame: region)
+        guard [region.minX, region.minY, region.width, region.height].allSatisfy({
+            $0 >= CGFloat(Int32.min) && $0 <= CGFloat(Int32.max)
+        }) else {
+            throw SpaceOError.badRequest("browser startup bounds exceed the protocol integer range")
+        }
+        let budget = try DevToolsDeadline(timeout: timeout)
+        try validate()
+        let data = try await boundedBody(from: URL(string: "http://127.0.0.1:\(port)/json/version")!,
+                                         budget: budget)
+        guard let version = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = version["webSocketDebuggerUrl"] as? String,
+              let endpoint = Self.validatedWebSocketURL(raw, port: port),
+              endpoint.path.hasPrefix("/devtools/browser/") else {
+            throw SpaceOError.launchFailed("browser did not expose a private browser endpoint")
+        }
+        try await connect(to: Target(id: endpoint.lastPathComponent, title: "", url: "",
+                                     webSocketURL: endpoint))
+        defer { detach() }
+        let pages = files.isEmpty ? ["about:blank"] : files.map(\.absoluteString)
+        for (index, page) in pages.enumerated() {
+            try validate()
+            var parameters: [String: Any] = [
+                "url": page, "background": true, "newWindow": index == 0,
+            ]
+            if index == 0 {
+                parameters["left"] = Int(region.minX)
+                parameters["top"] = Int(region.minY)
+                parameters["width"] = Int(region.width)
+                parameters["height"] = Int(region.height)
+            }
+            let result = try await performCommand("Target.createTarget", parameters, budget: budget)
+            guard let id = result["targetId"] as? String, !id.isEmpty, id.utf8.count <= 1_024 else {
+                throw SpaceOError.launchFailed("browser did not confirm background page creation")
+            }
+        }
+        try validate()
+    }
+
     func targets(budget: DevToolsDeadline?) async throws -> [Target] {
         try budget?.check()
         guard (1...65_535).contains(port) else {

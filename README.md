@@ -33,6 +33,10 @@
 > [!NOTE]
 > **Development preview · 1.1.1 source.** There is no qualified signed DMG available yet.
 > Build from source below; approved DMGs will appear on the [Releases page](https://github.com/ParthJadhav/SpaceO/releases).
+>
+> **First DMG scope: native apps and Chromium browsers.** Managed Electron apps such as
+> Cursor and VS Code are refused before launch because they can take desktop focus.
+> These editors can still connect to SpaceO as MCP clients to drive supported apps.
 
 ## A screen for every agent
 
