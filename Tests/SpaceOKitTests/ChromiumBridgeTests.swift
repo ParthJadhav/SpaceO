@@ -298,28 +298,25 @@ final class ChromiumBridgeTests: XCTestCase {
     /// A late Foundation callback must not turn a bounded DevTools command into a daemon-wide
     /// stall. The simulated operation deliberately ignores the deadline and completes later.
     func testReplyTimeoutDoesNotWaitForALateCompletion() async throws {
-        let clock = ContinuousClock()
-        let started = clock.now
-        do {
-            let _: String = try await ChromiumBridge.firstCompletion(
-                within: 0.02,
-                start: { completion in
-                    DispatchQueue.global().asyncAfter(deadline: .now() + 0.25) {
-                        completion(.success("late"))
-                    }
-                })
-            XCTFail("the late completion must lose to the deadline")
-        } catch {
-            XCTAssertTrue(error.localizedDescription.contains("timed out"),
-                          error.localizedDescription)
+        let returned = expectation(description: "deadline returns before callback")
+        let callback = CallbackBox()
+        let waiter = Task {
+            do {
+                let _: String = try await ChromiumBridge.firstCompletion(
+                    within: 0.02, start: { callback.install($0) })
+                XCTFail("the late completion must lose to the deadline")
+            } catch {
+                XCTAssertTrue(error.localizedDescription.contains("timed out"),
+                              error.localizedDescription)
+            }
+            returned.fulfill()
         }
-        let elapsed = started.duration(to: clock.now)
-        XCTAssertLessThan(elapsed, .milliseconds(150),
-                          "the deadline waited for the late completion: \(elapsed)")
-
-        // Let the deliberately late callback fire so the test also exercises a second resume
-        // attempt after the caller has already continued.
-        try await Task.sleep(for: .milliseconds(300))
+        // Prove ordering directly, without requiring a loaded hosted runner to schedule the
+        // continuation within 150 ms. A callback-waiting regression still fails this assertion.
+        await fulfillment(of: [returned], timeout: 2)
+        callback.complete()
+        callback.complete()
+        await waiter.value
     }
 
     func testReplyTimeoutRunsCleanupOnce() async throws {

@@ -237,7 +237,7 @@ public enum CLIGlobalFlags {
             }
         }
         guard !moved.isEmpty, index < argv.count else { return argv }
-        return [argv[index]] + moved + argv[(index + 1)...]
+        return [argv[index]] + moved + Array(argv[(index + 1)...])
     }
 }
 

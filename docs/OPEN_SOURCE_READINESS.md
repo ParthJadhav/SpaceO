@@ -1,6 +1,6 @@
 # Open-source readiness
 
-Preparation date: 2026-09-24. **Repository remains private. Public release remains NO-GO.**
+Preparation date: 2026-09-24. **Source is public. Binary release qualification is pending.**
 This record describes preparation, not authorization to publish or evidence that all defects
 have been eliminated.
 
@@ -36,6 +36,11 @@ Gitleaks 8.30.1 scanned all 223 locally reachable historical commits. Eighteen h
 matches were the same synthetic password in `ChromiumFieldStateTests.swift`; the exception
 matches that exact value and exact file only. With that reviewed exception, no credential
 findings remained. No credential values were printed or added to the repository.
+A follow-up fetched all 12 advertised pull-request head/merge refs and scanned all 238
+locally reachable commits with the same reviewed fixture exception: no credential findings.
+This covers retained PR Git history; unadvertised cached views and the one unavailable
+Actions log remain unverified. No finding identified a specific cache purge or credential
+rotation target. Retain this limitation rather than treating a history rewrite as deletion.
 
 All 49 GitHub Actions runs were inventoried; logs were downloadable for 48. The available logs
 had no Gitleaks findings. The unavailable log cannot be assessed. No retained workflow artifacts
@@ -55,17 +60,16 @@ cleanup, disabled wiki/projects, read-only workflow tokens, disabled workflow PR
 SHA-pinning enforcement, and GitHub-owned actions only. The personal runner was unregistered;
 no self-hosted runner remains registered with this repository.
 
-GitHub rejected both ruleset creation (HTTP 403) and required environment reviewers (HTTP 422)
-because this private repository's billing plan does not support them. Fork-contributor approval
-settings are also unavailable while private. Configuration is prepared in:
+After the owner explicitly authorized open sourcing, the repository was made public on
+2026-09-24. GitHub now confirms both rulesets are active. Required owner reviewers and no admin
+bypass are configured on `release`, `release-publication`, and `live-qualification`. Release
+environments allow only `v*` tags; live qualification allows only `main`. All external contributors
+require approval before fork workflows run. Private vulnerability reporting, secret scanning,
+and secret push protection are enabled. The earlier private-plan restrictions are resolved.
 
-- `.github/main-ruleset.json`: PRs, required CI and secret checks, resolved discussions,
-  code-owner review, linear history, no force pushes, no deletion.
-- `.github/release-tags-ruleset.json`: immutable `v*` tags.
-
-Do not describe these rules as active. Use a plan supporting these private controls to apply them while private, or apply
-and verify them immediately after separately authorized public visibility. The source and
-runtime signing checks intentionally fail closed while the release environments are unprotected.
+Hosted CI was restarted after the visibility change and is running on GitHub-hosted runners;
+its secret scan has passed. The workflow result, not this status note, is the build evidence.
+Binary publication still requires qualification and explicit owner GO under the release policy.
 
 ## Validation
 
@@ -80,10 +84,10 @@ runtime signing checks intentionally fail closed while the release environments 
   "The job was not started because an Actions budget is preventing further use." This is not
   hosted build/test evidence; billing must be resolved or CI rerun after authorized publication.
 
-No full live suite or computer-use matrix was run on the active desktop. The screenshot task
-attempted a fixture-only background preview; its window discovery failed on Accessibility
-permissions, and its temporary session was cleaned up. The README uses an inspected existing
-fixture capture instead. This is not live qualification or signed-distribution evidence.
+The owner subsequently authorized idle-host testing. The September 24 full source live suite
+ran all 16 tests without skips; Chromium launch isolation failed. See the
+[retained summary](validation/2026-09-24-source-live.md). The owner-requested README GIF records
+synthetic Viewer preview sessions; it is not signed-distribution or live qualification evidence.
 
 ## History cleanup
 
@@ -95,19 +99,15 @@ never push them. Closed pull requests and GitHub cached commit views can still r
 history. That history was scanned, but is not purged by the rewrite. Existing historical audit
 records retain old commit identifiers as evidence identifiers, not current checkout instructions.
 
-## Before public visibility or a downloadable release
+## Remaining binary-release work
 
-1. Review the single-commit source and remaining closed pull-request refs/cached historical
-   views and old Actions logs. Keep recovery history private and local. If historical content
-   must be purged from GitHub caches, coordinate with GitHub support before visibility changes.
-   No credential leak was found that would justify rotation from this scan.
-2. Enable and verify branch/tag rules, fork-contributor approvals, private vulnerability reporting,
-   and GitHub secret scanning/push protection where available. Check billing/hosted CI on the
-   final source; local success does not prove the hosted image can build it.
-3. Protect `release` and `release-publication` with the release owner as required reviewer,
-   disable admin bypass, and restrict deployments to **tags** matching `v*`. Keep signing
-   credentials solely in `release`. Approving your own deployment is intentional for a solo
-   release owner; it is separate from initiating a tag push.
+1. Keep recovery history private and local. Historical scanning does not purge cached copies.
+   No credential leak was found that would justify rotation from the completed scans.
+2. Retain successful hosted CI on the final source. The September 24 run
+   [36032918155](https://github.com/ParthJadhav/SpaceO/actions/runs/36032918155) passed both jobs.
+3. Recheck the already-configured release reviewers, no-admin-bypass setting, and `v*` tag-only
+   restrictions before candidate construction. Keep signing credentials solely in `release`.
+   Owner deployment approval is separate from initiating a tag push.
 4. Resolve current release-relevant audit findings and perform complete live qualification on an
    eligible idle host. Historical failed/partial records do not qualify a new artifact.
 5. After explicit authorization, enable candidate construction, obtain a signed/notarized DMG,
@@ -116,5 +116,14 @@ records retain old commit identifiers as evidence identifiers, not current check
 6. Record release-owner GO and approve `release-publication`. The workflow then uploads the DMG,
    checksum, signature, and provenance record to the GitHub Releases page. A tag alone is not GO.
 
-Public visibility and binary release approval are separate decisions. Neither is authorized by
-this preparation record.
+Public visibility was explicitly authorized and completed. Binary release approval remains a
+separate decision after candidate verification; this preparation record is not a release GO.
+
+## Solo-maintainer branch policy
+
+On 2026-09-24 the owner approved optional code-owner approval because GitHub does not allow
+a pull-request author to approve their own changes. Main still requires a pull request,
+passing GitHub Actions `release` and `secrets` checks against an up-to-date branch, resolved
+review threads, and linear history. Force pushes and deletion remain prohibited, with no
+bypass actors. CODEOWNERS continues routing review requests. Required release-environment
+approval is unchanged; this branch policy does not authorize binary publication.

@@ -130,19 +130,21 @@ final class TransportDeadlineTests: XCTestCase {
 
     func testUploadAndResponseShareOneBudget() throws {
         // Exceeds the Unix socket buffer so upload cannot complete before the peer drains it.
-        let payload = Data(repeating: 120, count: 8 * 1_048_576)
+        let payload = Data(repeating: 120, count: 2 * 1_048_576)
         try withPeer({ fd in
-            usleep(500_000)
+            usleep(1_200_000)
             let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
             guard Transport.readFrame(from: fd, maximumBytes: 9 * 1_048_576,
                                       deadlineUptimeNanoseconds: deadline) != nil else {
                 XCTFail("the complete upload must arrive before testing response-budget sharing")
                 return
             }
-            usleep(500_000)
+            usleep(1_200_000)
             _ = Transport.writeAll(Data("ok\n".utf8), to: fd, deadlineUptimeNanoseconds: deadline)
         }, client: { path in
-            XCTAssertThrowsError(try Transport.sendLinePayload(payload, to: path, timeout: 0.8,
+            // Each 1.2 s phase fits a 2 s budget; their sum does not. Leave enough upload
+            // headroom that this tests budget sharing instead of hosted-runner throughput.
+            XCTAssertThrowsError(try Transport.sendLinePayload(payload, to: path, timeout: 2,
                 maximumRequestBytes: 9 * 1_048_576, maximumResponseBytes: 100))
         })
     }
