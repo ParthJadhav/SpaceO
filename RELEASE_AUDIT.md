@@ -91,8 +91,12 @@ supersedes the relevant Round 7/9 removals; resource overrides do not bypass dis
 See [DISPLAY_SAFETY.md](docs/DISPLAY_SAFETY.md) for the causal limits, recovery procedure and
 required reserved-host requalification. On September 25 the owner reserved the Mac and requested
 the original mirrored Alienware 240 Hz setup. One supervised lifecycle experiment passed with
-no remaining virtual display or topology change. Full live qualification is still pending;
-that isolated success does not resolve the Apple defect or qualify a release.
+no remaining virtual display or topology change. The subsequent 16-case run passed its XCTest
+assertions, but the external monitor disconnected during the final pacing interval and the shell
+wrapper later errored. The 34-step MCP matrix passed on built-in display only. These are not a
+complete qualification of the requested setup. The suite now rejects topology changes between
+cases, too; see the [experiment record](docs/validation/2026-09-25-display-containment.md).
+Full qualification and the cause of the physical disconnect remain open.
 
 ### RA-001 and RA-012 — local display/input freeze and ownerless displays
 

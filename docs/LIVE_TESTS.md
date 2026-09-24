@@ -43,6 +43,9 @@ cases. Always use the wrapper for the external deadline and retained log describ
 [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md).
 The wrapper builds the bundle, then supervises XCTest directly. SwiftPM's buffered output and
 separate XCTest process group would otherwise hide case deadlines and evade group suspension.
+The suite retains one physical-display baseline across all cases and checks it before and after
+each pacing interval. A monitor change between cases invalidates the run before further display
+creation; it must not silently become a passing test of a different setup.
 The computer-use matrix also requires this opt-in and stops after its first failure or blocked
 result, after attempting the current session's cleanup; it does not start another suite.
 

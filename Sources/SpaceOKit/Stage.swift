@@ -164,6 +164,10 @@ public final class Stage: @unchecked Sendable {
     static func finishLiveTestCase() throws {
         try lifecycle.perform(timeout: 10) { _ in try lease.finishLiveTest() }
     }
+
+    static func liveTestUserConfiguration() throws -> UserDisplayConfiguration {
+        try lifecycle.perform(timeout: 1) { _ in try checkedUserDisplayConfiguration() }
+    }
     private let backing: any StageDisplayBacking
     private let onlineDisplayIDsProvider: @Sendable () throws -> [CGDirectDisplayID]
     private let configurationProvider: @Sendable () throws -> UserDisplayConfiguration?
@@ -223,8 +227,9 @@ public final class Stage: @unchecked Sendable {
                     ?? "virtual-display is unavailable on this host"
             )
         }
-        try Self.lease.acquire()
         let published: (SPOVirtualDisplay, [UInt64]) = try Self.lifecycle.perform(timeout: 10) { operation in
+            try Self.lease.acquire()
+            try operation.check()
             let userConfigurationBefore: UserDisplayConfiguration
             let online: [CGDirectDisplayID]
             do {

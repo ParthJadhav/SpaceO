@@ -12,6 +12,7 @@ final class IntegrationTests: XCTestCase {
 
     private static let failureLock = NSLock()
     private static var stopped = false
+    private static var initialUserConfiguration: Stage.UserDisplayConfiguration?
 
     override func record(_ issue: XCTIssue) {
         Self.failureLock.withLock { Self.stopped = true }
@@ -38,18 +39,35 @@ final class IntegrationTests: XCTestCase {
             throw XCTSkip("SpaceO cannot drive sessions on this host: \(capabilities.report)")
         }
         try Stage.beginLiveTestCase()
+        let initial = try Stage.liveTestUserConfiguration()
+        baselineUserDisplays = Self.failureLock.withLock {
+            if Self.initialUserConfiguration == nil { Self.initialUserConfiguration = initial }
+            return Self.initialUserConfiguration
+        }
+        try requireUnchangedUserConfiguration(initial)
         // Conservative pacing for the shared 4/minute, 12/ten-minute creation budget. This is
         // not proof that ColorSync has settled. The supervisor still bounds a stuck case.
         Thread.sleep(forTimeInterval: 90)
+        try requireUnchangedUserConfiguration(Stage.liveTestUserConfiguration())
         // After admission, arm the baseline before any remaining prerequisite can skip.
         baselineDisplays = Set(Stage.onlineDisplayIDs())
-        baselineUserDisplays = Stage.userDisplayConfiguration()
         hasDisplayBaseline = true
 
         try XCTSkipUnless(capabilities.canDrive, """
             SpaceO cannot drive sessions on this host:
             \(capabilities.report)
             """)
+    }
+
+    private func requireUnchangedUserConfiguration(_ current: Stage.UserDisplayConfiguration) throws {
+        guard let expected = baselineUserDisplays else {
+            throw SpaceOError.stageCreationFailed("live suite has no physical display baseline")
+        }
+        let changes = current.changes(from: expected)
+        guard changes.isEmpty else {
+            XCTFail("physical display configuration changed during the live suite: \(changes.joined(separator: "; "))")
+            throw SpaceOError.stageCreationFailed("live qualification topology changed; stop and inspect")
+        }
     }
 
     override func tearDownWithError() throws {

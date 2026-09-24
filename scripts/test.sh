@@ -112,7 +112,9 @@ command="${1:-help}"
 shift || true
 case "$command" in
     safe) run_safe "$@" ;;
-    live) run_live "$@" ;;
+    # Exit inside the already-parsed case: editing this source while a long run is in flight
+    # must not make bash resume reading at a shifted byte offset after the function returns.
+    live) run_live "$@"; exit $? ;;
     help|-h|--help) usage ;;
     *) usage >&2; fail "unknown test command: $command" ;;
 esac
