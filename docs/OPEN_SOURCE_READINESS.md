@@ -36,6 +36,11 @@ Gitleaks 8.30.1 scanned all 223 locally reachable historical commits. Eighteen h
 matches were the same synthetic password in `ChromiumFieldStateTests.swift`; the exception
 matches that exact value and exact file only. With that reviewed exception, no credential
 findings remained. No credential values were printed or added to the repository.
+A follow-up fetched all 12 advertised pull-request head/merge refs and scanned all 238
+locally reachable commits with the same reviewed fixture exception: no credential findings.
+This covers retained PR Git history; unadvertised cached views and the one unavailable
+Actions log remain unverified. No finding identified a specific cache purge or credential
+rotation target. Retain this limitation rather than treating a history rewrite as deletion.
 
 All 49 GitHub Actions runs were inventoried; logs were downloadable for 48. The available logs
 had no Gitleaks findings. The unavailable log cannot be assessed. No retained workflow artifacts
@@ -79,10 +84,10 @@ Binary publication still requires qualification and explicit owner GO under the 
   "The job was not started because an Actions budget is preventing further use." This is not
   hosted build/test evidence; billing must be resolved or CI rerun after authorized publication.
 
-No full live suite or computer-use matrix was run on the active desktop. The screenshot task
-attempted a fixture-only background preview; its window discovery failed on Accessibility
-permissions, and its temporary session was cleaned up. The README uses an inspected existing
-fixture capture instead. This is not live qualification or signed-distribution evidence.
+The owner subsequently authorized idle-host testing. The September 24 full source live suite
+ran all 16 tests without skips; Chromium launch isolation failed. See the
+[retained summary](validation/2026-09-24-source-live.md). The owner-requested README GIF records
+synthetic Viewer preview sessions; it is not signed-distribution or live qualification evidence.
 
 ## History cleanup
 
@@ -96,16 +101,13 @@ records retain old commit identifiers as evidence identifiers, not current check
 
 ## Remaining binary-release work
 
-1. Review the single-commit source and remaining closed pull-request refs/cached historical
-   views and old Actions logs. Keep recovery history private and local. If historical content
-   must be purged from GitHub caches, coordinate with GitHub support before visibility changes.
-   No credential leak was found that would justify rotation from this scan.
-2. Retain successful hosted CI on the final source. Visibility and repository protection
-   configuration are complete; local success does not prove the hosted image can build it.
-3. Protect `release` and `release-publication` with the release owner as required reviewer,
-   disable admin bypass, and restrict deployments to **tags** matching `v*`. Keep signing
-   credentials solely in `release`. Approving your own deployment is intentional for a solo
-   release owner; it is separate from initiating a tag push.
+1. Keep recovery history private and local. Historical scanning does not purge cached copies.
+   No credential leak was found that would justify rotation from the completed scans.
+2. Retain successful hosted CI on the final source. The September 24 run
+   [36032918155](https://github.com/ParthJadhav/SpaceO/actions/runs/36032918155) passed both jobs.
+3. Recheck the already-configured release reviewers, no-admin-bypass setting, and `v*` tag-only
+   restrictions before candidate construction. Keep signing credentials solely in `release`.
+   Owner deployment approval is separate from initiating a tag push.
 4. Resolve current release-relevant audit findings and perform complete live qualification on an
    eligible idle host. Historical failed/partial records do not qualify a new artifact.
 5. After explicit authorization, enable candidate construction, obtain a signed/notarized DMG,

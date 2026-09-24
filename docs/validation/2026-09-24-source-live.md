@@ -3,7 +3,10 @@
 The owner authorized testing in the existing idle graphical login. This is implementer
 source regression evidence, not qualification of a signed distribution.
 
-- Tested source: `cdfca00b032a2ee841b24c0d7fe157f29131cfe0` (subsequent changes only adjust two deterministic deadline tests).
+- Tested source: `cdfca00b032a2ee841b24c0d7fe157f29131cfe0`.
+  Later PR changes include deadline tests, the MCP catalogue fixture, documentation, branch
+  policy, and daemon listener cleanup. This record does not qualify those later changes or
+  the final commit; a fresh complete live run is required for a release candidate.
 - Command: `bash scripts/test.sh live --require-full`.
 - Result: 16 tests executed, 15 passed, one failed, zero skipped.
 - Failure: `testChromiumWebContentIsDrivenThroughDevTools` failed both its post-launch and
