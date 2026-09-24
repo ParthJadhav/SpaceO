@@ -10,20 +10,41 @@ import CoreGraphics
 /// phantom display behind — a leaked virtual monitor is a user-visible defect, not a detail.
 final class IntegrationTests: XCTestCase {
 
+    private static let failureLock = NSLock()
+    private static var stopped = false
+
+    override func record(_ issue: XCTIssue) {
+        Self.failureLock.withLock { Self.stopped = true }
+        Stage.stopLiveDisplayWork()
+        super.record(issue)
+    }
+
     private var baselineDisplays: Set<CGDirectDisplayID> = []
     private var baselineUserDisplays: Stage.UserDisplayConfiguration?
     private var hasDisplayBaseline = false
 
     override func setUpWithError() throws {
-        // Take the baseline before anything that can throw. `XCTSkipUnless` throws out of
-        // `setUpWithError`, so a baseline captured after it leaves the leak assertion below
-        // disarmed on exactly the paths where setUp did not complete — the failure mode is a
-        // suite that reports success while never once checking for a phantom display.
+        // This guard is deliberately before the first WindowServer call, including baselines.
+        // A plain `swift test` must never opt a daily-use desktop into live mutations.
+        guard ProcessInfo.processInfo.environment["SPACEO_LIVE_TESTS"] == "1" else {
+            throw XCTSkip("live tests require scripts/test.sh live on a reserved host")
+        }
+        guard !Self.failureLock.withLock({ Self.stopped }) else {
+            throw XCTSkip("live suite stopped after its first failure; no further display work")
+        }
+        continueAfterFailure = false
+        let capabilities = Capabilities()
+        guard capabilities.canDrive else {
+            throw XCTSkip("SpaceO cannot drive sessions on this host: \(capabilities.report)")
+        }
+        // Conservative pacing for the shared 4/minute, 12/ten-minute creation budget. This is
+        // not proof that ColorSync has settled. The supervisor still bounds a stuck case.
+        Thread.sleep(forTimeInterval: 90)
+        // After admission, arm the baseline before any remaining prerequisite can skip.
         baselineDisplays = Set(Stage.onlineDisplayIDs())
         baselineUserDisplays = Stage.userDisplayConfiguration()
         hasDisplayBaseline = true
 
-        let capabilities = Capabilities()
         try XCTSkipUnless(capabilities.canDrive, """
             SpaceO cannot drive sessions on this host:
             \(capabilities.report)
@@ -32,6 +53,7 @@ final class IntegrationTests: XCTestCase {
 
     override func tearDownWithError() throws {
         guard hasDisplayBaseline else { return }
+        guard !Self.failureLock.withLock({ Self.stopped }) else { return }
         // Give any asynchronous teardown a bounded chance to finish before we accuse it.
         let deadline = Date().addingTimeInterval(15)
         while Date() < deadline, Set(Stage.onlineDisplayIDs()) != baselineDisplays {

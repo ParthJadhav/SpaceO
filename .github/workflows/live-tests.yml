@@ -111,11 +111,13 @@ jobs:
         # `runner.temp` resolves only in a step context; a job-level `env` referencing it makes
         # GitHub reject the whole workflow file before any job starts.
         env:
+          SPACEO_LIVE_TESTS: "1"
           SPACEO_LIVE_LOG: ${{ runner.temp }}/spaceo-live-tests.log
         run: bash scripts/test.sh live --require-full
 
       - name: Run the full computer-use conformance matrix
         env:
+          SPACEO_LIVE_TESTS: "1"
           SPACEO_TEST_REPORT: ${{ runner.temp }}/spaceo-computer-use-conformance.json
           SPACEO_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}
         run: make computer-use-check-full

@@ -1100,6 +1100,11 @@ public actor SessionManager {
     /// forever would be false. Every reader must come through here so they agree.
     private func liveDisplayLifecycleFailures() -> Set<CGDirectDisplayID> {
         guard !displayLifecycleFailures.isEmpty else { return [] }
+        // A Stage deadline already established that the server cannot be trusted. Re-querying
+        // synchronously here would immediately undo containment and could erase unknown IDs.
+        guard !pool.stages.contains(where: \.hasLifecycleFailure) else {
+            return displayLifecycleFailures
+        }
         displayLifecycleFailures.formIntersection(onlineDisplayIDs())
         return displayLifecycleFailures
     }

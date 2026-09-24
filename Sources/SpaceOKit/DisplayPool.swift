@@ -321,7 +321,8 @@ public final class DisplayPool {
     }
 
     private func retire(_ occupancy: Occupancy) -> Bool {
-        let spaces = occupancy.stage.spaces
+        // Cleanup must not enter an unbounded SkyLight query before Stage's bounded retirement.
+        let spaces = occupancy.stage.retirementSpaces
         guard stageRetirer(occupancy.stage) else { return false }
         AgentActivity.release(spaces: spaces)
         return true

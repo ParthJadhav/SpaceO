@@ -417,16 +417,16 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 | session hygiene | shared clipboard shortcuts refused, audit, clean shutdown; no pointer fencing |
 | the invariant | checked after every agent action and by the live suite |
 
-App classes actually exercised, by `scripts/computer-use-check.mjs` driving the real MCP server:
+Preview capabilities exercised by `scripts/computer-use-check.mjs` through the real MCP server:
 
-| | native AppKit | Chromium web content | Electron |
-|---|---|---|---|
-| read screen | yes, values clipped at 480 bytes and disclosed | yes, page elements under `wN` | yes |
-| screenshot | yes | yes | yes |
-| click | accessibility press; a coordinate click with no element under it is reported unconfirmed | yes, via DevTools | accessibility press only |
-| type / keys | yes | yes | posted through AX/per-PID paths, then checked against the editor's document version and selection; an unobserved keystroke is reported, not assumed |
-| scroll | yes, via the accessibility scroll bar | yes, via DevTools | yes for VS Code-family editors, via a private semantic adapter, including split panes; horizontal is reported unconfirmed |
-| hover / drag | posted, unconfirmed | yes, via DevTools, including sliders, multi-select modifier clicks, and context actions | no confirmed renderer channel |
+| | native AppKit | Chromium web content |
+|---|---|---|
+| read screen | yes, values clipped at 480 bytes and disclosed | yes, page elements under `wN` |
+| screenshot | yes | yes |
+| click | accessibility press; a coordinate click with no element under it is reported unconfirmed | yes, via DevTools |
+| type / keys | yes | yes |
+| scroll | yes, via the accessibility scroll bar | yes, via DevTools |
+| hover / drag | posted, unconfirmed | yes, via DevTools, including sliders, multi-select modifier clicks, and context actions |
 
 The native + Chromium preview matrix also verifies that managed Electron launches are
 refused before startup. It does not claim Electron renderer qualification.

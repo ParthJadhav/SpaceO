@@ -328,8 +328,14 @@ public enum AppLauncher {
             return (app, placed)
         } catch {
             await LaunchFailureCleanup.run(app)
-            throw error
+            throw launchFailure(error, application: app.name)
         }
+    }
+
+    static func launchFailure(_ error: Error, application: String) -> Error {
+        guard error is DevToolsDeadline.Exceeded else { return error }
+        return SpaceOError.launchFailed(
+            "\(application) timed out preparing its private DevTools endpoint or background page")
     }
 
     static func electronLaunchEnvironment(_ parent: [String: String],

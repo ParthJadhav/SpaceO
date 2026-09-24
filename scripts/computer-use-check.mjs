@@ -38,6 +38,11 @@ const runID = process.env.SPACEO_RUN_ID || `cu-${randomUUID()}`;
 const runStartedAt = new Date();
 const runStartedMonotonic = performance.now();
 
+if (process.env.SPACEO_LIVE_TESTS !== "1") {
+  console.error("computer-use tests require SPACEO_LIVE_TESTS=1 on a reserved host; see docs/LIVE_TESTS.md");
+  process.exit(1);
+}
+
 if (!suites.every((suite) => ["native", "web", "electron"].includes(suite))) {
   console.error(`unknown suite: ${suiteArg}`);
   process.exit(1);
@@ -136,13 +141,18 @@ function detailLines(detail, full) {
   const lines = full ? text.split("\n") : [text.split("\n")[0].slice(0, 150)];
   return `\n${lines.map((l) => `        ${l}`).join("\n")}`;
 }
-function step(label, ok, detail = "") {
+class QualificationStopped extends Error {}
+function recordStep(label, ok, detail = "") {
   results.push({
     label,
     status: ok ? "pass" : "fail",
     atMs: Math.round(performance.now() - runStartedMonotonic),
   });
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detailLines(detail, !ok)}`);
+}
+function step(label, ok, detail = "") {
+  recordStep(label, ok, detail);
+  if (!ok) throw new QualificationStopped(label);
 }
 function blocked(label, detail = "") {
   results.push({
@@ -151,6 +161,7 @@ function blocked(label, detail = "") {
     atMs: Math.round(performance.now() - runStartedMonotonic),
   });
   console.log(`BLOCK ${label}${detailLines(detail, true)}`);
+  throw new QualificationStopped(label);
 }
 /// A capability that was never exercised. Deliberately not a pass: it contributes to no pass
 /// count and keeps the run out of exit 0.
@@ -543,9 +554,10 @@ try {
     try {
       await suiteRunners[suite]();
     } catch (error) {
-      // Each suite tears down its own session in finally. A failed suite must not prevent
-      // the remaining coverage or the final display-cleanup assertions from running.
-      step(`[${suite}] suite error`, false, error.message);
+      // Each suite tears down its own session in finally. Do not launch more applications or
+      // attach another display after the first failed assertion, blocked result or RPC error.
+      if (!(error instanceof QualificationStopped)) recordStep(`[${suite}] suite error`, false, error.message);
+      break;
     }
   }
 
@@ -567,7 +579,7 @@ try {
            : `before ${JSON.stringify(displayBaseline)}; after ${JSON.stringify(after)}`);
   }
 } catch (error) {
-  step("harness error", false, error.message);
+  if (!(error instanceof QualificationStopped)) recordStep("harness error", false, error.message);
 } finally {
   server.stdin.end();
   // Register close handling at spawn time: a child that already exited must not hang cleanup.
@@ -582,7 +594,7 @@ try {
   clearTimeout(shutdownTimer);
   clearTimeout(killTimer);
   if (shutdownTimedOut || server.exitCode !== 0) {
-    step("MCP shutdown", false, "MCP did not exit cleanly after input closed");
+    recordStep("MCP shutdown", false, "MCP did not exit cleanly after input closed");
   }
   try { rmSync(fixtureRoot, { recursive: true, force: true }); } catch {}
   const failed = results.filter((r) => r.status === "fail");

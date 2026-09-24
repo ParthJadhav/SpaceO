@@ -18,32 +18,14 @@ extension SPOVirtualDisplay: StageDisplayBacking {
     var pixelWidth: Int? { valid ? CGDisplayPixelsWide(displayID) : nil }
 }
 
-/// Serializes display reconfiguration.
-///
-/// Attaching and retiring several virtual framebuffers in quick succession can overrun the
-/// WindowServer/display pipeline on active mirrored or high-refresh setups. This coordinator is
-/// process-wide because separate pools still mutate the same login-session display graph.
-private final class DisplayLifecycleCoordinator: @unchecked Sendable {
-    private let queue = DispatchQueue(label: "spaceo.display-lifecycle")
-
-    func perform<T>(_ body: () throws -> T) rethrows -> T {
-        try queue.sync { try body() }
-    }
-
-    func enqueue(_ body: @escaping @Sendable () -> Void) {
-        queue.async(execute: body)
-    }
-}
-
 /// The agent's screen: a headless virtual display the user never sees.
 ///
 /// Why a display and not a Space — a window on an inactive Space is officially "not visible"
 /// and macOS tells apps to stop drawing (and Electron AX trees go stale). A window on a second
 /// display's active Space renders normally, so every standard API just works. See FINDINGS.md §2.
 ///
-/// Normal teardown explicitly waits for the display to disappear. Display-graph state — mirroring,
-/// ownerless SpaceO displays, physical-display activity, overlap — is inventoried for diagnostics
-/// but never refuses creation.
+/// Creation refuses an unsafe or unreadable display graph. Lifecycle waits are bounded and
+/// permanently stop subsequent mutations after a timeout; a stuck OS call is not cancelled.
 /// A stage may be read by capture tasks while lifecycle work runs elsewhere. Immutable metadata
 /// is freely shared; every access to the mutable backing display and invalidation flags is
 /// serialized by `stateLock`.
@@ -136,12 +118,12 @@ public final class Stage: @unchecked Sendable {
     private final class PendingInvalidation: @unchecked Sendable {
         let display: any StageDisplayBacking
         let displayID: CGDirectDisplayID
-        let onlineDisplayIDs: @Sendable () -> [CGDirectDisplayID]
+        let onlineDisplayIDs: @Sendable () throws -> [CGDirectDisplayID]
 
         init(
             display: any StageDisplayBacking,
             displayID: CGDirectDisplayID,
-            onlineDisplayIDs: @escaping @Sendable () -> [CGDirectDisplayID]
+            onlineDisplayIDs: @escaping @Sendable () throws -> [CGDirectDisplayID]
         ) {
             self.display = display
             self.displayID = displayID
@@ -149,17 +131,45 @@ public final class Stage: @unchecked Sendable {
         }
     }
 
-    private static let lifecycle = DisplayLifecycleCoordinator()
+    private static let lease = DisplayLifecycleLease()
+    private static let lifecycle = DisplayLifecycleCoordinator { reason in
+        lease.trip(reason)
+        DaemonLog.shared.event("display.safety.tripped", ["reason": reason])
+    }
     private static let ownership = OwnershipState()
+
+    // Deliberate incident reproduction requires a separately compiled qualification binary
+    // AND an explicit reserved-host invocation. Shipping builds cannot enable this with env.
+    static var qualifiesPanicConfiguration: Bool {
+        #if SPACEO_DISPLAY_QUALIFICATION
+        return ProcessInfo.processInfo.environment["SPACEO_LIVE_TESTS"] == "1"
+            && ProcessInfo.processInfo.environment["SPACEO_QUALIFY_PANIC_CONFIGURATION"] == "1"
+        #else
+        return false
+        #endif
+    }
+
+    /// XCTest's first recorded live failure also stops focused reruns through the shared latch.
+    static func stopLiveDisplayWork() {
+        lifecycle.trip("live integration test failed; do not continue or automatically rerun")
+    }
     private let backing: any StageDisplayBacking
-    private let onlineDisplayIDsProvider: @Sendable () -> [CGDirectDisplayID]
+    private let onlineDisplayIDsProvider: @Sendable () throws -> [CGDirectDisplayID]
+    private let configurationProvider: @Sendable () throws -> UserDisplayConfiguration?
+    private let coordinator: DisplayLifecycleCoordinator
+    private let usesLiveLease: Bool
+    let retirementSpaces: [UInt64]
     private let stateLock = NSLock()
     private var didInvalidate = false
     private var invalidatedDisplayID: CGDirectDisplayID = 0
     public var backingScale: Double? {
         stateLock.withLock {
-            guard let pixels = backing.pixelWidth, pixels > 0, backing.bounds.width > 0 else { return nil }
-            return Double(pixels) / backing.bounds.width
+            guard !didInvalidate, coordinator.failureReason == nil else { return nil }
+            return try? coordinator.perform(timeout: 1, retaining: backing) { [backing] _ in
+                let width = backing.bounds.width
+                guard let pixels = backing.pixelWidth, pixels > 0, width > 0 else { return nil }
+                return Double(pixels) / width
+            }
         }
     }
     public let identity = UUID()
@@ -175,16 +185,21 @@ public final class Stage: @unchecked Sendable {
     /// the id we owned; `isValid` is the separate question of whether it is still ours.
     public var displayID: CGDirectDisplayID {
         stateLock.withLock {
-            let live = backing.displayID
-            return live != 0 ? live : invalidatedDisplayID
+            didInvalidate ? invalidatedDisplayID : backing.displayID
         }
     }
     public var isValid: Bool {
-        stateLock.withLock { backing.valid }
+        stateLock.withLock { !didInvalidate && coordinator.failureReason == nil && backing.valid }
     }
+    var hasLifecycleFailure: Bool { coordinator.failureReason != nil }
     /// Global-coordinate rect of the agent's screen.
     public var bounds: CGRect {
-        stateLock.withLock { backing.bounds }
+        stateLock.withLock {
+            guard !didInvalidate, coordinator.failureReason == nil else { return .zero }
+            return (try? coordinator.perform(timeout: 1, retaining: backing) { [backing] _ in
+                backing.bounds
+            }) ?? .zero
+        }
     }
 
     public init(name: String, width: UInt32 = 1920, height: UInt32 = 1080, hiDPI: Bool = true) throws {
@@ -197,47 +212,69 @@ public final class Stage: @unchecked Sendable {
                     ?? "virtual-display is unavailable on this host"
             )
         }
-        let display: SPOVirtualDisplay = try Self.lifecycle.perform {
-            let userConfigurationBefore = Self.userDisplayConfiguration()
+        try Self.lease.acquire()
+        let published: (SPOVirtualDisplay, [UInt64]) = try Self.lifecycle.perform(timeout: 10) { operation in
+            let userConfigurationBefore: UserDisplayConfiguration
+            let online: [CGDirectDisplayID]
+            do {
+                userConfigurationBefore = try Self.checkedUserDisplayConfiguration()
+                online = try Self.checkedOnlineDisplayIDs()
+            } catch {
+                Self.lifecycle.trip("pre-creation display inventory failed")
+                throw error
+            }
+            if let failure = Self.admissionFailure(
+                configuration: userConfigurationBefore,
+                foreignDisplayIDs: online.filter { Self.isSpaceODisplay($0) }
+                    .filter { id in !Self.ownership.lock.withLock { Self.ownership.displayIDs.contains(id) } },
+                qualifyPanicConfiguration: Self.qualifiesPanicConfiguration) {
+                throw SpaceOError.stageCreationFailed(failure)
+            }
+            try operation.check()
+            try Self.lease.begin(creation: true)
+            var completed = false
+            defer {
+                if !completed { Self.lifecycle.trip("display creation did not complete safely") }
+            }
+            try operation.check()
             guard let display = SPOVirtualDisplay(name: name, width: width,
                                                   height: height, hiDPI: hiDPI) else {
-                throw SpaceOError.stageCreationFailed(
-                    "CGVirtualDisplay refused \(width)x\(height)")
+                Self.lifecycle.trip("CGVirtualDisplay creation failed; attachment state is unknown")
+                throw SpaceOError.stageCreationFailed("CGVirtualDisplay refused \(width)x\(height)")
             }
+            operation.retain(display)
+            try operation.check()
 
-            // Do not let the next lifecycle operation begin while this one is only partially
-            // published. Bounds alone are insufficient: the macOS 27 failure mode produced a
-            // nonzero, online display that was inactive, overlapped the user's monitor, and had
-            // no managed Space. No app may launch until all of those properties are healthy and
-            // every pre-existing monitor still has its exact public configuration.
-            let deadline = Date().addingTimeInterval(3.0)
+            let deadline = ContinuousClock.now + .seconds(3)
             var publicationFailure: String?
             repeat {
-                publicationFailure = Self.publicationFailure(
-                    for: display,
-                    preserving: userConfigurationBefore)
+                try operation.check()
+                publicationFailure = try Self.publicationFailure(
+                    for: display, preserving: userConfigurationBefore)
                 if publicationFailure == nil { break }
-                usleep(20_000)
-            } while Date() < deadline
+                usleep(200_000)
+            } while ContinuousClock.now < deadline
             guard publicationFailure == nil else {
-                let unsafeDisplayID = display.displayID
-                Self.invalidateUnpublished(display)
-                let restorationChanges = Self.userDisplayConfiguration()
-                    .changes(from: userConfigurationBefore)
-                let restoration = restorationChanges.isEmpty
-                    ? "user display configuration was preserved"
-                    : restorationChanges.joined(separator: "; ")
-                throw SpaceOError.stageCreationFailed(
-                    "display \(unsafeDisplayID) was not safe to use: "
-                        + (publicationFailure ?? "unknown publication failure")
-                        + "; \(restoration)")
+                // A known unhealthy publication is one failed lifecycle, never an automatic
+                // create/destroy/retry loop. The same deadline/circuit also bounds rollback.
+                _ = try Self.invalidateUnpublished(display, operation: operation)
+                Self.lifecycle.trip(publicationFailure ?? "unsafe display publication")
+                throw SpaceOError.stageCreationFailed(publicationFailure ?? "unsafe display publication")
             }
-
+            try operation.check()
+            let spaces = (SPOSpacesForDisplay(display.displayID) ?? []).map { $0.uint64Value }
+            try operation.check()
+            try Self.lease.finish()
             Self.recordOwned(display.displayID)
-            return display
+            completed = true
+            return (display, spaces)
         }
-        self.backing = display
-        self.onlineDisplayIDsProvider = { Self.onlineDisplayIDs() }
+        self.backing = published.0
+        self.retirementSpaces = published.1
+        self.onlineDisplayIDsProvider = { try Self.checkedOnlineDisplayIDs() }
+        self.configurationProvider = { try Self.checkedUserDisplayConfiguration() }
+        self.coordinator = Self.lifecycle
+        self.usesLiveLease = true
         self.name = name
         self.requestedSize = CGSize(width: Int(width), height: Int(height))
     }
@@ -245,10 +282,15 @@ public final class Stage: @unchecked Sendable {
     init(
         testingBacking: any StageDisplayBacking,
         name: String = "test display",
-        onlineDisplayIDs: @escaping @Sendable () -> [CGDirectDisplayID]
+        onlineDisplayIDs: @escaping @Sendable () throws -> [CGDirectDisplayID],
+        coordinator: DisplayLifecycleCoordinator = DisplayLifecycleCoordinator()
     ) {
         backing = testingBacking
         onlineDisplayIDsProvider = onlineDisplayIDs
+        configurationProvider = { nil } // Safe tests never query WindowServer.
+        self.coordinator = coordinator
+        usesLiveLease = false
+        retirementSpaces = []
         self.name = name
         requestedSize = testingBacking.bounds.size
         Self.recordOwned(testingBacking.displayID)
@@ -257,7 +299,11 @@ public final class Stage: @unchecked Sendable {
     /// Managed Space ids belonging to this display. A healthy stage owns exactly one, and it is
     /// always that display's current Space — which is what keeps agent windows composited.
     public var spaces: [UInt64] {
-        (SPOSpacesForDisplay(displayID) ?? []).map { $0.uint64Value }
+        guard usesLiveLease, isValid else { return [] }
+        let id = displayID
+        return (try? coordinator.perform(timeout: 1, retaining: backing) { _ in
+            (SPOSpacesForDisplay(id) ?? []).map { $0.uint64Value }
+        }) ?? []
     }
 
     /// True when the stage has its own Space, distinct from the user's active one.
@@ -284,66 +330,67 @@ public final class Stage: @unchecked Sendable {
     @discardableResult
     public func invalidate(waitingForRemoval timeout: TimeInterval = 10.0) -> Bool {
         let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 10
-        return stateLock.withLock {
-            let id: CGDirectDisplayID
-            if didInvalidate {
-                id = invalidatedDisplayID
-            } else {
+        let id = stateLock.withLock { () -> CGDirectDisplayID in
+            if !didInvalidate {
                 didInvalidate = true
-                id = backing.displayID
-                invalidatedDisplayID = id
+                invalidatedDisplayID = backing.displayID
             }
-            return Self.lifecycle.perform {
-                let userConfigurationBefore = Self.userDisplayConfiguration()
-                // Repeating invalidation is intentional: a retained failed teardown must be able
-                // to ask the backing object to drop its display again on the next cleanup pass.
-                backing.invalidate()
-                guard id != 0 else {
-                    Self.recordReleased(id)
-                    return true
-                }
-                guard safeTimeout > 0 else {
-                    let retired = Self.displayIsRetired(
-                        id,
-                        onlineDisplayIDs: onlineDisplayIDsProvider())
-                    if retired { Self.recordReleased(id) }
-                    if retired {
-                        Self.recordUserDisplayChanges(
-                            after: "retiring display \(id)",
-                            expected: userConfigurationBefore)
-                    }
-                    return retired
-                }
-
-                // The display's lifecycle runs on a private queue inside the shim, so a plain
-                // sleep is sufficient here — no main run loop required from the caller.
-                let deadline = Date().addingTimeInterval(safeTimeout)
-                while Date() < deadline {
-                    if Self.displayIsRetired(
-                        id,
-                        onlineDisplayIDs: onlineDisplayIDsProvider()) {
-                        // Detaching a monitor can briefly republish the physical graph. Give the
-                        // same bounded lifecycle window a chance to restore the exact pre-detach
-                        // user configuration before recording a diagnostic failure.
-                        if Self.userDisplayConfiguration() == userConfigurationBefore {
-                            Self.recordReleased(id)
-                            return true
-                        }
-                    }
-                    usleep(50_000)
-                }
-                let retired = Self.displayIsRetired(
-                    id,
-                    onlineDisplayIDs: onlineDisplayIDsProvider())
-                if retired {
-                    Self.recordReleased(id)
-                    Self.recordUserDisplayChanges(
-                        after: "retiring display \(id)",
-                        expected: userConfigurationBefore)
-                }
-                return retired
-            }
+            return invalidatedDisplayID
         }
+        let pending = PendingInvalidation(
+            display: backing, displayID: id, onlineDisplayIDs: onlineDisplayIDsProvider)
+        do {
+            return try coordinator.perform(timeout: max(safeTimeout, 0.1), retaining: backing) {
+                [configurationProvider, usesLiveLease, coordinator] operation in
+                try Self.retire(pending, timeout: safeTimeout, operation: operation,
+                                configuration: configurationProvider,
+                                liveLease: usesLiveLease, coordinator: coordinator)
+            }
+        } catch {
+            // Unknown is not removed. Keep the original id and refuse reuse/creation.
+            coordinator.trip("display \(id) retirement was not confirmed")
+            return false
+        }
+    }
+
+    private static func retire(
+        _ pending: PendingInvalidation, timeout: TimeInterval,
+        operation: DisplayLifecycleCoordinator.Operation,
+        configuration: () throws -> UserDisplayConfiguration?,
+        liveLease: Bool, coordinator: DisplayLifecycleCoordinator
+    ) throws -> Bool {
+        let before = try configuration()
+        try operation.check()
+        if liveLease { try lease.begin(creation: false) }
+        try operation.check()
+        pending.display.invalidate()
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        repeat {
+            try operation.check()
+            let retired = displayIsRetired(
+                pending.displayID, onlineDisplayIDs: try pending.onlineDisplayIDs())
+            if retired {
+                if let before, let after = try configuration() {
+                    let changes = after.changes(from: before)
+                    if !changes.isEmpty {
+                        if ContinuousClock.now < deadline { usleep(200_000); continue }
+                        coordinator.trip("user display configuration changed during retirement")
+                        return false
+                    }
+                }
+                try operation.check()
+                if liveLease { try lease.finish() }
+                recordReleased(pending.displayID)
+                return true
+            }
+            if timeout == 0 {
+                if liveLease { coordinator.trip("display removal was not confirmed") }
+                return false
+            }
+            usleep(200_000)
+        } while ContinuousClock.now < deadline
+        coordinator.trip("display \(pending.displayID) removal was not confirmed")
+        return false
     }
 
     public static func activeDisplayIDs() -> [CGDirectDisplayID] {
@@ -376,11 +423,32 @@ public final class Stage: @unchecked Sendable {
         CGDisplayVendorNumber(id) == 0x1AF2 && CGDisplayModelNumber(id) == 0x0001
     }
 
-    /// Exact public configuration of non-SpaceO displays in the current login session.
+    static func checkedOnlineDisplayIDs() throws -> [CGDirectDisplayID] {
+        try checkedDisplayIDs(active: false)
+    }
+
+    private static func checkedDisplayIDs(active: Bool) throws -> [CGDirectDisplayID] {
+        // One bounded allocation and one call: failure/overflow is unknown, never an empty graph.
+        var ids = [CGDirectDisplayID](repeating: 0, count: 128)
+        var count: UInt32 = 0
+        let result = active ? CGGetActiveDisplayList(128, &ids, &count)
+            : CGGetOnlineDisplayList(128, &ids, &count)
+        guard result == .success, count > 0, count < 128 else {
+            throw SpaceOError.stageCreationFailed("display inventory is unavailable or exceeds its bound")
+        }
+        return Array(ids.prefix(Int(count)))
+    }
+
+    /// Diagnostics preserve the existing nonthrowing API; lifecycle uses the checked variant.
     static func userDisplayConfiguration() -> UserDisplayConfiguration {
-        let active = Set(activeDisplayIDs())
+        (try? checkedUserDisplayConfiguration()) ?? UserDisplayConfiguration(displays: [])
+    }
+
+    static func checkedUserDisplayConfiguration() throws -> UserDisplayConfiguration {
+        let active = Set(try checkedDisplayIDs(active: true))
         let main = CGMainDisplayID()
-        let displays = nonSpaceOOnlineDisplayIDs().sorted().map { id in
+        let ids = try checkedOnlineDisplayIDs().filter { !isSpaceODisplay($0) }
+        let displays = ids.sorted().map { id in
             let mode = CGDisplayCopyDisplayMode(id)
             return UserDisplayConfiguration.Display(
                 id: id,
@@ -440,33 +508,49 @@ public final class Stage: @unchecked Sendable {
     private static func publicationFailure(
         for display: SPOVirtualDisplay,
         preserving userConfigurationBefore: UserDisplayConfiguration
-    ) -> String? {
+    ) throws -> String? {
         let id = display.displayID
         let spaces = (SPOSpacesForDisplay(id) ?? []).map { $0.uint64Value }
-        let otherBounds = onlineDisplayIDs()
+        let otherBounds = try checkedOnlineDisplayIDs()
             .filter { $0 != id }
             .map { ($0, CGDisplayBounds($0)) }
         return publicationFailure(
             displayID: id,
             bounds: display.bounds,
-            activeDisplayIDs: Set(activeDisplayIDs()),
+            activeDisplayIDs: Set(try checkedDisplayIDs(active: true)),
             spaces: spaces,
             activeSpace: SPOActiveSpace(),
             otherDisplayBounds: otherBounds,
             userConfigurationBefore: userConfigurationBefore,
-            userConfigurationAfter: userDisplayConfiguration())
+            userConfigurationAfter: try checkedUserDisplayConfiguration())
     }
 
-    private static func recordUserDisplayChanges(
-        after operation: String,
-        expected: UserDisplayConfiguration
-    ) {
-        let changes = userDisplayConfiguration().changes(from: expected)
-        guard !changes.isEmpty else { return }
-        DaemonLog.shared.event("display.user-configuration.changed", [
-            "operation": operation,
-            "changes": changes.joined(separator: "; "),
-        ])
+    /// Conservative admission, not a claim that any refresh rate or topology is proven safe.
+    static func admissionFailure(
+        configuration: UserDisplayConfiguration, foreignDisplayIDs: [CGDirectDisplayID],
+        qualifyPanicConfiguration: Bool = false
+    ) -> String? {
+        guard !configuration.displays.isEmpty,
+              configuration.displays.contains(where: { $0.active }),
+              configuration.displays.allSatisfy({
+                  ($0.active || (qualifyPanicConfiguration && $0.mirroredTo != 0))
+                     && $0.bounds.width.isFinite && $0.bounds.height.isFinite
+                     && $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite
+                     && $0.bounds.width > 0 && $0.bounds.height > 0
+                     && $0.modeWidth > 0 && $0.modeHeight > 0
+              }) else { return "user display configuration is missing, inactive, or unreadable" }
+        guard qualifyPanicConfiguration || configuration.displays.allSatisfy({ $0.mirroredTo == 0 }) else {
+            return "virtual displays are disabled while user displays are mirrored"
+        }
+        guard qualifyPanicConfiguration || configuration.displays.allSatisfy({
+            $0.refreshRate.isFinite && $0.refreshRate > 0 && $0.refreshRate <= 120
+        }) else {
+            return "virtual displays require known user display refresh rates no higher than 120 Hz"
+        }
+        guard foreignDisplayIDs.isEmpty else {
+            return "unowned SpaceO displays are still online; refusing another attachment"
+        }
+        return nil
     }
 
     /// Active displays that belong to the user's existing display graph, not SpaceO.
@@ -530,15 +614,19 @@ public final class Stage: @unchecked Sendable {
     }
 
     @discardableResult
-    private static func invalidateUnpublished(_ display: any StageDisplayBacking) -> Bool {
+    private static func invalidateUnpublished(
+        _ display: any StageDisplayBacking, operation: DisplayLifecycleCoordinator.Operation
+    ) throws -> Bool {
+        try operation.check()
         let id = display.displayID
         display.invalidate()
-        let deadline = Date().addingTimeInterval(3)
-        while Date() < deadline,
-              !displayIsRetired(id, onlineDisplayIDs: onlineDisplayIDs()) {
-            usleep(50_000)
-        }
-        return displayIsRetired(id, onlineDisplayIDs: onlineDisplayIDs())
+        let deadline = ContinuousClock.now + .seconds(3)
+        repeat {
+            try operation.check()
+            if displayIsRetired(id, onlineDisplayIDs: try checkedOnlineDisplayIDs()) { return true }
+            usleep(200_000)
+        } while ContinuousClock.now < deadline
+        return false
     }
 
     deinit {
@@ -547,27 +635,22 @@ public final class Stage: @unchecked Sendable {
             didInvalidate = true
             invalidatedDisplayID = backing.displayID
             return PendingInvalidation(
-                display: backing,
-                displayID: backing.displayID,
+                display: backing, displayID: invalidatedDisplayID,
                 onlineDisplayIDs: onlineDisplayIDsProvider)
         }
         guard let pending else { return }
-        // Do not block deinit, but still serialize the fallback teardown with every other
-        // display graph change.
-        Self.lifecycle.enqueue {
-            pending.display.invalidate()
-            let deadline = Date().addingTimeInterval(10)
-            while Date() < deadline,
-                  !Stage.displayIsRetired(
-                    pending.displayID,
-                    onlineDisplayIDs: pending.onlineDisplayIDs()) {
-                usleep(50_000)
-            }
-            if Stage.displayIsRetired(
-                pending.displayID,
-                onlineDisplayIDs: pending.onlineDisplayIDs()) {
-                Stage.recordReleased(pending.displayID)
-            }
+        let coordinator = coordinator
+        let configuration = configurationProvider
+        let liveLease = usesLiveLease
+        // Never query or mutate the display server synchronously from deinit.
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                _ = try coordinator.perform(timeout: 10, retaining: pending.display) { operation in
+                    try Self.retire(pending, timeout: 10, operation: operation,
+                                    configuration: configuration, liveLease: liveLease,
+                                    coordinator: coordinator)
+                }
+            } catch { coordinator.trip("fallback display retirement was not confirmed") }
         }
     }
 }

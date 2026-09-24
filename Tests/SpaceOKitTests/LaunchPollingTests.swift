@@ -24,6 +24,25 @@ final class LaunchPollingTests: XCTestCase {
         return url
     }
 
+    func testChromiumStartupDeadlineHasActionableLaunchError() {
+        let error = AppLauncher.launchFailure(DevToolsDeadline.Exceeded(), application: "Test Browser")
+        guard case let SpaceOError.launchFailed(message) = error else {
+            return XCTFail("startup deadline must map to launch_failed, got \(error)")
+        }
+        XCTAssertTrue(message.contains("Test Browser"))
+        XCTAssertTrue(message.contains("DevTools"))
+    }
+
+    func testStartupErrorMappingPreservesCancellationAndProcessExit() {
+        XCTAssertTrue(AppLauncher.launchFailure(CancellationError(), application: "Test") is CancellationError)
+        let error = AppLauncher.launchFailure(
+            SpaceOError.applicationExited("browser exited during startup"), application: "Test")
+        guard case let SpaceOError.applicationExited(message) = error else {
+            return XCTFail("process exit must retain its public error, got \(error)")
+        }
+        XCTAssertEqual(message, "browser exited during startup")
+    }
+
     func testMarkerAcceptsCompletePortLinesWithinBoundAndRejectsPartialOrMalformedPorts() throws {
         let profile = try profile()
         let marker = profile.appendingPathComponent("DevToolsActivePort")

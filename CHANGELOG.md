@@ -8,6 +8,15 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Release qualification fixes
 
+- Contain the September 25 display incident: refuse unsafe display graphs, coordinate creation
+  across processes,
+  persist lifecycle failures and creation budgets, and bound lifecycle waits even when display
+  IPC stalls. Live tests now require reserved-host opt-in, stop after a failure, and have an
+  external supervisor. These safeguards do not fix or guarantee prevention of Apple's driver
+  panic; see `docs/DISPLAY_SAFETY.md`. The temporary macOS 27+ blanket quarantine was removed
+  at the owner’s request; runtime checks and lifecycle safeguards remain enforced.
+- Report exhausted Chromium startup deadlines as `launch_failed` after owned-process cleanup,
+  preserving cancellation and application-exit errors.
 - Create managed Chromium pages in the background through DevTools instead of allowing the
   first browser window to activate the user’s desktop during launch.
 - Scope the first DMG to a native-app and Chromium preview. Refuse managed Electron launches

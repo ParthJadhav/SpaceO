@@ -1,0 +1,109 @@
+import Foundation
+
+/// Bounds the caller's wait, not the underlying synchronous WindowServer IPC. A timed-out
+/// operation remains on this one worker; no replacement workers or subsequent mutations run.
+/// Retaining its context prevents ARC from turning a late result into an unplanned teardown.
+final class DisplayLifecycleCoordinator: @unchecked Sendable {
+    final class Operation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var retained: [AnyObject] = []
+        private let checkHealth: @Sendable () throws -> Void
+
+        init(checkHealth: @escaping @Sendable () throws -> Void) {
+            self.checkHealth = checkHealth
+        }
+
+        func retain(_ value: AnyObject) { lock.withLock { retained.append(value) } }
+        func check() throws { try checkHealth() }
+    }
+
+    private final class Completion<T>: @unchecked Sendable {
+        let lock = NSLock()
+        let signal = DispatchSemaphore(value: 0)
+        var result: Result<T, Error>?
+    }
+
+    private let queue = DispatchQueue(label: "spaceo.display-lifecycle")
+    private let lock = NSLock()
+    private var failure: String?
+    private var operations: [UUID: Operation] = [:]
+    private var quarantined: [ObjectIdentifier: AnyObject] = [:]
+    private let onFailure: @Sendable (String) -> Void
+
+    init(onFailure: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.onFailure = onFailure
+    }
+
+    var failureReason: String? { lock.withLock { failure } }
+
+    func check() throws {
+        if let reason = failureReason { throw SpaceOError.stageCreationFailed(reason) }
+    }
+
+    func trip(_ reason: String) {
+        let first = lock.withLock { () -> Bool in
+            guard failure == nil else { return false }
+            failure = "display safety circuit is open: \(reason); stop live work and inspect "
+                + "docs/DISPLAY_SAFETY.md before recovery"
+            return true
+        }
+        if first { onFailure(reason) }
+    }
+
+    func perform<T>(
+        timeout: TimeInterval,
+        retaining value: AnyObject? = nil,
+        _ body: @escaping @Sendable (Operation) throws -> T
+    ) throws -> T {
+        let operation = Operation { [weak self] in
+            guard let self else {
+                throw SpaceOError.stageCreationFailed("display lifecycle owner no longer exists")
+            }
+            try self.check()
+        }
+        if let value { operation.retain(value) }
+        let id = UUID()
+        // Keep contexts even on refusal after a failure: releasing a display-owning object
+        // here could mutate the already unhealthy graph. Production stages are finite-budgeted.
+        let admitted = lock.withLock { () -> Bool in
+            guard failure == nil, operations.count < 16 else {
+                if let value { quarantined[ObjectIdentifier(value)] = value }
+                return false
+            }
+            operations[id] = operation
+            return true
+        }
+        guard admitted else {
+            trip("too many pending lifecycle operations or an earlier lifecycle failure")
+            try check()
+            throw SpaceOError.stageCreationFailed("display lifecycle admission refused")
+        }
+        let completion = Completion<T>()
+        queue.async {
+            let result = Result { () throws -> T in
+                try operation.check()
+                return try body(operation)
+            }
+            completion.lock.withLock { completion.result = result }
+            completion.signal.signal()
+        }
+        let seconds = timeout.isFinite ? min(max(timeout, 0.1), 30) : 10
+        guard completion.signal.wait(timeout: .now() + seconds) == .success else {
+            trip("a display operation exceeded \(seconds) seconds; its delivery is unknown")
+            try check()
+            throw SpaceOError.stageCreationFailed("display lifecycle timed out")
+        }
+        // A queued call may have timed out while this one was running. Never publish its result
+        // as success once any caller has declared the shared lifecycle unhealthy.
+        try lock.withLock {
+            if let failure { throw SpaceOError.stageCreationFailed(failure) }
+            operations.removeValue(forKey: id)
+        }
+        return try completion.lock.withLock {
+            guard let result = completion.result else {
+                throw SpaceOError.stageCreationFailed("display operation completed without a result")
+            }
+            return try result.get()
+        }
+    }
+}
