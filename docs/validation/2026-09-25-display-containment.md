@@ -50,9 +50,10 @@ Two harness problems were identified rather than hidden by the passing case coun
 WindowServer recorded `Display 2 hot plug 0` at **02:22:49**, then removed the mirror relationship
 and disabled the external display. At that moment the final case was in its pacing interval;
 the previous virtual display had retired at 02:20:32, and the final case did not create its
-display until 02:23:32. These timestamps do not establish why the external link disappeared.
-The owner was asked whether the disconnect was intentional; further live runs were stopped
-pending that answer.
+display until 02:23:32. The owner subsequently confirmed that they disconnected the monitor or
+changed its setup. This event is therefore accounted for as an intentional setup change, not
+evidence of an unexpected display-driver failure. It still invalidates qualification of the
+original topology for the final case and subsequent MCP matrix.
 
 The old suite captured a fresh physical baseline after every pacing interval, allowing this
 change to go unnoticed by the per-case assertions. The follow-up preserves one physical baseline
@@ -62,8 +63,8 @@ baseline or test work, so a failure in a case that creates no display still bloc
 
 ## Outstanding qualification
 
-Account for the physical disconnect, establish the intended stable topology, then retain a
-complete run from the final build and its MCP matrix without topology changes or harness errors.
+Reconnect the intended mirrored Alienware 240 Hz setup, then retain a complete run from the final
+build and its MCP matrix without topology changes or harness errors.
 Do not describe the requested mirrored 240 Hz setup, the final source, or a DMG as fully qualified
 from these mixed-topology experiments. Distribution additionally requires the exact signed,
 notarized, stapled candidate and owner GO under [RELEASE_POLICY.md](../RELEASE_POLICY.md).
