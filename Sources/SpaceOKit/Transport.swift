@@ -642,30 +642,25 @@ public enum Transport {
         /// Closing is also what releases a peer thread blocked in `accept()`: Darwin wakes it
         /// with `ECONNABORTED`. `shutdown()` on a listening socket only returns `ENOTCONN`.
         private func releaseListener(markStopping: Bool, retiring ownThread: Thread? = nil) {
-            let state: (fd: Int32, unlink: Bool, device: dev_t?, inode: ino_t?) =
-                stateLock.withLock {
-                    if markStopping { stopping = true }
-                    // Clear the thread record in the same critical section that drops the
-                    // socket, so no window exists where start() sees a listener released but
-                    // an accept loop still registered.
-                    if let ownThread, thread === ownThread { thread = nil }
-                    let snapshot = (listenFD, ownsSocket, socketDevice, socketInode)
-                    listenFD = -1
-                    ownsSocket = false
-                    socketDevice = nil
-                    socketInode = nil
-                    return snapshot
+            stateLock.withLock {
+                if markStopping { stopping = true }
+                // Finish pathname cleanup before start() can observe released state.
+                // Otherwise retirement can remove the stale socket while start() is
+                // inspecting it, making re-arming fail with ENOENT.
+                if listenFD >= 0 { close(listenFD) }
+                if ownsSocket {
+                    var current = stat()
+                    if lstat(path, &current) == 0,
+                       current.st_dev == socketDevice,
+                       current.st_ino == socketInode {
+                        unlink(path)
+                    }
                 }
-            if state.fd >= 0 {
-                close(state.fd)
-            }
-            if state.unlink {
-                var current = stat()
-                if lstat(path, &current) == 0,
-                   current.st_dev == state.device,
-                   current.st_ino == state.inode {
-                    unlink(path)
-                }
+                if let ownThread, thread === ownThread { thread = nil }
+                listenFD = -1
+                ownsSocket = false
+                socketDevice = nil
+                socketInode = nil
             }
         }
     }

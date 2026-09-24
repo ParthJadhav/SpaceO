@@ -8,6 +8,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Open-source preparation
 
+- Finish retired daemon socket cleanup before allowing the same server to restart, avoiding
+  an intermittent stale-socket removal failure.
+
 - Fix CLI argument normalization for the hosted Swift 6.2 compiler and align the live
   conformance harness with the current 34-tool MCP catalogue.
 
