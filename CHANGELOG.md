@@ -31,6 +31,8 @@ All notable user-visible changes are recorded here. SpaceO follows
   first browser window to activate the user’s desktop during launch.
 - Scope the first DMG to a native-app and Chromium preview. Refuse managed Electron launches
   before startup because Cursor can take desktop focus; MCP clients in those editors remain usable.
+- Give the Viewer's menu bar extra a dedicated tilted-rings mark (`Assets/Brand/spaceo-menubar.svg`)
+  in place of a shrunken app icon, which rendered as a solid tile as a template image.
 
 ### Open-source preparation
 
