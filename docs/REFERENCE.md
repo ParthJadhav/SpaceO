@@ -465,10 +465,7 @@ Known boundaries:
 - **SIGKILL leaks apps.** A daemon killed with `-9` cannot quit the apps it started; displays
   normally follow process lifetime, while `SIGTERM`, Ctrl-C, and `spaceo daemon stop` perform
   orderly cleanup.
-- **Display-stack risk.** On the macOS 27 preview verification host, a rapid integration run
-  while the physical displays were mirrored at high refresh left phantom virtual displays in
-  the login session and left both physical displays online but inactive. A display sleep/wake
-  removed the ownerless display IDs. Creation is now fail-closed: a new display is published only
+- **Display-stack safeguards.** Creation is fail-closed: a new display is published only
   after it is active, non-overlapping, owns a managed Space separate from the user's active Space,
   and the online/active/main/bounds/mirroring/rotation/mode/refresh state of every physical display
   is unchanged. Unsafe attachments are invalidated and refused. Empty displays remain available

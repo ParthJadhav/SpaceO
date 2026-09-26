@@ -1,9 +1,7 @@
 # Live WindowServer tests
 
-**September 25 containment:** the owner requested removal of the blanket macOS 27+ quarantine;
-lifecycle and unsafe-display checks remain enforced. Read [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md)
-before scheduling reserved-host qualification. A lower refresh rate or another login is not
-panic containment. Do not run this suite on an actively used desktop.
+Read [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md) for the lifecycle safeguards before scheduling a
+run. Do not run this suite on an actively used desktop.
 
 `Tests/SpaceOKitTests/IntegrationTests.swift` is the only coverage SpaceO has for the claims that
 define the product: Stage create/destroy, tile isolation, capture, input routing, the DevTools
@@ -51,8 +49,7 @@ result, after attempting the current session's cleanup; it does not start anothe
 
 Both create virtual displays, launch applications, and synthesise input into the **current
 graphical login**. Do not run them on a desktop you are using: synthesised keystrokes go to
-whatever holds focus. Use a reserved machine and a dedicated login. Prior authorization for the September 5 audit does
-not qualify this post-incident configuration. Preserve unrelated state and record pre/post
+whatever holds focus. Use a reserved machine and a dedicated login. Preserve unrelated state and record pre/post
 display topology. Do not switch users or change displays during a run. Stop and inspect failed
 or interrupted runs; do not automatically repeat them.
 

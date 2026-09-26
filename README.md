@@ -102,10 +102,8 @@ reported as a confirmed result.
 You need Apple Silicon, macOS 14 or later, and a recent Xcode toolchain with Swift 6.2 or later.
 CI selects Xcode 26.3. Runtime support depends on your macOS build; start with the read-only check.
 
-Virtual-display creation uses runtime capability checks on macOS 14 and later, including macOS 27.
-Display-graph checks, lifecycle deadlines, and persistent creation limits remain enforced.
-See [display safety and qualification](docs/DISPLAY_SAFETY.md); API availability alone is not
-proof of safe operation.
+Virtual-display creation uses runtime capability checks on macOS 14 and later, with bounded
+lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md).
 
 ```bash
 git clone https://github.com/ParthJadhav/SpaceO.git

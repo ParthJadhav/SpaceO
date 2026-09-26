@@ -54,10 +54,8 @@ Before public approval, exercise the exact Developer ID-signed, notarized, and s
 obtained through the intended distribution path, not binaries left in `.build`. By explicit owner
 direction on 2026-09-05, the implementer may perform this qualification in the owner-authorized
 existing graphical login. A separate tester, clean Mac, or clean login is not required.
-After the September 25 display incident, that desktop must be explicitly reserved for testing;
-follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md). The owner reserved the current Mac and separately
-authorized an experiment with the original mirrored 240 Hz setup. That experiment uses an
-explicit qualification build; it does not approve distribution or qualify the final signed DMG.
+That desktop must be reserved for testing while the run is in progress; follow
+[DISPLAY_SAFETY.md](DISPLAY_SAFETY.md).
 
 Record existing applications, sessions, display topology, and permission state before testing;
 preserve unrelated user state and verify it afterward. Do not switch users, log out, or change

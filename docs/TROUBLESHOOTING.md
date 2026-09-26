@@ -106,7 +106,7 @@ after a timed-out wait. `SPACEO_SESSION` and `SPACEO_LEASE` fill in `--session` 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `doctor` reports **orphaned displays** | Virtual displays outlived their owner (crash, `kill -9`, aggressive live-test churn) | Trigger a display sleep/wake, which rebuilds the display graph: `pmset displaysleepnow` then `caffeinate -u -t 3`. Never disable SIP. |
-| Screen goes blank or input seems dead after heavy live runs | Same, at its worst; see the [incident report](incidents/2026-07-26-display-input-lockout.md) | Same sleep/wake. Do not run `make test-live` or the computer-use matrix on a desktop you are using, or with mirrored displays. |
+| Screen goes blank or input seems dead after heavy live runs | Same, at its worst; see the [incident report](incidents/2026-07-26-display-input-lockout.md) | Same sleep/wake. Do not run `make test-live` or the computer-use matrix on a desktop you are using. |
 | `SpaceO display ids` still listed 15 s after the last session ended | Empty displays stay for a 15-second reuse window | Expected. They retire on their own. |
 | Session creation fails with a CoreGraphics or WindowServer error | The requested geometry or density could not be allocated | Lower `SPACEO_SESSIONS_PER_DISPLAY`, drop `SPACEO_DISPLAY_SIZE`, or check `spaceo pool`. |
 | Viewer refuses Control on a display | It is a physical display, or an empty SpaceO display | Expected: physical displays are view-only; pick a SpaceO display that holds a session. |
