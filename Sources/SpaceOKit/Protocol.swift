@@ -1230,6 +1230,8 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
     public var responsibleProcess: String?
     /// True while the daemon refuses new sessions ahead of a restart.
     public var draining: Bool?
+    /// Current lifecycle circuit/journal state; absent on older daemons.
+    public var displaySafety: DisplaySafetyStatus?
     /// True when a LaunchAgent supervises this daemon.
     public var supervisedByLaunchd: Bool?
 
@@ -1247,7 +1249,8 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
         canCapture: Bool? = nil,
         responsibleProcess: String? = nil,
         draining: Bool? = nil,
-        supervisedByLaunchd: Bool? = nil
+        supervisedByLaunchd: Bool? = nil,
+        displaySafety: DisplaySafetyStatus? = nil
     ) {
         self.version = version
         self.protocolVersion = protocolVersion
@@ -1263,6 +1266,7 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
         self.responsibleProcess = responsibleProcess
         self.draining = draining
         self.supervisedByLaunchd = supervisedByLaunchd
+        self.displaySafety = displaySafety
     }
 }
 

@@ -1,6 +1,19 @@
 import Foundation
 import Darwin
 
+/// Read-only lifecycle admission state. A ready journal does not qualify the display topology.
+public struct DisplaySafetyStatus: Codable, Sendable, Equatable {
+    public enum State: String, Codable, Sendable { case ready, blocked, unknown }
+    public let state: State
+    public let reason: String?
+    public var allowsCreation: Bool { state == .ready }
+
+    public init(state: State, reason: String? = nil) {
+        self.state = state
+        self.reason = reason
+    }
+}
+
 /// One display-owning SpaceO process per user. A persistent, small journal carries creation
 /// attempts and an unfinished-mutation/failure latch across daemon and XCTest restarts.
 /// This coordinates same-user clients; it is not a security boundary.
@@ -18,12 +31,52 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     private var journal = Journal()
     private var ownsLiveTest = false
 
-    init(path: String = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/SpaceO/display-safety.json").path) {
+    static var defaultPath: String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/SpaceO/display-safety.json").path
+    }
+
+    init(path: String = DisplayLifecycleLease.defaultPath) {
         self.path = path
     }
 
     deinit { if descriptor >= 0 { close(descriptor) } }
+
+    /// Never acquire the owner's lease, create/reset a file, or wait for its mutex in doctor.
+    /// A concurrent write can yield unknown, which must not be reported as healthy.
+    static func status(path: String = defaultPath) -> DisplaySafetyStatus {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else {
+            return errno == ENOENT ? .init(state: .ready)
+                : .init(state: .unknown, reason: "cannot open lifecycle journal")
+        }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_uid == getuid(), info.st_nlink == 1, info.st_mode & 0o077 == 0,
+              info.st_size >= 0, info.st_size <= 4096 else {
+            return .init(state: .unknown, reason: "lifecycle journal is not a private bounded regular file")
+        }
+        var bytes = [UInt8](repeating: 0, count: 4096)
+        let count = pread(fd, &bytes, bytes.count, 0)
+        guard count >= 0, count == info.st_size else {
+            return .init(state: .unknown, reason: "cannot read a complete lifecycle journal")
+        }
+        if count == 0 { return .init(state: .ready) }
+        guard let journal = try? JSONDecoder().decode(Journal.self, from: Data(bytes.prefix(count))),
+              journal.attempts.count <= 12,
+              journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+            return .init(state: .unknown, reason: "lifecycle journal is unreadable; inspection is required")
+        }
+        if let failure = journal.failure {
+            return .init(state: .blocked, reason: String(failure.prefix(512)))
+        }
+        if journal.pending || journal.liveTestPending == true {
+            return .init(state: .blocked, reason: "a display mutation or live case is pending or was interrupted")
+        }
+        return .init(state: .ready)
+    }
+
 
     func acquire() throws {
         try lock.withLock {
@@ -73,13 +126,17 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                     throw refused("clock moved backwards; creation history must age out")
                 }
                 journal.attempts.removeAll { time - $0 >= 600 }
-                guard journal.attempts.count < 12,
-                      journal.attempts.filter({ time - $0 < 60 }).count < 4 else {
+                let minute = journal.attempts.filter { time - $0 < 60 }.sorted()
+                let tenMinutes = journal.attempts.sorted()
+                let minuteWait = minute.count >= 4 ? minute[minute.count - 4] + 60 - time : 0
+                let tenMinuteWait = tenMinutes.count >= 12 ? tenMinutes[tenMinutes.count - 12] + 600 - time : 0
+                let retryAfter = max(minuteWait, tenMinuteWait)
+                guard retryAfter <= 0 else {
                     throw SpaceOError.resourceLimit(
                         kind: .creationRate,
                         detail: "display safety limit: at most 4 creation attempts per minute "
                             + "and 12 per ten minutes across SpaceO processes",
-                        retryAfter: 60)
+                        retryAfter: retryAfter)
                 }
                 journal.attempts.append(time)
             }

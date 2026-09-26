@@ -502,6 +502,15 @@ async function webSuite() {
       step("[web] right-click opens the page context action",
            openedContext.ok && state.events.includes("context"), state.raw);
     }
+    const reopened = await call("spaceo_open_app", {
+      session: s, app: "Google Chrome", files: [pageFixture],
+    });
+    const reusedWindows = await call("spaceo_list_windows", { session: s });
+    const windowCount = (listing) => (listing.text.match(/^\s*window \d+/gm) ?? []).length;
+    step("[web] reused Chrome opens files through background targets",
+         reopened.ok && /reused it/.test(reopened.text) && /background page/.test(reopened.text)
+         && windowCount(reusedWindows) > windowCount(launchWindows), reopened.text);
+    assertWindowsContained("[web] reused file-open windows remain contained", reusedWindows);
     await verifyIsolation(s, "web");
   } finally {
     await destroy("cu-web");

@@ -587,6 +587,19 @@ public enum AppLauncher {
         return AppNameCatalog.suggestions(for: name, in: AppNameCatalog.cachedEntries())
     }
 
+    /// Reopening a managed browser must use its private background-target endpoint. Never
+    /// fall back to LaunchServices when that endpoint is missing or an Electron app is reused.
+    static func reusedBrowserPort(appURL: URL, devToolsPort: Int?) throws -> Int? {
+        guard !isElectronFamily(appURL) else {
+            throw SpaceOError.launchFailed("managed Electron file opens are unavailable in this preview")
+        }
+        guard isChromiumFamily(appURL) else { return nil }
+        guard let port = devToolsPort, (1...65_535).contains(port) else {
+            throw SpaceOError.launchFailed("reused Chromium has no private DevTools endpoint; file open refused")
+        }
+        return port
+    }
+
     /// Is this bundle a Chromium derivative? Read from the bundle rather than a name list,
     /// so forks we have never heard of are still handled correctly.
     public static func isChromiumFamily(_ appURL: URL) -> Bool {

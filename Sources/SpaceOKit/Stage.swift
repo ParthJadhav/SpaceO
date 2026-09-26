@@ -149,6 +149,12 @@ public final class Stage: @unchecked Sendable {
         #endif
     }
 
+    /// Includes in-memory circuit failures even if the asynchronous journal write is stalled.
+    public static func displaySafetyStatus() -> DisplaySafetyStatus {
+        if let reason = lifecycle.failureReason { return .init(state: .blocked, reason: reason) }
+        return DisplayLifecycleLease.status()
+    }
+
     /// XCTest's first recorded live failure also stops focused reruns through the shared latch.
     static func stopLiveDisplayWork() {
         lifecycle.trip("live integration test failed; do not continue or automatically rerun")
@@ -280,6 +286,9 @@ public final class Stage: @unchecked Sendable {
             try operation.check()
             let spaces = (SPOSpacesForDisplay(display.displayID) ?? []).map { $0.uint64Value }
             try operation.check()
+            guard !spaces.isEmpty else {
+                throw SpaceOError.stageCreationFailed("published display has no verified managed Space")
+            }
             try Self.lease.finish()
             Self.recordOwned(display.displayID)
             completed = true
@@ -299,11 +308,12 @@ public final class Stage: @unchecked Sendable {
         testingBacking: any StageDisplayBacking,
         name: String = "test display",
         onlineDisplayIDs: @escaping @Sendable () throws -> [CGDirectDisplayID],
-        coordinator: DisplayLifecycleCoordinator = DisplayLifecycleCoordinator()
+        coordinator: DisplayLifecycleCoordinator = DisplayLifecycleCoordinator(),
+        configuration: @escaping @Sendable () throws -> UserDisplayConfiguration? = { nil }
     ) {
         backing = testingBacking
         onlineDisplayIDsProvider = onlineDisplayIDs
-        configurationProvider = { nil } // Safe tests never query WindowServer.
+        configurationProvider = configuration // Safe tests inject values, never WindowServer.
         self.coordinator = coordinator
         usesLiveLease = false
         retirementSpaces = []
@@ -338,11 +348,19 @@ public final class Stage: @unchecked Sendable {
         bounds.insetBy(dx: inset, dy: inset)
     }
 
+    /// Refuse publishing a slot after any lifecycle failure. Allocation uses publication-time
+    /// Space IDs, so claiming it never introduces another synchronous display query.
+    func requireAllocationReady() throws {
+        try coordinator.check()
+        guard isValid else { throw SpaceOError.stageCreationFailed("display is no longer valid") }
+    }
+
     /// Drop the display.
     ///
     /// WindowServer removes a virtual display asynchronously, so by default we wait for it to
     /// actually leave the online list. Merely becoming inactive is not teardown: an attached
-    /// phantom can still poison the next display-graph change.
+    /// phantom can still poison the next display-graph change. The timeout is one total budget
+    /// covering queueing, preflight, invalidation, removal and final verification.
     @discardableResult
     public func invalidate(waitingForRemoval timeout: TimeInterval = 10.0) -> Bool {
         let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 10
@@ -380,7 +398,7 @@ public final class Stage: @unchecked Sendable {
         if liveLease { try lease.begin(creation: false) }
         try operation.check()
         pending.display.invalidate()
-        let deadline = ContinuousClock.now + .seconds(timeout)
+        let deadline = operation.deadline
         repeat {
             try operation.check()
             let retired = displayIsRetired(
@@ -389,7 +407,7 @@ public final class Stage: @unchecked Sendable {
                 if let before, let after = try configuration() {
                     let changes = after.changes(from: before)
                     if !changes.isEmpty {
-                        if ContinuousClock.now < deadline { usleep(200_000); continue }
+                        if DispatchTime.now() < deadline { usleep(200_000); continue }
                         coordinator.trip("user display configuration changed during retirement")
                         return false
                     }
@@ -404,7 +422,7 @@ public final class Stage: @unchecked Sendable {
                 return false
             }
             usleep(200_000)
-        } while ContinuousClock.now < deadline
+        } while DispatchTime.now() < deadline
         coordinator.trip("display \(pending.displayID) removal was not confirmed")
         return false
     }

@@ -96,6 +96,12 @@ assertions, but the external monitor disconnected during the final pacing interv
 wrapper later errored. The 34-step MCP matrix passed on built-in display only. These are not a
 complete qualification of the requested setup. The suite now rejects topology changes between
 cases, too; see the [experiment record](docs/validation/2026-09-25-display-containment.md).
+September 26 follow-up closes review gaps in lifecycle diagnostics, allocation-time Space queries,
+shared retirement deadlines and creation-budget retry intervals. Reused Chromium file opens use
+the private background-target endpoint, and the live matrix exercises that path. Shipped agent
+playbooks now state the Electron managed-launch refusal. Deterministic verification passes;
+live requalification of this follow-up remains pending.
+
 The owner confirmed the physical disconnect/setup change was intentional. Full qualification
 on the restored original topology remains open.
 

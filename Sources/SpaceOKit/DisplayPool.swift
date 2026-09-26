@@ -138,7 +138,8 @@ public final class DisplayPool {
         recentCreations.append(Date())
         let stage = try stageFactory("SpaceO display \(nextDisplayNumber)",
                                      dimensions.width, dimensions.height, hiDPI)
-        AgentActivity.claim(spaces: stage.spaces)
+        try stage.requireAllocationReady()
+        AgentActivity.claim(spaces: stage.retirementSpaces)
 
         let occupancy = Occupancy(stage: stage,
                                   capacity: sessionsPerDisplay,
@@ -178,7 +179,8 @@ public final class DisplayPool {
         recentCreations.append(Date())
         let stage = try stageFactory("SpaceO display \(nextDisplayNumber)",
                                      dimensions.width, dimensions.height, hiDPI)
-        AgentActivity.claim(spaces: stage.spaces)
+        try stage.requireAllocationReady()
+        AgentActivity.claim(spaces: stage.retirementSpaces)
         let occupancy = Occupancy(stage: stage, capacity: 1,
                                   pixels: Int(dimensions.width) * Int(dimensions.height))
         occupancy.taken.insert(0)

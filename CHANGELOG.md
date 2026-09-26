@@ -8,6 +8,12 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Release qualification fixes
 
+- Surface persistent display-safety latches in daemon health and `doctor`, with blocked readiness
+  and recovery guidance. Report the actual wait for the shared creation budget.
+- Use verified Space IDs when allocating a display, reject circuit-failed allocations, and use
+  one total deadline for display retirement. Reused Chromium file opens now use background
+  DevTools targets, with no LaunchServices fallback.
+
 - Contain the September 25 display incident: refuse unsafe display graphs, coordinate creation
   across processes,
   persist lifecycle failures and creation budgets, and bound lifecycle waits even when display

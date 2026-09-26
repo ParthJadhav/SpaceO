@@ -7,9 +7,11 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
     final class Operation: @unchecked Sendable {
         private let lock = NSLock()
         private var retained: [AnyObject] = []
+        let deadline: DispatchTime
         private let checkHealth: @Sendable () throws -> Void
 
-        init(checkHealth: @escaping @Sendable () throws -> Void) {
+        init(deadline: DispatchTime, checkHealth: @escaping @Sendable () throws -> Void) {
+            self.deadline = deadline
             self.checkHealth = checkHealth
         }
 
@@ -66,9 +68,14 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
         retaining value: AnyObject? = nil,
         _ body: @escaping @Sendable (Operation) throws -> T
     ) throws -> T {
-        let operation = Operation { [weak self] in
+        let seconds = timeout.isFinite ? min(max(timeout, 0.1), 30) : 10
+        let deadline = DispatchTime.now() + seconds
+        let operation = Operation(deadline: deadline) { [weak self] in
             guard let self else {
                 throw SpaceOError.stageCreationFailed("display lifecycle owner no longer exists")
+            }
+            if DispatchTime.now() >= deadline {
+                self.trip("a display operation exhausted its total deadline")
             }
             try self.check()
         }
@@ -98,8 +105,7 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
             completion.lock.withLock { completion.result = result }
             completion.signal.signal()
         }
-        let seconds = timeout.isFinite ? min(max(timeout, 0.1), 30) : 10
-        guard completion.signal.wait(timeout: .now() + seconds) == .success else {
+        guard completion.signal.wait(timeout: deadline) == .success else {
             trip("a display operation exceeded \(seconds) seconds; its delivery is unknown")
             try check()
             throw SpaceOError.stageCreationFailed("display lifecycle timed out")

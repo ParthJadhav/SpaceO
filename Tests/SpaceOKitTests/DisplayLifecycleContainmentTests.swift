@@ -156,6 +156,34 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         wait(for: [finished], timeout: 1)
     }
 
+    func testRetirementPreambleConsumesTheSameDeadlineAndCannotInvalidateLate() {
+        let unblock = DispatchSemaphore(value: 0)
+        let returned = expectation(description: "late preflight returned")
+        let stage = Stage(testingBacking: Backing { XCTFail("expired preflight must not detach a display") },
+                          onlineDisplayIDs: { XCTFail("expired preflight must not query removal"); return [] },
+                          configuration: {
+            unblock.wait()
+            returned.fulfill()
+            return nil
+        })
+        XCTAssertFalse(stage.invalidate(waitingForRemoval: 0.1))
+        unblock.signal()
+        wait(for: [returned], timeout: 1)
+        XCTAssertTrue(stage.hasLifecycleFailure)
+    }
+
+    func testPoolNeverPublishesAllocationAfterLifecycleFailure() throws {
+        for exclusive in [false, true] {
+            let coordinator = DisplayLifecycleCoordinator()
+            let stage = Stage(testingBacking: Backing(), onlineDisplayIDs: { [] }, coordinator: coordinator)
+            coordinator.trip("injected managed-Space query deadline")
+            let pool = DisplayPool(stageFactory: { _, _, _, _ in stage })
+            XCTAssertThrowsError(try exclusive ? pool.allocateExclusive() : pool.allocate())
+            XCTAssertEqual(pool.sessionCount, 0)
+            XCTAssertEqual(pool.displayCount, 0)
+        }
+    }
+
     private func withJournal(_ body: (String) throws -> Void) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -233,10 +261,67 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
                 try lease.begin(creation: true, now: start.addingTimeInterval(Double(index * 30)))
                 try lease.finish()
             }
-            XCTAssertThrowsError(try lease.begin(creation: true, now: start.addingTimeInterval(360)))
+            XCTAssertThrowsError(try lease.begin(creation: true, now: start.addingTimeInterval(360))) { error in
+                guard case let SpaceOError.resourceLimit(_, _, retry) = error else {
+                    return XCTFail("expected a creation budget refusal")
+                }
+                XCTAssertEqual(retry, 240)
+            }
             try lease.begin(creation: true, now: start.addingTimeInterval(600))
             try lease.finish()
             XCTAssertThrowsError(try lease.begin(creation: true, now: start))
+        }
+    }
+
+    func testMinuteBudgetReturnsItsActualRemainingWait() throws {
+        try withJournal { path in
+            let lease = DisplayLifecycleLease(path: path)
+            try lease.acquire()
+            let start = Date(timeIntervalSince1970: 1000)
+            for _ in 0..<4 { try lease.begin(creation: true, now: start); try lease.finish() }
+            XCTAssertThrowsError(try lease.begin(creation: true, now: start.addingTimeInterval(12))) { error in
+                guard case let SpaceOError.resourceLimit(_, _, retry) = error else {
+                    return XCTFail("expected a creation budget refusal")
+                }
+                XCTAssertEqual(retry, 48)
+            }
+        }
+    }
+
+    func testDiagnosticReportsLatchesWithoutTakingLeaseOrChangingJournal() throws {
+        try withJournal { path in
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .ready)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+            let owner = DisplayLifecycleLease(path: path)
+            try owner.acquire()
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .ready)
+            try owner.beginLiveTest()
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .blocked)
+            try owner.finishLiveTest()
+            try owner.begin(creation: true)
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .blocked)
+            try owner.finish()
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .ready)
+            owner.trip("injected timeout")
+            let before = try Data(contentsOf: URL(fileURLWithPath: path))
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path),
+                           DisplaySafetyStatus(state: .blocked, reason: "injected timeout"))
+            XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), before)
+        }
+    }
+
+    func testDiagnosticRefusesMalformedNonPrivateAndNonRegularJournals() throws {
+        try withJournal { path in
+            var owner: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)
+            try owner!.acquire()
+            owner = nil
+            try Data("invalid".utf8).write(to: URL(fileURLWithPath: path))
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .unknown)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .unknown)
+            try FileManager.default.removeItem(atPath: path)
+            XCTAssertEqual(mkfifo(path, 0o600), 0)
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .unknown)
         }
     }
 

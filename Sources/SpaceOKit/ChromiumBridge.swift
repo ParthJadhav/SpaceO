@@ -126,7 +126,7 @@ public actor ChromiumBridge {
         try await targets(budget: nil)
     }
 
-    /// Startup-only bridge for the private browser process, discarded before page binding.
+    /// Browser-level bridge for startup and reused file opens, separate from page binding.
     /// One deadline covers discovery and every requested page; foreground fallback is forbidden.
     func createBackgroundPages(files: [URL], region: CGRect, timeout: TimeInterval = 10,
                                validate: @Sendable () throws -> Void = {}) async throws {

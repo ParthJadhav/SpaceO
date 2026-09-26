@@ -78,6 +78,13 @@ public struct DoctorReport: Sendable {
     public var focusLine: String
     /// Local diagnostic logging (`spaceo logging`); nil omits the section.
     public var logging: LoggingSettings? = nil
+    /// Local journal status, also collected when no daemon is running.
+    public var displaySafety: DisplaySafetyStatus? = nil
+
+    public var effectiveDisplaySafety: DisplaySafetyStatus? {
+        if let local = displaySafety, !local.allowsCreation { return local }
+        return runtime?.displaySafety ?? displaySafety
+    }
 
     public init(
         macOS: String, cliVersion: String, cliPath: String,
@@ -176,6 +183,10 @@ public struct DoctorReport: Sendable {
         }
         lines.append(Self.row("can drive sessions", clientCanDrive ? "yes" : "no"))
         lines.append(Self.row("can capture", clientCanCapture ? "yes" : "no"))
+        if let safety = effectiveDisplaySafety {
+            lines.append(Self.row("display lifecycle", safety.state.rawValue
+                + (safety.reason.map { " — " + $0 } ?? "")))
+        }
         lines.append(Self.row("shim built with ARC", builtWithARC ? "yes" : "NO — display teardown would leak"))
         lines.append(Self.row("user displays", "online \(Self.ids(userOnlineDisplayIDs)); active \(Self.ids(userActiveDisplayIDs))"))
         lines.append(Self.row("display mirroring", mirroredDisplayIDs.isEmpty ? "off"
@@ -309,8 +320,15 @@ public struct DoctorReport: Sendable {
 
     /// Readiness blockers as sentences. The codes stay in the JSON; people read these.
     public var blockers: [Blocker] {
+        let safetyBlockers: [Blocker]
+        if let safety = effectiveDisplaySafety, !safety.allowsCreation {
+            safetyBlockers = [Blocker(
+                code: "display_safety_" + safety.state.rawValue,
+                sentence: "Display creation is blocked: " + (safety.reason ?? "lifecycle state is unknown") + ".",
+                next: "Stop display work and inspect docs/DISPLAY_SAFETY.md; restarting does not reset the safety latch.")]
+        } else { safetyBlockers = [] }
         if case .unresponsive(let seconds) = daemon {
-            return [Blocker(
+            return safetyBlockers + [Blocker(
                 code: "daemon_unresponsive",
                 sentence: "A daemon is listening at \(socketPath) but did not answer within "
                     + "\(Self.seconds(seconds)); it may be busy with a long request.",
@@ -318,7 +336,7 @@ public struct DoctorReport: Sendable {
                     + "log at \(logPath).")]
         }
         let grantee = runtime?.responsibleProcess ?? "the app that started the daemon"
-        return readiness.blockers.map { code in
+        return safetyBlockers + readiness.blockers.map { code in
             switch code {
             case "daemon_not_running":
                 return Blocker(code: code,

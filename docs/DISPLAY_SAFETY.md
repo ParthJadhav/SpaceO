@@ -30,6 +30,7 @@ Do not reproduce this incident on a daily-use desktop.
   Daemon, XCTest, and library users of Stage share the same journal. It does not coordinate old
   binaries, other users, third-party virtual-display software, or direct users of private APIs.
 - A persistent budget allows at most **4 creation attempts per minute and 12 per ten minutes**.
+  Budget refusals report the actual remaining wait across both windows.
   Attempts, including failures, count before creation; changing pools or restarting the process
   cannot reset the window. `SPACEO_UNRESTRICTED_RESOURCES` does not lift this safety budget.
 - Before a mutation, the journal records it as pending. Success clears pending only after
@@ -37,11 +38,16 @@ Do not reproduce this incident on a daily-use desktop.
   leaves a latch that prevents subsequent work and survives process restarts.
   Live cases separately persist a pending marker before their baseline or test body, including
   cases that create no display; only a successful teardown clears it.
+  `spaceo doctor` reports blocked or unknown lifecycle state in text and JSON, exits nonzero,
+  and includes recovery guidance. Daemon health also reports an in-memory circuit failure even
+  if its journal write has not completed. Diagnostics never reset or acquire the lifecycle lease.
 - Lifecycle callers wait on a bounded worker completion, rather than a deadline checked only
   after IPC returns. The underlying OS call **cannot be cancelled**. A timed-out worker and its
   display references are retained; no replacement worker or automatic mutation retry runs.
   Late results cannot publish success or trigger ARC teardown. Queries returning errors are
   unknown, never proof of removal. Cleanup uses cached Space IDs before the bounded path.
+  Retirement uses one absolute total deadline, including queueing, preflight and verification.
+  Allocation claims the Space IDs verified at publication and refuses a circuit-failed Stage.
   Failure persistence/logging runs separately with at most 100 ms of caller wait, so a worker
   stalled while holding the journal lock cannot also trap the timeout caller. If storage stalls,
   the failure write may remain outstanding; the already-persisted pending markers protect
