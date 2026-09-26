@@ -202,11 +202,14 @@ assert_embedded_versions() {
     local cli="$1"
     local app="$2"
     local cli_json
+    local cli_version
     local app_version
     local app_build
 
     cli_json="$("$cli" version --json)"
-    [[ "$cli_json" == "{\"version\":\"$VERSION\"}" ]] \
+    cli_version="$(plutil -extract version raw -o - - <<<"$cli_json" 2>/dev/null)" \
+        || fail "CLI version output is not JSON with a version field: $cli_json"
+    [[ "$cli_version" == "$VERSION" ]] \
         || fail "CLI reports an unexpected version: $cli_json"
     app_version="$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")"
     app_build="$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")"
@@ -360,7 +363,9 @@ verify_distribution() {
     # repository-owned designated requirements.
     assert_publisher_signature "$cli" "$CLI_IDENTIFIER"
     assert_publisher_signature "$app" "$VIEWER_IDENTIFIER" true
-    spctl --assess --type execute --verbose=4 "$cli"
+    # Gatekeeper's execute assessment accepts only app bundles; it rejects every bare CLI tool,
+    # notarized or not. The CLI is pinned by its designated requirement above and ships inside
+    # the notarized, stapled DMG.
     spctl --assess --type execute --verbose=4 "$app"
     assert_embedded_versions "$cli" "$app"
 
