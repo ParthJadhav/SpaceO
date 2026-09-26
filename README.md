@@ -20,6 +20,7 @@
 <p align="center">
   <a href="#get-started">Get started</a> ·
   <a href="#how-it-works">How it works</a> ·
+  <a href="#faq">FAQ</a> ·
   <a href="docs/SETUP.md">Setup guide</a> ·
   <a href="https://github.com/ParthJadhav/SpaceO/releases">Releases</a> ·
   <a href="docs/REFERENCE.md">Reference</a>
@@ -50,6 +51,21 @@
 SpaceO is a native Swift app, a CLI, and an MCP server. Agents can read interface elements,
 click controls, enter text, inspect screenshots, and check what actually happened. Sessions can
 use dedicated displays or share a display in separate tiles.
+
+### What an agent can do
+
+| Capability | MCP tools |
+| --- | --- |
+| Own a workspace | `spaceo_session_create`, `spaceo_session_destroy`, `spaceo_session_list`, `spaceo_pool_status` |
+| Launch and place apps | `spaceo_open_app`, `spaceo_open_url`, `spaceo_adopt_app`, `spaceo_place_window`, `spaceo_list_windows` |
+| See the interface | `spaceo_read_screen`, `spaceo_find`, `spaceo_read_text`, `spaceo_screenshot`, `spaceo_wait_for` |
+| Act on it | `spaceo_click`, `spaceo_type`, `spaceo_press_key`, `spaceo_scroll`, `spaceo_drag`, `spaceo_menu`, `spaceo_select_text` |
+| Batch and verify | `spaceo_run_steps`, `spaceo_verify_isolation`, `spaceo_events` |
+| Hand off to you | `spaceo_session_pause`, `spaceo_session_resume`, per-session clipboard broker |
+
+Actions prefer Accessibility elements over coordinates, and every receipt says whether the result
+was **confirmed**, **unconfirmed**, or **refused**. The [reference](docs/REFERENCE.md) lists every
+tool and CLI command.
 
 ## How it works
 
@@ -119,6 +135,23 @@ claude mcp add -s user spaceo -- "$HOME/.local/bin/spaceo" mcp
 For other MCP clients, use the absolute path to `spaceo` with the argument `mcp`.
 [Client configurations](docs/REFERENCE.md#mcp-configuration) cover Codex, Cursor, and Claude Desktop.
 
+Then ask your agent something like *"Open TextEdit in SpaceO, write a short note, and show me a
+screenshot"*. It creates its own session and cleans it up when it finishes.
+
+**Or drive an app yourself from the CLI**
+
+```bash
+spaceo daemon &
+eval "$(spaceo session create --session try --export)"   # sets SPACEO_SESSION and SPACEO_LEASE
+spaceo run TextEdit
+spaceo ax                  # list indexed Accessibility elements
+spaceo click --element 0
+spaceo type "hello from another display"
+spaceo screenshot -o /tmp/try.png
+spaceo session destroy
+spaceo daemon stop
+```
+
 **Open the Viewer from a source build**
 
 ```bash
@@ -176,6 +209,36 @@ as the same user; they do not create a separate security boundary.
 
 Read the [architecture](ARCHITECTURE.md), [runtime API support](docs/PRIVATE_API_SUPPORT.md), and
 [session recovery](docs/SESSION_RECOVERY.md) documents for the contracts and limitations.
+
+## FAQ
+
+**Why not just use another Space or a VM?**
+Apps on an inactive Mission Control Space can stop drawing, so they can't be captured or
+reliably driven. A VM works but has no access to your installed apps, sign-ins, or files. SpaceO
+keeps apps in your login on displays you don't see.
+
+**Will it steal my focus or move my mouse?**
+SpaceO never warps the pointer and does not deliberately activate agent apps. Apps can still
+activate themselves. When that happens, SpaceO reports the breach instead of hiding it
+(`spaceo_verify_isolation`).
+
+**Which apps work?**
+Native macOS apps and Chromium browsers (Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Arc) are in scope.
+Apps built on Electron, such as Cursor, VS Code, and Slack, are refused before launch in this
+preview, because their renderers can take desktop focus.
+
+**Is it a sandbox?**
+No. Agent apps run as your user, with your files, network, and credentials. Use a separate login
+or VM for untrusted work.
+
+**Why does it use private APIs?**
+macOS has no public API for creating virtual displays or delivering targeted background input.
+SpaceO resolves these APIs at runtime, confines them to one target, and fails closed when a
+capability is missing. See [runtime API support](docs/PRIVATE_API_SUPPORT.md).
+
+**How do I remove it?**
+Run `spaceo daemon stop`, then delete `~/.local/bin/spaceo` and the Viewer app. Full steps are in
+[INSTALL.md](docs/INSTALL.md#uninstall).
 
 ## Develop and contribute
 

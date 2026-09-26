@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible defect in SpaceO
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report security issues privately through [SECURITY.md](https://github.com/ParthJadhav/SpaceO/blob/main/SECURITY.md), not here.
+        Remove usernames, paths, window titles, application content, controller leases, and screenshots of real content before submitting.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. spaceo session create ...
+        2. spaceo run TextEdit
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: version
+    attributes:
+      label: spaceo version --json
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: spaceo doctor --json (sanitized)
+      render: json
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and build
+      placeholder: "macOS 15.6 (24G84), Apple Silicon"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - Source build (make install)
+        - Release DMG
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: display
+    attributes:
+      label: Did your physical display, pointer, or focus change unexpectedly?
+      options:
+        - "No"
+        - "Yes (describe above)"
+    validations:
+      required: true
