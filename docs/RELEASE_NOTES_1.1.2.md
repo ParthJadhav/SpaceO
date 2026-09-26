@@ -1,4 +1,8 @@
-# SpaceO 1.1.1
+# SpaceO 1.1.2
+
+1.1.2 is the first published build of the 1.1 line. The `v1.1.1` tag stopped during packaging
+on a release-script version check and was never published; 1.1.2 fixes that check and contains
+the same product source.
 
 Status: native-app and Chromium preview, published as a GitHub prerelease. Managed Electron
 launches are explicitly refused.

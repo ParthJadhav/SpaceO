@@ -198,7 +198,25 @@ are in [docs/plans/2026-09-23-ux-improvements.md](docs/plans/2026-09-23-ux-impro
 - Hosts with Accessibility granted were told to grant it on every PARTIAL verdict.
 - Recorder finish errors were swallowed on destroy, and detached recovery quit apps without logging.
 
-## [1.1.1] - Planned
+## [1.1.2] - 2026-09-26
+
+First published build of the 1.1 line: a native-app and Chromium preview for Apple Silicon. It
+contains every change listed under [Unreleased] above and [1.1.1] below.
+
+### Fixed
+
+- The release packaging check now reads the `version` field from `spaceo version --json`
+  instead of requiring the exact pre-1.1 output, which stopped the `v1.1.1` candidate.
+- Release verification no longer runs Gatekeeper's execute assessment on the bare CLI, which
+  rejects every command-line tool; the CLI stays pinned by its designated requirement inside the
+  notarized DMG. `docs/INSTALL.md` drops the same command.
+- The publication job downloads the candidate into the directory it verifies, and a re-run of
+  publication no longer fails on a changed workflow run attempt.
+
+## [1.1.1] - Not published
+
+The `v1.1.1` tag exists, but its candidate build stopped before notarization; no artifacts
+were published. Its changes ship in 1.1.2.
 
 ### Changed
 
