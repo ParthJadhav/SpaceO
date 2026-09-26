@@ -199,7 +199,7 @@ public final class Stage: @unchecked Sendable {
                 cachedScale = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { [backing] _ in
                     let width = backing.bounds.width
                     guard let pixels = backing.pixelWidth, pixels > 0, width > 0 else { return nil }
-                    return Double(pixels) / width
+                    return Double(pixels) / Double(width)
                 }
             } catch is DisplayLifecycleCoordinator.QueryDeferred { /* Use the last verified snapshot. */ }
             catch { return nil }
@@ -307,8 +307,8 @@ public final class Stage: @unchecked Sendable {
                 throw SpaceOError.stageCreationFailed("published display has no verified managed Space")
             }
             let bounds = display.bounds
-            let scale = display.pixelWidth.flatMap { pixels in
-                pixels > 0 && bounds.width > 0 ? Double(pixels) / bounds.width : nil
+            let scale: Double? = display.pixelWidth.flatMap { pixels in
+                pixels > 0 && bounds.width > 0 ? Double(pixels) / Double(bounds.width) : nil
             }
             try operation.check()
             try Self.lease.finish()
@@ -345,7 +345,7 @@ public final class Stage: @unchecked Sendable {
         self.name = name
         cachedBounds = testingBacking.bounds
         cachedScale = testingBacking.pixelWidth.flatMap {
-            $0 > 0 && testingBacking.bounds.width > 0 ? Double($0) / testingBacking.bounds.width : nil
+            $0 > 0 && testingBacking.bounds.width > 0 ? Double($0) / Double(testingBacking.bounds.width) : nil
         }
         cachedSpaces = []
         requestedSize = cachedBounds.size
