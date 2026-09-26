@@ -38,6 +38,9 @@ On source commit `2e0782821f89232eef19ccca4077fce1fa46f264`, 1,618 deterministic
 supervisor/Node fixtures and the 34-tool MCP smoke passed. CI is also green on documentation
 head `48e9e983abcd60110adf24d97d97d9dbe91e847d`.
 
+A subsequent CLI test-harness fix isolates Foundation's home-directory reads from host state;
+the full deterministic check now passes 1,619 Swift tests plus the same fixtures and MCP smoke.
+
 The latest full live run passed 13 cases, failed the two-session TextEdit Accessibility case,
 and skipped the final two cases after the failure. Its follow-up MCP matrix was not run. No
 WindowServer restart or panic was observed, but the failure latch remains set. These results do

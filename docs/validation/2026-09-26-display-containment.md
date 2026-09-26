@@ -122,3 +122,15 @@ Retained follow-up evidence includes `full-live.log`, `full-result.json`, `failu
 AX probe source/results. The underlying intermittent AX failure remains unresolved. Further
 display qualification must follow the documented recovery procedure; no automatic retry or
 journal reset was used to turn this failed run into a green result.
+
+## Draft-release deterministic follow-up
+
+A fresh deterministic run after the live failure exposed a CLI test-harness isolation bug:
+setting only `HOME` did not redirect Foundation's account-home lookup, so the busy-daemon
+fixture read this Mac's real failure journal. The harness now also sets `CFFIXED_USER_HOME`
+for its child process. A regression verifies that doctor reads a distinct failure reason from
+the fixture journal. Production journal resolution and the real failure latch are unchanged.
+
+Both targeted tests passed, followed by `make verify-release`: 1,619 deterministic Swift tests,
+the supervisor/Node fixtures and the 34-tool MCP smoke passed. No additional live run was
+attempted. This test-only fix does not change the incomplete live-qualification status above.
