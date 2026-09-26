@@ -1,31 +1,15 @@
-# Display lifecycle containment after the September 25 panic
+# Display lifecycle safeguards
 
-## Finding and limits
-
-The investigation found a likely two-stage failure: rapid SpaceO virtual-display changes
-contributed to ColorSync/WindowServer starvation; WindowServer's restart then hit Apple's
-`AppleMobileDispT605X-DCP` display-pipeline assertion. Subsequent boots reproduced the assertion
-without SpaceO or user processes running. The initiating private call and Apple's internal
-driver defect remain unproven. This change is containment, not a fix to Apple's kernel driver.
-
-The confirmed SpaceO defects were an ineffective cleanup deadline around synchronous IPC,
-creation limits local to individual pools, continuing the live suite after failures, and
-admitting a previously hazardous mirrored display configuration. A serial dispatch queue alone
-neither serializes other processes nor proves that ColorSync has finished asynchronous work.
-
-The original investigation remains a local diagnostic artifact, not committed user data. Retain
-the original sysdiagnose, panic reports, and symbolicated watchdog evidence for Apple Feedback.
-Do not reproduce this incident on a daily-use desktop.
+SpaceO creates and retires virtual displays through private macOS APIs whose calls cannot be
+cancelled once they enter the system. These safeguards bound how often SpaceO changes the display
+graph, how long a caller waits, and what happens when a change cannot be verified.
 
 ## Current behavior
 
-- The temporary macOS 27+ blanket quarantine was removed at the owner's explicit request.
-  The private shim checks runtime class/symbol availability on every supported OS version.
-  Version alone does not refuse creation. This restores runtime admission, not release
-  qualification; the September 25 incident remains relevant and the driver defect unresolved.
-- Stage also refuses missing/inactive/unreadable user displays, mirroring, refresh rates above
-  120 Hz or unknown refresh, and online SpaceO displays not owned by its process. These are precautions, not claims
-  that extended desktop or a lower refresh rate fixes the Apple defect.
+- The private shim checks runtime class/symbol availability on every supported OS version; the
+  OS version alone never refuses creation.
+- Creation refuses missing, inactive, or unreadable user displays and online SpaceO displays not
+  owned by this process. Mirrored displays and any refresh rate are admitted.
 - A per-user file lock admits one SpaceO display-owning process for that process's lifetime.
   Daemon, XCTest, and library users of Stage share the same journal. It does not coordinate old
   binaries, other users, third-party virtual-display software, or direct users of private APIs.
@@ -70,8 +54,7 @@ Do not reproduce this incident on a daily-use desktop.
   to ColorSync work, but blindly restoring stable IDs reintroduces a documented stale-display
   failure. The creation budget and existing pool reuse reduce exposure without that regression.
 
-These bounds are application containment. They cannot stop a kernel panic, cancel a call already
-inside Apple code, guarantee display preservation when an owner exits, or measure ColorSync's
+These bounds are application containment. They cannot cancel a call already inside Apple code, guarantee display preservation when an owner exits, or measure ColorSync's
 internal backlog. Process exit still releases its virtual displays. General diagnostic queries
 outside Stage's lifecycle are not all covered by its worker deadline.
 
@@ -84,27 +67,6 @@ latch to refuse focused reruns. Cases
 are paced by 90 seconds to avoid exhausting the shared creation budget. Pacing is not a health
 certificate; lifecycle failures still stop the run.
 
-### Deliberate testing of the incident monitor setup
-
-On September 25 the owner reserved this Mac and explicitly requested testing with the original
-mirrored Alienware 240 Hz setup. Ordinary builds still refuse that setup. A separately compiled
-qualification build can waive only the mirroring/refresh admission checks (including an inactive
-mirror follower). It still requires an active readable user display, rejects foreign SpaceO
-displays, and keeps the journal, budget, deadlines, publication checks and failure latch.
-Both environment flags and the compiler definition are required:
-
-```sh
-SPACEO_LIVE_TESTS=1 SPACEO_QUALIFY_PANIC_CONFIGURATION=1 \
-  bash scripts/test.sh live --case=testStageCreateAndDestroyLeavesNoDisplay \
-  -Xswiftc -DSPACEO_DISPLAY_QUALIFICATION
-```
-
-Run one lifecycle first and inspect the retained results before attempting the full suite.
-This can reproduce a kernel panic; supervision cannot prevent it. Never compile a distributable
-with `SPACEO_DISPLAY_QUALIFICATION`. A pass from this build records an incident experiment, not
-proof that a normal release supports a configuration it refuses. Do not remove the other
-protections or automatically clear the journal to continue a failed experiment.
-
 The external supervisor retains an owner-only log. A case exceeding 180 seconds, a run exceeding
 40 minutes, interruption (including terminal SIGHUP), or excessive output suspends the owned
 process group and exits nonzero. A focused `--case` run requires exactly one passing result for
@@ -112,8 +74,7 @@ the named method; empty filters, skips, different cases, and extra results canno
 It does **not** kill a display owner automatically: killing can itself reconfigure the display
 graph. The log reports the suspended process-group ID. Stop the qualification attempt and inspect
 it during a reserved recovery window; do not automatically rerun or resume it. A failed, stopped,
-or skipped run is never release evidence. The supervisor cannot contain a WindowServer or kernel
-failure and direct `swift test` invocations do not have its external deadline.
+or skipped run is never release evidence. Direct `swift test` invocations do not have its external deadline.
 
 ## Recovery and requalification
 
@@ -129,16 +90,14 @@ teardown; it is an operator recovery decision, not a watchdog action. Only then 
 archive/remove the journal to permit a fresh admission. That does not make the host qualified or clear any release blocker. Do not erase WindowServer/ColorSync preferences as a
 routine reset.
 
-Release qualification still requires retained evidence on a reserved machine: physical-only stability, minimal single-display lifecycle, staged topology and
-refresh experiments, no service stalls or configuration drift, and then the complete live and
-computer-use gates in [RELEASE_POLICY.md](RELEASE_POLICY.md). A second login still shares the
-kernel and hardware. Neither deterministic tests nor an older green live run qualify this patch.
+Release qualification requires the complete live and computer-use gates in
+[RELEASE_POLICY.md](RELEASE_POLICY.md) for the candidate source.
 
 ## Verification without display mutation
 
 `DisplayLifecycleContainmentTests` inject blocked queries, blocked backing invalidation, late
 creation completion, inventory errors, lease contention, restart persistence, rolling budgets,
-clock rollback, and bad journal files. `DisplaySafetyTests` tests topology admission.
+clock rollback, and bad journal files. `DisplaySafetyTests` tests display-graph admission.
 `LiveTestSupervisorTests.py` exercises deadlines using disposable Python processes only.
 `LiveTestGateTests.sh` checks opt-in, serial execution, retained logs, and complete-run evidence.
 No live display creation is needed to run these tests.

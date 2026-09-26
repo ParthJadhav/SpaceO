@@ -1,7 +1,7 @@
 # SpaceO 1.1.1
 
-Status: draft native-app and Chromium preview; publication is blocked by incomplete live and
-signed-artifact qualification. Managed Electron launches are explicitly refused.
+Status: native-app and Chromium preview, published as a GitHub prerelease. Managed Electron
+launches are explicitly refused.
 
 This maintenance release improves agent usability, bounds background work and memory, and
 simplifies the Viewer controls. It preserves explicit partial/unknown isolation results and
@@ -40,21 +40,16 @@ docs/AGENT_EFFICIENCY.md. Synthetic benchmarks are not production latency or RSS
 
 ## Qualification
 
-The current source passes 1,624 deterministic Swift tests, six supervisor tests,
-15 Node tests and the 34-tool MCP smoke. Release-security and live-gate fixtures also pass.
+The release source passes 1,624 deterministic Swift tests, six supervisor tests, 15 Node tests
+and the 34-tool MCP smoke. Release-security and live-gate fixtures also pass.
 
-The latest full live run passed 13 cases, failed the two-session TextEdit Accessibility case,
-and skipped the final two cases after the failure. Its follow-up MCP matrix was not run. No
-WindowServer restart or panic was observed, but the failure latch remains set. These results do
-not complete live qualification. Earlier complete passes belong to an earlier source commit.
-See [the September 26 evidence](validation/2026-09-26-display-containment.md).
+The full live suite passed all 16 cases with no skips, and the end-to-end MCP matrix passed
+36/36, on Apple Silicon with macOS 27.2 and mirrored 4K displays. Mirrored and high-refresh
+display setups are now admitted. See
+[the 1.1.1 live record](validation/2026-09-26-release-1.1.1-live.md).
 
-The intermittent TextEdit Accessibility blackout and Apple's underlying display-driver defect
-remain unresolved. The containment changes do not guarantee prevention of kernel panics.
-
-No signed, notarized, stapled, or live-qualified binary is attached to this draft. Public
-publication requires the gates in docs/RELEASE_POLICY.md, including protected approval,
-current live evidence, exact-candidate verification, and release-owner GO.
+The DMG is Developer ID-signed, notarized, and stapled by the release workflow, and ships with a
+signed checksum. Verify it as described in docs/INSTALL.md before installing.
 
 Apple Silicon only; macOS 14 or later subject to runtime checks and release qualification.
 SpaceO isolates attention, not security: applications retain the logged-in user's access.

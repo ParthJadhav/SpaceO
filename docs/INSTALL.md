@@ -16,10 +16,8 @@ SpaceO uses private macOS behavior and its deployment target is not a compatibil
 Review “Requirements and support status” in the project README and run `spaceo doctor` on every
 intended host before creating a session.
 
-No signed, notarized, qualified public release is currently recorded in this
-repository. The commands below define how to verify a candidate or future release; they do not
-assert that version `1.0.0` or any downloadable artifact has passed the
-[public-release gates](RELEASE_POLICY.md).
+The current release is [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1), a signed and notarized prerelease that passed the
+[public-release gates](RELEASE_POLICY.md). Always verify a download as described below.
 
 ## Verify and install
 

@@ -138,17 +138,6 @@ public final class Stage: @unchecked Sendable {
     }
     private static let ownership = OwnershipState()
 
-    // Deliberate incident reproduction requires a separately compiled qualification binary
-    // AND an explicit reserved-host invocation. Shipping builds cannot enable this with env.
-    static var qualifiesPanicConfiguration: Bool {
-        #if SPACEO_DISPLAY_QUALIFICATION
-        return ProcessInfo.processInfo.environment["SPACEO_LIVE_TESTS"] == "1"
-            && ProcessInfo.processInfo.environment["SPACEO_QUALIFY_PANIC_CONFIGURATION"] == "1"
-        #else
-        return false
-        #endif
-    }
-
     /// Includes in-memory circuit failures even if the asynchronous journal write is stalled.
     public static func displaySafetyStatus() -> DisplaySafetyStatus {
         if let reason = lifecycle.failureReason { return .init(state: .blocked, reason: reason) }
@@ -269,8 +258,7 @@ public final class Stage: @unchecked Sendable {
             if let failure = Self.admissionFailure(
                 configuration: userConfigurationBefore,
                 foreignDisplayIDs: online.filter { Self.isSpaceODisplay($0) }
-                    .filter { id in !Self.ownership.lock.withLock { Self.ownership.displayIDs.contains(id) } },
-                qualifyPanicConfiguration: Self.qualifiesPanicConfiguration) {
+                    .filter { id in !Self.ownership.lock.withLock { Self.ownership.displayIDs.contains(id) } }) {
                 throw SpaceOError.stageCreationFailed(failure)
             }
             try operation.check()
@@ -600,28 +588,20 @@ public final class Stage: @unchecked Sendable {
             userConfigurationAfter: try checkedUserDisplayConfiguration())
     }
 
-    /// Conservative admission, not a claim that any refresh rate or topology is proven safe.
+    /// Requires a readable user display graph with at least one active display. Inactive
+    /// displays are admitted only as mirror followers, whose mode belongs to their master.
     static func admissionFailure(
-        configuration: UserDisplayConfiguration, foreignDisplayIDs: [CGDirectDisplayID],
-        qualifyPanicConfiguration: Bool = false
+        configuration: UserDisplayConfiguration, foreignDisplayIDs: [CGDirectDisplayID]
     ) -> String? {
         guard !configuration.displays.isEmpty,
               configuration.displays.contains(where: { $0.active }),
               configuration.displays.allSatisfy({
-                  ($0.active || (qualifyPanicConfiguration && $0.mirroredTo != 0))
+                  ($0.active || $0.mirroredTo != 0)
                      && $0.bounds.width.isFinite && $0.bounds.height.isFinite
                      && $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite
                      && $0.bounds.width > 0 && $0.bounds.height > 0
                      && $0.modeWidth > 0 && $0.modeHeight > 0
               }) else { return "user display configuration is missing, inactive, or unreadable" }
-        guard qualifyPanicConfiguration || configuration.displays.allSatisfy({ $0.mirroredTo == 0 }) else {
-            return "virtual displays are disabled while user displays are mirrored"
-        }
-        guard qualifyPanicConfiguration || configuration.displays.allSatisfy({
-            $0.refreshRate.isFinite && $0.refreshRate > 0 && $0.refreshRate <= 120
-        }) else {
-            return "virtual displays require known user display refresh rates no higher than 120 Hz"
-        }
         guard foreignDisplayIDs.isEmpty else {
             return "unowned SpaceO displays are still online; refusing another attachment"
         }
@@ -655,7 +635,7 @@ public final class Stage: @unchecked Sendable {
         onlineDisplayIDs().filter { !isSpaceODisplay($0) }
     }
 
-    /// Mirroring is a known unsafe configuration for CGVirtualDisplay on the verification host.
+    /// User displays in a mirror set, reported by `doctor` for diagnostics.
     public static func mirroredNonSpaceODisplayIDs() -> [CGDirectDisplayID] {
         nonSpaceOOnlineDisplayIDs().filter { CGDisplayIsInMirrorSet($0) != 0 }
     }

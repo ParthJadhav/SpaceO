@@ -54,10 +54,8 @@ Before public approval, exercise the exact Developer ID-signed, notarized, and s
 obtained through the intended distribution path, not binaries left in `.build`. By explicit owner
 direction on 2026-09-05, the implementer may perform this qualification in the owner-authorized
 existing graphical login. A separate tester, clean Mac, or clean login is not required.
-After the September 25 display incident, that desktop must be explicitly reserved for testing;
-follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md). The owner reserved the current Mac and separately
-authorized an experiment with the original mirrored 240 Hz setup. That experiment uses an
-explicit qualification build; it does not approve distribution or qualify the final signed DMG.
+That desktop must be reserved for testing while the run is in progress; follow
+[DISPLAY_SAFETY.md](DISPLAY_SAFETY.md).
 
 Record existing applications, sessions, display topology, and permission state before testing;
 preserve unrelated user state and verify it afterward. Do not switch users, log out, or change
@@ -135,16 +133,9 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-The repository contains the packaging and verification implementation, but no evidence in this
-repository proves that a Developer ID-signed, notarized, stapled, qualified public
-artifact has completed these gates. The source version is `1.1.1`; the historical source-only
-`v1.1.0` prerelease was removed during open-source history cleanup. A GitHub release draft for
-`v1.1.1` holds proposed notes only: it has no tag, no binary assets, and does not qualify a
-distribution. Release workflows
-remain disabled pending candidate preparation and qualification. Source publication and
-repository protection are complete. The additional `SPACEO_RELEASE_ENABLED`
-switch defaults off, and the workflow verifies reviewer and tag restrictions before accessing
-the signing environment. Follow
-[docs/INSTALL.md](INSTALL.md) for artifact verification and maintainer commands, and do not
-describe a public release as available until this section is updated with the retained approval
-record.
+The source version is `1.1.1`. Its live suite (16/16, no skips) and MCP matrix (36/36) passed
+on 2026-09-26; see [the 1.1.1 live record](validation/2026-09-26-release-1.1.1-live.md). The
+release owner directed publication of `v1.1.1` as a native-app and Chromium prerelease through
+the protected candidate and publication jobs. The historical source-only `v1.1.0` prerelease was
+removed during open-source history cleanup. Follow [docs/INSTALL.md](INSTALL.md) for artifact
+verification and maintainer commands.
