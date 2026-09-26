@@ -23,9 +23,9 @@ accounts you do not own or have explicit permission to use.
 ## Supported versions
 
 Security fixes are provided for the latest qualified public release. Older releases and
-unreleased source snapshots may receive fixes at maintainer discretion. At present, version
-`1.1.1` is the repository's source version, but no signed and qualified public
-release is recorded; see the [release policy](docs/RELEASE_POLICY.md).
+unreleased source snapshots may receive fixes at maintainer discretion. The current
+release is [SpaceO 1.1.2](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.2); see the
+[release policy](docs/RELEASE_POLICY.md).
 
 ## Security boundary
 

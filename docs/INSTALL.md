@@ -16,7 +16,7 @@ SpaceO uses private macOS behavior and its deployment target is not a compatibil
 Review “Requirements and support status” in the project README and run `spaceo doctor` on every
 intended host before creating a session.
 
-The current release is [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1), a signed and notarized prerelease that passed the
+The current release is [SpaceO 1.1.2](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.2), a signed and notarized prerelease that passed the
 [public-release gates](RELEASE_POLICY.md). Always verify a download as described below.
 
 ## Verify and install
@@ -63,7 +63,6 @@ codesign --verify --deep --strict --verbose=2 \
   "$SPACEO_MOUNT/SpaceO Viewer.app"
 codesign --display --verbose=4 "$SPACEO_MOUNT/spaceo"
 codesign --display --verbose=4 "$SPACEO_MOUNT/SpaceO Viewer.app"
-spctl --assess --type execute --verbose=4 "$SPACEO_MOUNT/spaceo"
 spctl --assess --type execute --verbose=4 "$SPACEO_MOUNT/SpaceO Viewer.app"
 ```
 

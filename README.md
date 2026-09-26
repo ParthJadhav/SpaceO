@@ -32,7 +32,7 @@
 [View the still screenshot](docs/images/viewer.png).*
 
 > [!NOTE]
-> **Preview · [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1).** Download the signed, notarized DMG from the
+> **Preview · [SpaceO 1.1.2](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.2).** Download the signed, notarized DMG from the
 > [Releases page](https://github.com/ParthJadhav/SpaceO/releases) and verify it with
 > [INSTALL.md](docs/INSTALL.md), or build from source below.
 >
