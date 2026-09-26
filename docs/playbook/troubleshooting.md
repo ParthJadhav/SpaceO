@@ -61,8 +61,8 @@ turns unobservable coverage into a refusal before any effect.
 
 - `unconfirmed`: the action was delivered but no effect was observed. Do not count it as done.
   Re-read the screen; for a coordinate click, switch to an element index.
-- `unobserved` on typing into an Electron editor: the keystroke did not change the document.
-  Click into the editor first, then retry.
+- Managed Electron launches are refused in this preview; editor typing, selection and scrolling
+  cannot establish a supported controller. Use a native app or managed Chromium instead.
 - `truncated: true` in a read footer: you saw part of the window. Use `spaceo_find` or scroll.
 - `diff_base_missing` on a `since` read: the base snapshot is gone; you received the full
   outline. Continue normally.

@@ -312,4 +312,6 @@ jobs:
             "$base.candidate.txt.sig" \
             --verify-tag \
             --generate-notes \
-            --title "SpaceO $version"
+            --prerelease \
+            --notes "Native-app and Chromium preview for Apple Silicon. Managed Electron launches (including Cursor and VS Code) are refused before startup because they can take desktop focus. Those editors may still connect as MCP clients. See README and docs/INSTALL.md for requirements and signature verification." \
+            --title "SpaceO $version — Native + Chromium preview"

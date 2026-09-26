@@ -35,7 +35,7 @@ make test
 Run the focused WindowServer suite with:
 
 ```bash
-make test-live
+SPACEO_LIVE_TESTS=1 make test-live  # reserved host; read docs/DISPLAY_SAFETY.md first
 ```
 
 Live tests run in the current graphical login. A case may skip only when a technical prerequisite

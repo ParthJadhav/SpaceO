@@ -167,6 +167,9 @@ against the rate limit; counts and framebuffer usage are retained only for owned
 A deliberate daemon-start `SPACEO_UNRESTRICTED_RESOURCES=1` lifts policy ceilings but retains
 checked arithmetic. `pool` reports the effective policy and `unsafeOperatorMode:true` for this
 explicit override. These framebuffer figures are admission accounting, not total WindowServer RAM.
+Separately, the non-overridable [display-safety policy](DISPLAY_SAFETY.md) checks the display graph,
+coordinates display owners, and persists limits of 4 creation attempts/minute and 12/ten minutes
+across processes. The override and per-pool usage report do not replace that admission check.
 
 ## Bounded presentation fixture and live acceptance
 

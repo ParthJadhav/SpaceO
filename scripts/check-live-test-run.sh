@@ -19,10 +19,11 @@ fail() { echo "live test run check failed: $*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-usage: scripts/check-live-test-run.sh LOG_FILE
+usage: scripts/check-live-test-run.sh LOG_FILE [--case=testName]
 
 Asserts that a `scripts/test.sh live` log shows every live test actually executing:
 no skips, no silently empty filter, and a count matching the suite source.
+With --case, require exactly one passing result for that defined method instead.
 USAGE
 }
 
@@ -34,6 +35,19 @@ esac
 log="$1"
 [[ -r "$log" ]] || fail "cannot read live test log: $log"
 [[ -r "$LIVE_TEST_SOURCE" ]] || fail "cannot read live test source: $LIVE_TEST_SOURCE"
+
+if (( $# > 1 )); then
+    [[ $# == 2 && "$2" =~ ^--case=test[A-Za-z0-9_]+$ ]] || fail "invalid focused case option"
+    focused_case="${2#--case=}"
+    grep -Eq "^[[:space:]]*func[[:space:]]+${focused_case}[[:space:]]*\\(" "$LIVE_TEST_SOURCE" \
+        || fail "requested case is not defined: $focused_case"
+    focused_passed="$(grep -cE "Test Case '[^']*${LIVE_TEST_CLASS}[.[:space:]]${focused_case}\\]?' passed " "$log" || true)"
+    all_results="$(grep -cE "Test Case '[^']*${LIVE_TEST_CLASS}[.[:space:]][^']*' (passed|failed|skipped) " "$log" || true)"
+    (( focused_passed == 1 && all_results == 1 )) \
+        || fail "focused run requires exactly one passing result for $focused_case; got $focused_passed matching passes and $all_results total results"
+    echo "live test run check passed: focused case $focused_case executed and passed"
+    exit 0
+fi
 
 # Per-case result lines are unambiguous. The per-suite "Executed N tests" summary is not: a run
 # prints one for the class, one for the bundle, and one for "Selected tests", and a filter that

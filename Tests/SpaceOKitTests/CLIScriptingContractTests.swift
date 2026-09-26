@@ -52,6 +52,9 @@ final class CLIScriptingContractTests: XCTestCase {
         // A fixture home: doctor and setup read MCP client configs from $HOME, and these tests
         // must never read (let alone change) the developer's real ones.
         env["HOME"] = fixtureHome.path
+        // Foundation resolves the account home independently of HOME on macOS. Keep its
+        // lifecycle-journal and other Application Support reads inside the same fixture.
+        env["CFFIXED_USER_HOME"] = fixtureHome.path
         env.merge(environment) { $1 }
         process.environment = env
         let out = Pipe(), err = Pipe()
@@ -453,6 +456,21 @@ final class CLIScriptingContractTests: XCTestCase {
         XCTAssertEqual((object["readinessBlockers"] as? [[String: Any]])?.first?["code"] as? String,
                        "daemon_unresponsive")
         XCTAssertTrue(result.stderr.contains("nothing to fix"), "fix prose goes to stderr in --json mode")
+    }
+
+    func testDoctorReadsSafetyJournalFromFixtureHome() throws {
+        let directory = fixtureHome.appendingPathComponent("Library/Application Support/SpaceO")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let path = directory.appendingPathComponent("display-safety.json")
+        try Data("{\"attempts\":[],\"pending\":false,\"failure\":\"fixture-only safety failure\"}".utf8)
+            .write(to: path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        let result = try run(["doctor", "--json", "--socket", missingSocket()])
+        let object = try json(result.stdout)
+        let safety = try XCTUnwrap(object["displaySafety"] as? [String: Any])
+        XCTAssertEqual(safety["state"] as? String, "blocked")
+        XCTAssertEqual(safety["reason"] as? String, "fixture-only safety failure")
+        XCTAssertEqual(result.status, 1)
     }
 
 }

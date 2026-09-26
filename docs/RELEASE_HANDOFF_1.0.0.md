@@ -209,8 +209,8 @@ An equivalent dedicated-login local run is:
 
 ```bash
 swift run spaceo doctor
-make test-live-full
-make computer-use-check-full
+SPACEO_LIVE_TESTS=1 make test-live-full
+SPACEO_LIVE_TESTS=1 make computer-use-check-full
 ```
 
 The owner-authorized existing login may be used under the precautions in

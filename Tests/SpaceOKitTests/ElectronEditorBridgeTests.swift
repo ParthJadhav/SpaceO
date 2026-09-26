@@ -4,6 +4,23 @@ import XCTest
 @testable import SpaceOKit
 
 final class ElectronEditorBridgeTests: XCTestCase {
+    func testPreviewRefusesElectronBeforeAccessibilityOrProcessLaunch() async throws {
+        let app = FileManager.default.temporaryDirectory
+            .appendingPathComponent("refused-\(UUID().uuidString).app")
+        try FileManager.default.createDirectory(
+            at: app.appendingPathComponent("Contents/Frameworks/Electron Framework.framework"),
+            withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: app) }
+        do {
+            _ = try await AppLauncher.launch(
+                appURL: app, into: CGRect(x: 0, y: 0, width: 800, height: 600),
+                onMaterialized: { _ in XCTFail("Refused app must never materialize") })
+            XCTFail("Electron launch must be refused")
+        } catch SpaceOError.unsupportedTarget(let message) {
+            XCTAssertTrue(message.contains("managed Electron launches are unavailable"))
+        }
+    }
+
     final class RawUnixServer: @unchecked Sendable {
         let path: String
         private let listener: Int32
@@ -161,6 +178,18 @@ final class ElectronEditorBridgeTests: XCTestCase {
                 "--extensions-dir=/tmp/private controller/extensions",
                 "--extensionDevelopmentPath=/tmp/private controller/extensions/spaceo.spaceo-electron-control-0.0.1",
             ])
+    }
+
+    func testGUIEditorOverridesInheritedElectronNodeMode() {
+        let endpoint = ElectronControlEndpoint(socket: URL(fileURLWithPath: "/tmp/test/control.sock"),
+                                               token: "synthetic-test-token")
+        let result = AppLauncher.electronLaunchEnvironment(
+            ["ELECTRON_RUN_AS_NODE": "1", "LANG": "en_US.UTF-8"], endpoint: endpoint)
+        XCTAssertEqual(result["ELECTRON_RUN_AS_NODE"], "",
+                       "omitting the key would leave the inherited Node-mode flag active")
+        XCTAssertEqual(result["LANG"], "en_US.UTF-8")
+        XCTAssertEqual(result[ElectronControlAssets.socketEnvironmentKey], endpoint.socket.path)
+        XCTAssertEqual(result[ElectronControlAssets.tokenEnvironmentKey], endpoint.token)
     }
 
     func testEmbeddedControllerIsBoundedAuthenticatedAndEffectAware() {

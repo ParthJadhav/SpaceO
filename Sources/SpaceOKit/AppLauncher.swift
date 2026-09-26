@@ -73,7 +73,6 @@ public enum AppLauncher {
         }
         try LaunchOptions.validate(arguments: arguments, timeout: timeout)
         try Task.checkCancellation()
-        try WindowPlacement.requireAccessibility()
         try WindowPlacement.validate(frame: region)
         guard appURL.path.utf8.count <= 16_384, appURL.path.count <= 4_096 else {
             throw SpaceOError.badRequest(
@@ -92,6 +91,11 @@ public enum AppLauncher {
         }
 
         let chromium = isChromiumFamily(appURL)
+        guard !isElectronFamily(appURL) else {
+            throw SpaceOError.unsupportedTarget(
+                "managed Electron launches are unavailable in this preview because startup can take desktop focus; use a native app or Chromium browser")
+        }
+        try WindowPlacement.requireAccessibility()
         let electron = !chromium && isVSCodeElectronFamily(appURL)
         // Reject incompatible options before creating private directories or copying adapters.
         // Bundle classification is stable for this launch; do not repeat its filesystem reads.
@@ -108,8 +112,8 @@ public enum AppLauncher {
         configuration.addsToRecentItems = false
         // Apple documents this as hiding the app immediately after launch. Windows still exist
         // for Accessibility placement, but are not shown on the user's monitor while we move
-        // them onto the stage. Apps can unhide themselves, so we also re-hide after obtaining
-        // the exact process and verify placement again after the deliberate reveal below.
+        // them onto the stage. Apps can unhide themselves; Chromium uses explicit background
+        // page creation below, and all apps are rechecked after deliberate reveal.
         configuration.hides = true
         configuration.promptsUserIfNeeded = false
         configuration.createsNewApplicationInstance = true
@@ -119,11 +123,10 @@ public enum AppLauncher {
         // not reach its web content), and a port can only be set at launch. Giving it a private
         // profile at the same time is not incidental: it forces a genuinely separate instance
         // so we are not attaching to — or disturbing — the user's own browser and its cookies.
-        var devToolsPort: Int?
         var temporaryProfile: URL?
         var electronControl: ElectronControlEndpoint?
         var temporaryControlRoot: URL?
-        var opensFilesThroughArguments = false
+        var opensFilesWithoutWorkspace = false
         if chromium {
             let profile = FileManager.default.temporaryDirectory
                 .appendingPathComponent("spaceo-browser-\(getpid())-\(UUID().uuidString)",
@@ -147,12 +150,16 @@ public enum AppLauncher {
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-session-crashed-bubble",
+                // Create pages through CDP with background=true; a normal first window
+                // can activate Chrome despite LaunchServices activates=false.
+                "--no-startup-window",
             ]
             // The one attention leak SpaceO can close without touching the app: a managed
             // browser's audio. `--mute-audio` is a supported Chromium switch and only ever
             // applies to the private-profile instance SpaceO itself launched.
             if muteAudio { configuration.arguments.append("--mute-audio") }
             temporaryProfile = profile
+            opensFilesWithoutWorkspace = true
         } else if electron {
             let prepared: PreparedElectronControl
             do {
@@ -171,13 +178,9 @@ public enum AppLauncher {
             configuration.arguments = electronLaunchArguments(
                 extensionsDirectory: prepared.extensionsDirectory,
                 opening: files)
-            opensFilesThroughArguments = !files.isEmpty
-            var environment = ProcessInfo.processInfo.environment
-            environment[ElectronControlAssets.socketEnvironmentKey] =
-                prepared.endpoint.socket.path
-            environment[ElectronControlAssets.tokenEnvironmentKey] =
-                prepared.endpoint.token
-            configuration.environment = environment
+            opensFilesWithoutWorkspace = !files.isEmpty
+            configuration.environment = electronLaunchEnvironment(
+                ProcessInfo.processInfo.environment, endpoint: prepared.endpoint)
             electronControl = prepared.endpoint
             temporaryControlRoot = prepared.root
         }
@@ -198,7 +201,7 @@ public enum AppLauncher {
         let runningApp: NSRunningApplication
         do {
             try Task.checkCancellation()
-            if files.isEmpty || opensFilesThroughArguments {
+            if files.isEmpty || opensFilesWithoutWorkspace {
                 runningApp = try await NSWorkspace.shared.openApplication(at: appURL,
                                                                           configuration: configuration)
             } else {
@@ -257,68 +260,115 @@ public enum AppLauncher {
             try await onMaterialized(app)
             try Task.checkCancellation()
 
-            // `hides` is advisory — Apple explicitly allows an application to unhide itself,
-            // and TextEdit's separate-instance launch never reports hidden at all. Do not burn
-            // slow browser/controller readiness windows while an ordinary first window could be
-            // sitting on the user's display. Detect it at high frequency and place it first.
-            if allowNoWindows, try !WindowPlacement.hasWindows(of: app.pid) {
-                try Task.checkCancellation()
-                guard app.identity.isAlive else { throw SpaceOError.applicationExited("launched process exited") }
-                _ = runningApp.unhide()
-                try Task.checkCancellation()
-                return (app, [])
-            }
-            try await WindowPlacement.waitForWindowPresence(
-                of: app.pid,
-                timeout: timeout,
-                pollNanoseconds: 25_000_000)
-            try Task.checkCancellation()
-            _ = try WindowPlacement.placeAll(of: app.pid, into: region)
-
-            // Cover restore prompts and other windows created as the hidden application becomes
-            // ready. Install containment before DevTools discovery or settle delays; the session
-            // installs its long-lived watcher immediately after this method returns.
-            let revealWatcher = try? WindowWatcher(
-                pid: app.pid,
-                region: { region },
-                periodicSweep: false)
-            defer { revealWatcher?.stop() }
-
-            if let profile = temporaryProfile {
-                devToolsPort = try await waitForDevToolsPort(
-                    in: profile,
-                    timeout: min(timeout, 10),
-                    validate: {
-                        guard app.identity.isAlive else {
-                            throw SpaceOError.applicationExited("launched process exited")
-                        }
-                    })
-                app.devToolsPort = devToolsPort
-            }
-
-            // Settle and re-verify: some apps resize or add restore UI shortly after the first
-            // window. A best-effort watcher handles notifications during the wait; the full
-            // placement pass is authoritative even if AXObserver registration was not ready.
-            try await Task.sleep(nanoseconds: 300_000_000)
-            try Task.checkCancellation()
-            revealWatcher?.sweep()
-            _ = try WindowPlacement.placeAll(of: app.pid, into: region)
-
-            try await reveal(name: app.name, validate: {
-                guard app.identity.isAlive else {
-                    throw SpaceOError.applicationExited("launched process exited")
+            return try await withStartupContainment(install: {
+                guard chromium else { return {} }
+                // A Chromium derivative may ignore --no-startup-window. Install both AX
+                // notifications and the periodic backstop before waiting on its endpoint.
+                // If containment cannot start, fail before spending the DevTools budget.
+                let watcher = try WindowWatcher(pid: pid, region: { region })
+                watcher.sweep()
+                return { watcher.stop() }
+            }, operation: {
+                if let profile = temporaryProfile {
+                    let startupBudget = try DevToolsDeadline(timeout: min(timeout, 10))
+                    guard let port = try await waitForDevToolsPort(in: profile,
+                        timeout: try startupBudget.remaining(), validate: {
+                            guard identity.isAlive else {
+                                throw SpaceOError.applicationExited("browser exited during startup")
+                            }
+                        }) else {
+                        throw SpaceOError.launchFailed("browser did not publish its private DevTools endpoint")
+                    }
+                    app.devToolsPort = port
+                    let startup = ChromiumBridge(port: port)
+                    try await startup.createBackgroundPages(files: files, region: region,
+                        timeout: try startupBudget.remaining(), validate: {
+                            guard identity.isAlive else {
+                                throw SpaceOError.applicationExited("browser exited during startup")
+                            }
+                        })
                 }
-            }, isHidden: { runningApp.isHidden }, unhide: { _ = runningApp.unhide() })
-            try await Task.sleep(nanoseconds: 150_000_000)
-            try Task.checkCancellation()
-            revealWatcher?.sweep()
-            let placed = try WindowPlacement.placeAll(of: app.pid, into: region)
-            try Task.checkCancellation()
-            return (app, placed)
+
+                // `hides` is advisory — Apple explicitly allows an application to unhide itself,
+                // and TextEdit's separate-instance launch never reports hidden at all. Do not burn
+                // slow browser/controller readiness windows while an ordinary first window could be
+                // sitting on the user's display. Detect it at high frequency and place it first.
+                if allowNoWindows, try !WindowPlacement.hasWindows(of: app.pid) {
+                    try Task.checkCancellation()
+                    guard app.identity.isAlive else { throw SpaceOError.applicationExited("launched process exited") }
+                    _ = runningApp.unhide()
+                    try Task.checkCancellation()
+                    return (app, [])
+                }
+                try await WindowPlacement.waitForWindowPresence(
+                    of: app.pid,
+                    timeout: timeout,
+                    pollNanoseconds: 25_000_000)
+                try Task.checkCancellation()
+                _ = try WindowPlacement.placeAll(of: app.pid, into: region)
+
+                // Chromium already has startup containment. Cover native restore prompts before
+                // settle delays; the session installs its long-lived watcher on return.
+                let revealWatcher: WindowWatcher? = chromium ? nil : (try? WindowWatcher(
+                    pid: app.pid,
+                    region: { region },
+                    periodicSweep: false))
+                defer { revealWatcher?.stop() }
+
+                // Settle and re-verify: some apps resize or add restore UI shortly after the first
+                // window. A best-effort watcher handles notifications during the wait; the full
+                // placement pass is authoritative even if AXObserver registration was not ready.
+                try await Task.sleep(nanoseconds: 300_000_000)
+                try Task.checkCancellation()
+                revealWatcher?.sweep()
+                _ = try WindowPlacement.placeAll(of: app.pid, into: region)
+
+                try await reveal(name: app.name, validate: {
+                    guard app.identity.isAlive else {
+                        throw SpaceOError.applicationExited("launched process exited")
+                    }
+                }, isHidden: { runningApp.isHidden }, unhide: { _ = runningApp.unhide() })
+                try await Task.sleep(nanoseconds: 150_000_000)
+                try Task.checkCancellation()
+                revealWatcher?.sweep()
+                let placed = try WindowPlacement.placeAll(of: app.pid, into: region)
+                try Task.checkCancellation()
+                return (app, placed)
+            })
         } catch {
             await LaunchFailureCleanup.run(app)
-            throw error
+            throw launchFailure(error, application: app.name)
         }
+    }
+
+    /// Keep startup containment active across every readiness await and stop it on all exits.
+    /// Installation must succeed before any browser discovery or page creation can begin.
+    static func withStartupContainment<T>(
+        install: () throws -> () -> Void,
+        operation: () async throws -> T
+    ) async throws -> T {
+        try Task.checkCancellation()
+        let stop = try install()
+        defer { stop() }
+        try Task.checkCancellation()
+        return try await operation()
+    }
+
+    static func launchFailure(_ error: Error, application: String) -> Error {
+        guard error is DevToolsDeadline.Exceeded else { return error }
+        return SpaceOError.launchFailed(
+            "\(application) timed out preparing its private DevTools endpoint or background page")
+    }
+
+    static func electronLaunchEnvironment(_ parent: [String: String],
+                                          endpoint: ElectronControlEndpoint) -> [String: String] {
+        var environment = parent
+        // OpenConfiguration overlays inherited variables; omission does not clear Node mode.
+        // Electron's macOS entry point treats an empty value as off.
+        environment["ELECTRON_RUN_AS_NODE"] = ""
+        environment[ElectronControlAssets.socketEnvironmentKey] = endpoint.socket.path
+        environment[ElectronControlAssets.tokenEnvironmentKey] = endpoint.token
+        return environment
     }
 
     static func electronLaunchArguments(
@@ -559,6 +609,19 @@ public enum AppLauncher {
         return AppNameCatalog.suggestions(for: name, in: AppNameCatalog.cachedEntries())
     }
 
+    /// Reopening a managed browser must use its private background-target endpoint. Never
+    /// fall back to LaunchServices when that endpoint is missing or an Electron app is reused.
+    static func reusedBrowserPort(appURL: URL, devToolsPort: Int?) throws -> Int? {
+        guard !isElectronFamily(appURL) else {
+            throw SpaceOError.launchFailed("managed Electron file opens are unavailable in this preview")
+        }
+        guard isChromiumFamily(appURL) else { return nil }
+        guard let port = devToolsPort, (1...65_535).contains(port) else {
+            throw SpaceOError.launchFailed("reused Chromium has no private DevTools endpoint; file open refused")
+        }
+        return port
+    }
+
     /// Is this bundle a Chromium derivative? Read from the bundle rather than a name list,
     /// so forks we have never heard of are still handled correctly.
     public static func isChromiumFamily(_ appURL: URL) -> Bool {
@@ -630,6 +693,11 @@ public enum AppLauncher {
                 atPath: resources.appendingPathComponent("out/cli.js").path)
             && FileManager.default.fileExists(
                 atPath: resources.appendingPathComponent("product.json").path)
+    }
+
+    static func isElectronFamily(_ appURL: URL) -> Bool {
+        FileManager.default.fileExists(atPath: appURL.appendingPathComponent(
+            "Contents/Frameworks/Electron Framework.framework").path)
     }
 
     private static func prepareElectronControl() throws -> PreparedElectronControl {

@@ -23,6 +23,9 @@ assert that version `1.0.0` or any downloadable artifact has passed the
 
 ## Verify and install
 
+The first DMG is a native-app and Chromium preview for Apple Silicon. Managed Electron
+launches are refused before startup; Cursor and VS Code can still connect as MCP clients.
+
 Download the `.dmg`, `.sha256`, and `.sha256.sig` files from the same release. Authenticate the
 checksum as an official SpaceO publisher artifact before using it:
 

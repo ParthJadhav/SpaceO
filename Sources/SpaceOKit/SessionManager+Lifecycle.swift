@@ -233,6 +233,7 @@ extension SessionManager {
         guard let commandLease = try? await operationGate.enter() else { return [] }
         defer { commandLease.finish() }
         guard !isShuttingDown else { return [] }
+        guard !pool.stages.contains(where: \.hasLifecycleFailure) else { return [] }
         let online = Set(onlineDisplayIDs())
         var lost: [String] = []
         var swept = 0

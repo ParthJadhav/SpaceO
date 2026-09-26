@@ -787,6 +787,9 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var maximumTotalPixels: Int
     public var maximumTotalBytes: Int
     public var maximumCreationsPerMinute: Int
+    /// Persistent per-user lifecycle cap, including the unrestricted resource mode.
+    /// Nil when decoding an older daemon that did not report the ten-minute window.
+    public var maximumCreationsPerTenMinutes: Int?
     public var minimumTileWidth: Int
     public var minimumTileHeight: Int
     public var maximumDisplayEdge: Int
@@ -799,7 +802,9 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
         maximumDisplays = budget.maximumDisplays
         maximumTotalPixels = budget.maximumTotalPixels
         maximumTotalBytes = budget.maximumTotalBytes
-        maximumCreationsPerMinute = budget.maximumCreationsPerMinute
+        maximumCreationsPerMinute = min(budget.maximumCreationsPerMinute,
+                                        DisplayLifecycleLease.maximumCreationsPerMinute)
+        maximumCreationsPerTenMinutes = DisplayLifecycleLease.maximumCreationsPerTenMinutes
         minimumTileWidth = Int(budget.minimumTileSize.width)
         minimumTileHeight = Int(budget.minimumTileSize.height)
         maximumDisplayEdge = budget.maximumDisplayEdge
@@ -1189,6 +1194,12 @@ public struct Response: Codable, Sendable {
         response.errorCode = (error as? SpaceOError)?.code ?? "operation_failed"
         response.nextAction = (error as? SpaceOError)?.nextAction
         response.recovery = (error as? SpaceOError)?.recovery
+        if let partial = error as? BackgroundPageOpenFailure {
+            response.errorCode = "file_open_incomplete"
+            response.steps = partial.steps
+            response.firstFailureIndex = partial.failedIndex < partial.total ? partial.failedIndex : nil
+            response.nextAction = "Do not replay confirmed opens. Inspect browser targets before retrying a file with unknown delivery."
+        }
         if case .notRunning = error as? Transport.TransportError {
             response.errorCode = "daemon_not_running"
             response.nextAction = "spaceo daemon"
@@ -1230,6 +1241,8 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
     public var responsibleProcess: String?
     /// True while the daemon refuses new sessions ahead of a restart.
     public var draining: Bool?
+    /// Current lifecycle circuit/journal state; absent on older daemons.
+    public var displaySafety: DisplaySafetyStatus?
     /// True when a LaunchAgent supervises this daemon.
     public var supervisedByLaunchd: Bool?
 
@@ -1247,7 +1260,8 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
         canCapture: Bool? = nil,
         responsibleProcess: String? = nil,
         draining: Bool? = nil,
-        supervisedByLaunchd: Bool? = nil
+        supervisedByLaunchd: Bool? = nil,
+        displaySafety: DisplaySafetyStatus? = nil
     ) {
         self.version = version
         self.protocolVersion = protocolVersion
@@ -1263,6 +1277,7 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
         self.responsibleProcess = responsibleProcess
         self.draining = draining
         self.supervisedByLaunchd = supervisedByLaunchd
+        self.displaySafety = displaySafety
     }
 }
 

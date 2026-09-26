@@ -1,5 +1,10 @@
 # Live WindowServer tests
 
+**September 25 containment:** the owner requested removal of the blanket macOS 27+ quarantine;
+lifecycle and unsafe-display checks remain enforced. Read [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md)
+before scheduling reserved-host qualification. A lower refresh rate or another login is not
+panic containment. Do not run this suite on an actively used desktop.
+
 `Tests/SpaceOKitTests/IntegrationTests.swift` is the only coverage SpaceO has for the claims that
 define the product: Stage create/destroy, tile isolation, capture, input routing, the DevTools
 bridge, and late-window containment. None of it can run on a GitHub-hosted runner — there is no
@@ -18,8 +23,8 @@ code. `scripts/check-live-test-run.sh` reads the run log and fails when no test 
 when any test skipped, or when fewer tests executed than the suite defines. The expected count is
 derived from the suite source, so adding a live test raises the bar automatically.
 
-**The leak assertion must be armed even when setUp does not finish.** `setUpWithError` takes the
-display baseline *before* `XCTSkipUnless`, because that call throws. With the baseline taken after
+**The leak assertion must be armed after admission and before a runtime prerequisite skip.** `setUpWithError` first checks opt-in, suite failure, and capabilities without display inventory.
+Once admitted, it takes the display baseline *before* `XCTSkipUnless`, because that call throws. With the baseline taken after
 it, `tearDownWithError`'s `guard hasDisplayBaseline else { return }` returned immediately and the
 leaked-virtual-display assertion never ran — on exactly the runs where it was skipping.
 `Tests/LiveTestGateTests.sh` asserts that ordering so it cannot silently regress.
@@ -27,19 +32,29 @@ leaked-virtual-display assertion never ran — on exactly the runs where it was 
 ## Running locally
 
 ```sh
-make test-live        # skips itself when the host lacks the grants
-make test-live-full   # a skip is a failure; use this to qualify a host
+SPACEO_LIVE_TESTS=1 make test-live        # reserved host only
+SPACEO_LIVE_TESTS=1 make test-live-full   # a skip is a failure
 ```
 
-`make test-live` is the developer default and is unchanged: on a machine that has not been set up,
-the suite skips rather than fails. `--require-full` is the qualification mode.
+Without `SPACEO_LIVE_TESTS=1`, the shell wrapper refuses and XCTest skips before querying the
+display server. With opt-in, missing prerequisites still skip; `--require-full` treats these as
+failure. Parallel workers are refused, cases are paced, and the first failure stops further
+cases. Always use the wrapper for the external deadline and retained log described in
+[DISPLAY_SAFETY.md](DISPLAY_SAFETY.md).
+The wrapper builds the bundle, then supervises XCTest directly. SwiftPM's buffered output and
+separate XCTest process group would otherwise hide case deadlines and evade group suspension.
+The suite retains one physical-display baseline across all cases and checks it before and after
+each pacing interval. A monitor change between cases invalidates the run before further display
+creation; it must not silently become a passing test of a different setup.
+The computer-use matrix also requires this opt-in and stops after its first failure or blocked
+result, after attempting the current session's cleanup; it does not start another suite.
 
 Both create virtual displays, launch applications, and synthesise input into the **current
 graphical login**. Do not run them on a desktop you are using: synthesised keystrokes go to
-whatever holds focus. Use a dedicated login by default. The owner explicitly authorized the
-2026-09-05 audit and candidate qualification in the existing login. For that work, use isolated
-audit sockets, preserve unrelated state, record pre/post display topology, and do not switch
-users or change displays during a run. Discard and repeat interrupted runs.
+whatever holds focus. Use a reserved machine and a dedicated login. Prior authorization for the September 5 audit does
+not qualify this post-incident configuration. Preserve unrelated state and record pre/post
+display topology. Do not switch users or change displays during a run. Stop and inspect failed
+or interrupted runs; do not automatically repeat them.
 
 Check the host first:
 
@@ -53,7 +68,7 @@ and `--require-full` will fail, which is the intended behaviour — the run prov
 For the end-to-end MCP action matrix, retain a privacy-safe structured result beside the live log:
 
 ```sh
-SPACEO_RUN_ID=claude-round-1 \
+SPACEO_LIVE_TESTS=1 SPACEO_RUN_ID=claude-round-1 \
 SPACEO_LOG_METRICS=1 \
 node scripts/computer-use-check.mjs .build/release/spaceo \
   --suite=all --require-full --report=.artifacts/claude-round-1/actions.json
@@ -73,8 +88,9 @@ interpreting a run; an installed file can be newer than the executable image alr
 socket. A signed Viewer helper and the standalone CLI can have different SHA-256 values while still
 matching by Mach-O build UUID. With `--require-full`, the matrix additionally waits through the
 idle grace and fails unless every virtual display retires, no orphan remains, and the user's
-online/active/mirrored topology is unchanged. Each native, Chromium, and Electron suite also fails
-if any published app window lies outside its SpaceO tile. The daemon log and action report are
+online/active/mirrored topology is unchanged. Native and Chromium suites also fail
+if any published app window lies outside its SpaceO tile. The preview's Electron suite verifies
+pre-launch refusal and absence of published windows, not renderer support. The daemon log and action report are
 created owner-only (`0600`).
 
 ## The CI job
@@ -89,9 +105,9 @@ two jobs:
 - `live` runs `scripts/test.sh live --require-full` on the self-hosted runner and uploads the run
   log as an artifact regardless of outcome.
 
-It is **not** an automated release gate, and it does not reinstate anything removed by commit
-`43a39d6` / RELEASE_AUDIT Round 9: there is no host attestation, no commit-bound qualification
-record, and no `scripts/release.sh` dependency. It is an on-demand, recorded run of the suite.
+It remains an on-demand recorded run, with no commit-bound qualification record or
+`scripts/release.sh` dependency. RA-055 reinstates display-safety admission and explicit live
+opt-in; the historical Round 9 removal is superseded for those protections.
 That said, a successful no-skip run (from this workflow or a retained local `make test-live` log)
 is required *approval evidence* under `docs/RELEASE_POLICY.md` — the release owner reviews it at
 go/no-go rather than automation enforcing it. "Not a gate" means no machinery blocks packaging;

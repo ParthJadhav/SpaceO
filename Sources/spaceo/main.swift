@@ -1004,6 +1004,7 @@ case "daemon":
         var response = await holder.handle(request)
         var runtime = daemonRuntime
         runtime.draining = await holder.isDraining()
+        runtime.displaySafety = Stage.runtimeDisplaySafetyStatus()
         response.daemon = runtime
         let elapsed = started.duration(to: .now).components
         DaemonLog.shared.record(

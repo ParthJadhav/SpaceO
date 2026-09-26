@@ -97,6 +97,39 @@ final class DisplaySafetyTests: XCTestCase {
             bounds: CGRect(x: 1_920, y: 0, width: 1_280, height: 800)))
     }
 
+    func testCreationAdmissionRejectsUnsafeOrUnknownUserDisplays() {
+        func failure(_ displays: [Stage.UserDisplayConfiguration.Display], foreign: [UInt32] = []) -> String? {
+            Stage.admissionFailure(configuration: configuration(displays), foreignDisplayIDs: foreign)
+        }
+        XCTAssertNil(failure([userDisplay()]))
+        XCTAssertNotNil(failure([]))
+        XCTAssertNotNil(failure([userDisplay(active: false)]))
+        XCTAssertNotNil(failure([userDisplay(mirroredTo: 2)]))
+        XCTAssertNotNil(failure([userDisplay(refreshRate: 240)]))
+        XCTAssertNotNil(failure([userDisplay(refreshRate: .nan)]))
+        XCTAssertNotNil(failure([userDisplay()], foreign: [99_222]))
+    }
+
+    func testIncidentQualificationStillRejectsMissingDisplaysAndForeignOwners() {
+        let mirrored = configuration([
+            userDisplay(id: 1, active: false, mirroredTo: 2, refreshRate: 0),
+            userDisplay(id: 2, mirroredTo: 1, refreshRate: 240),
+        ])
+        XCTAssertNotNil(Stage.admissionFailure(configuration: mirrored, foreignDisplayIDs: []))
+        XCTAssertNil(Stage.admissionFailure(configuration: mirrored, foreignDisplayIDs: [],
+                                             qualifyPanicConfiguration: true))
+        XCTAssertNotNil(Stage.admissionFailure(configuration: mirrored, foreignDisplayIDs: [99_222],
+                                                qualifyPanicConfiguration: true))
+        XCTAssertNotNil(Stage.admissionFailure(configuration: configuration([]), foreignDisplayIDs: [],
+                                                qualifyPanicConfiguration: true))
+        XCTAssertNotNil(Stage.admissionFailure(
+            configuration: configuration([userDisplay(active: false, mirroredTo: 2)]),
+            foreignDisplayIDs: [], qualifyPanicConfiguration: true))
+        #if !SPACEO_DISPLAY_QUALIFICATION
+        XCTAssertFalse(Stage.qualifiesPanicConfiguration, "ordinary builds have no environment bypass")
+        #endif
+    }
+
     func testInactiveOverlappingOrSpacelessDisplayIsRefused() {
         XCTAssertTrue(publicationFailure(active: false)?.contains("inactive") == true)
         XCTAssertTrue(publicationFailure(spaces: [])?.contains("no managed Space") == true)

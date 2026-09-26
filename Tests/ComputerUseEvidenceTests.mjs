@@ -57,7 +57,7 @@ test("matrix exits with failure when its MCP process cannot start or exits early
   try {
     for (const binary of [join(root, "missing"), "/usr/bin/false"]) {
       const run = spawnSync(process.execPath, [matrix, binary, "--suite=native"], {
-        encoding: "utf8", timeout: 5_000, env: { ...process.env, TMPDIR: root },
+        encoding: "utf8", timeout: 5_000, env: { ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1" },
       });
       assert.equal(run.error, undefined, "the harness must finish without an external timeout");
       assert.equal(run.status, 1);
@@ -67,7 +67,7 @@ test("matrix exits with failure when its MCP process cannot start or exits early
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("matrix records each suite's RPC failure, continues coverage, and keeps diagnostics out of labels", () => {
+test("matrix stops after its first suite failure and keeps diagnostics out of labels", () => {
   const root = mkdtempSync(join(tmpdir(), "spaceo-matrix-test-"));
   try {
     const binary = join(root, "fake-mcp.mjs");
@@ -85,7 +85,7 @@ createInterface({input: process.stdin}).on('line', line => {
 `, { mode: 0o700 });
     const run = spawnSync(process.execPath, [matrix, binary, "--suite=all", `--report=${report}`], {
       encoding: "utf8", timeout: 5_000, env: {
-        ...process.env, TMPDIR: root, SPACEO_CU_CHROME_APP: root, SPACEO_CU_CURSOR_APP: root,
+        ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1", SPACEO_CU_CHROME_APP: root, SPACEO_CU_CURSOR_APP: root,
       },
     });
     assert.equal(run.error, undefined);
@@ -95,8 +95,18 @@ createInterface({input: process.stdin}).on('line', line => {
     assert.equal(result.tools[0].tool, "spaceo_session_create");
     assert.equal(result.tools[0].ok, false);
     assert.deepEqual(result.steps.filter(step => step.status === "fail").map(step => step.label),
-      ["[native] suite error", "[web] suite error", "[electron] suite error"]);
+      ["[native] suite error"]);
+    assert.equal(result.tools.length, 1, "later suites must not create another display");
     assert.doesNotMatch(JSON.stringify(result.steps), /PRIVATE-DIAGNOSTIC/);
     assert.equal(readdirSync(root).some(name => name.startsWith("spaceo-cu-")), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("matrix refuses to start without reserved-host opt-in", () => {
+  const run = spawnSync(process.execPath, [matrix, "/usr/bin/false"], {
+    encoding: "utf8", timeout: 5_000, env: { ...process.env, SPACEO_LIVE_TESTS: "0" },
+  });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /SPACEO_LIVE_TESTS=1/);
+  assert.equal(run.stdout, "");
 });

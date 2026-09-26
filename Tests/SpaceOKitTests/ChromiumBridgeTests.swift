@@ -485,6 +485,173 @@ final class ChromiumBridgeTests: XCTestCase {
         func append(_ event: String) { lock.withLock { stored.append(event) } }
     }
 
+    func testStartupCreatesBackgroundPagesAndReleasesBrowserBinding() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let log = CommandLog()
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { method, params in
+            XCTAssertEqual(method, "Target.createTarget")
+            XCTAssertEqual(params["background"] as? Bool, true)
+            if params["newWindow"] as? Bool == true {
+                XCTAssertEqual(params["left"] as? Int, 2000)
+            } else {
+                XCTAssertNil(params["left"], "tab creation must omit window-only bounds")
+            }
+            log.append(params["url"] as? String ?? "")
+            return ["targetId": "created"]
+        })
+        let files = [URL(fileURLWithPath: "/tmp/first.html"), URL(fileURLWithPath: "/tmp/second.html")]
+        try await bridge.createBackgroundPages(files: files,
+            region: CGRect(x: 2000, y: 0, width: 1280, height: 800))
+        XCTAssertEqual(log.events, files.map(\.absoluteString))
+        let bound = await bridge.boundTargetID
+        XCTAssertNil(bound)
+    }
+
+    func testStartupRejectsAnUnconfirmedCreatedPage() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, _ in [:] })
+        do {
+            try await bridge.createBackgroundPages(files: [],
+                region: CGRect(x: 2000, y: 0, width: 1280, height: 800))
+            XCTFail("an empty reply cannot confirm page creation")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("did not confirm"))
+        }
+        let bound = await bridge.boundTargetID
+        XCTAssertNil(bound)
+    }
+
+    func testReusedFileOpenReportsConfirmedUnknownAndUnexecutedPages() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let sent = CommandLog()
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, params in
+            sent.append(params["url"] as? String ?? "")
+            if sent.events.count == 1 { return ["targetId": "first-page"] }
+            throw SpaceOError.launchFailed("connection closed before reply")
+        })
+        do {
+            try await bridge.createBackgroundPages(
+                files: (0..<3).map { URL(fileURLWithPath: "/tmp/\($0).html") },
+                region: CGRect(x: 2000, y: 0, width: 1280, height: 800),
+                reportPartialCompletion: true)
+            XCTFail("the second open must fail")
+        } catch {
+            let wire = try JSONEncoder().encode(Response.failure(
+                AppLauncher.launchFailure(error, application: "Test Browser")))
+            let response = try JSONDecoder().decode(Response.self, from: wire)
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorCode, "file_open_incomplete")
+            XCTAssertEqual(response.firstFailureIndex, 1)
+            XCTAssertEqual(response.steps?.map(\.ok), [true, false, false])
+            XCTAssertEqual(response.steps?.map(\.executed), [true, true, false])
+            XCTAssertEqual(response.steps?.map(\.completion), ["confirmed", "unknown", "not_executed"])
+            XCTAssertTrue(response.steps?.first?.message?.contains("first-page") == true)
+        }
+        XCTAssertEqual(sent.events.count, 2, "do not open later files after unknown delivery")
+        let bound = await bridge.boundTargetID
+        XCTAssertNil(bound)
+    }
+
+    func testReusedFileOpenDistinguishesValidationFailureBeforeAndAfterDelivery() async throws {
+        for stopAfter in [1, 3] {
+            let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+                "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+            }))
+            defer { server.stop() }
+            let sent = CommandLog()
+            let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, _ in
+                sent.append("sent")
+                return ["targetId": "page-\(sent.events.count)"]
+            })
+            do {
+                try await bridge.createBackgroundPages(
+                    files: (0..<3).map { URL(fileURLWithPath: "/tmp/\($0).html") },
+                    region: CGRect(x: 2000, y: 0, width: 1280, height: 800),
+                    reportPartialCompletion: true, validate: {
+                        if sent.events.count == stopAfter {
+                            throw SpaceOError.applicationExited("test process exited")
+                        }
+                    })
+                XCTFail("process validation must fail")
+            } catch {
+                let response = Response.failure(error)
+                XCTAssertEqual(response.errorCode, "file_open_incomplete")
+                XCTAssertEqual(response.firstFailureIndex, stopAfter == 3 ? nil : 1)
+                XCTAssertEqual(response.steps?.map(\.executed), (0..<3).map { $0 < stopAfter })
+                XCTAssertEqual(response.steps?.map(\.completion),
+                    (0..<3).map { $0 < stopAfter ? "confirmed" : "not_executed" })
+            }
+            XCTAssertEqual(sent.events.count, stopAfter)
+        }
+    }
+
+    func testReusedFileOpenCancellationBeforeSendReportsNotExecuted() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let sent = CommandLog()
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, _ in
+            sent.append("sent")
+            return ["targetId": "first-page"]
+        })
+        let task = Task {
+            try await bridge.createBackgroundPages(
+                files: (0..<3).map { URL(fileURLWithPath: "/tmp/\($0).html") },
+                region: CGRect(x: 2000, y: 0, width: 1280, height: 800),
+                reportPartialCompletion: true, validate: {
+                    if sent.events.count == 1 { withUnsafeCurrentTask { $0?.cancel() } }
+                })
+        }
+        do { try await task.value; XCTFail("pre-send cancellation must fail") }
+        catch {
+            let response = Response.failure(error)
+            XCTAssertEqual(response.errorCode, "file_open_incomplete")
+            XCTAssertEqual(response.firstFailureIndex, 1)
+            XCTAssertEqual(response.steps?.map(\.executed), [true, false, false])
+            XCTAssertEqual(response.steps?.map(\.completion), ["confirmed", "not_executed", "not_executed"])
+        }
+        XCTAssertEqual(sent.events.count, 1)
+    }
+
+    func testStartupRejectsRemoteBrowserEndpointBeforeSendingCommands() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://example.com:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let log = CommandLog()
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { method, _ in
+            log.append(method)
+            return ["targetId": "unexpected"]
+        })
+        do {
+            try await bridge.createBackgroundPages(files: [],
+                region: CGRect(x: 0, y: 0, width: 1280, height: 800))
+            XCTFail("remote endpoints must be rejected")
+        } catch {}
+        XCTAssertEqual(log.events, [])
+    }
+
+    func testStartupRejectsBoundsThatCannotFitProtocolIntegers() async throws {
+        let bridge = ChromiumBridge(port: 1)
+        do {
+            try await bridge.createBackgroundPages(files: [],
+                region: CGRect(x: CGFloat.greatestFiniteMagnitude, y: 0, width: 1280, height: 800))
+            XCTFail("bounds must be checked before integer conversion or networking")
+        } catch {
+            XCTAssertTrue(String(describing: error).contains("integer range"))
+        }
+    }
+
     private func checkCancelledGesture(_ action: @escaping (ChromiumBridge) async throws -> Void,
                                        expected: [String]) async throws {
         let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in

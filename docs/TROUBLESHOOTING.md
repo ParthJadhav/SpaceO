@@ -128,7 +128,8 @@ after a timed-out wait. `SPACEO_SESSION` and `SPACEO_LEASE` fill in `--session` 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Build errors on a fresh checkout | Wrong toolchain | SpaceO is pinned to Xcode 26.0.1 / Swift 6.2. Check `xcodebuild -version` and `swift --version`. |
-| `make test-live` skips everything | The process running the tests lacks the grants, or a required API or app is missing | Grant Accessibility and Screen Recording to the terminal running the tests. `make test-live-full` turns a skip into a failure on purpose. See [Live tests](LIVE_TESTS.md). |
+| `make test-live` refuses before XCTest | The required live-test opt-in is missing | On a reserved desktop, follow [Live tests](LIVE_TESTS.md) and run `SPACEO_LIVE_TESTS=1 make test-live-full`. |
+| Opted-in live tests skip cases | The test process lacks grants, or a required API or app is missing | Check `spaceo doctor` and the skip reason. Grant missing Accessibility/Screen Recording access to the test runner. `SPACEO_LIVE_TESTS=1 make test-live-full` treats every skip as failure. |
 | `make computer-use-check` exits `2` | A suite was skipped (Chrome or Cursor not installed) or a documented blocker remains | Install the missing app, or read the report. Exit `2` is "healthy but unknown", not a pass. |
 | Live tests hang or the host looks wrong afterwards | Live suites create real displays and send real input | Run them in a dedicated login. See "Displays" above. |
 

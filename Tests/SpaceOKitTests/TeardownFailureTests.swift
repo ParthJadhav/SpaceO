@@ -269,11 +269,9 @@ final class TeardownFailureTests: XCTestCase {
         XCTAssertFalse(janitorAfterSuccess)
     }
 
-    /// The failure `ARCHITECTURE.md` §3.1 records on the macOS 27 preview host: a display that
-    /// never leaves the online list. Every `daemon.stop` retry fails identically, so if the first
-    /// failure latched shutdown the daemon would refuse all work forever and `kill -9` would be
-    /// the only exit — abandoning exactly the apps and displays teardown kept ownership of.
-    func testPermanentlyStuckDisplayDoesNotBrickTheDaemon() async {
+    /// A failed stop must preserve diagnostic/cleanup access. RA-055 containment supersedes
+    /// the old expectation that an invalid display could still be published as a new session.
+    func testStuckDisplayKeepsDiagnosticsAvailableButCannotPublishInvalidStage() async {
         let display = makePool(displayID: 90_005, failures: Int.max)
         let manager = SessionManager(pool: display.pool, runJanitor: true)
         let seeded = await manager.handle(TestController.createRequest())
@@ -295,7 +293,10 @@ final class TeardownFailureTests: XCTestCase {
         }
 
         let created = await manager.handle(TestController.createRequest(session: "after-stuck"))
-        XCTAssertTrue(created.ok, created.error ?? "")
+        XCTAssertFalse(created.ok, "an invalid stage must not be published as a new session")
+        XCTAssertEqual(created.errorCode, "display_creation_failed")
+        let count = await manager.count
+        XCTAssertEqual(count, 0)
         await manager.stopJanitor()
     }
 
