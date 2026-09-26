@@ -1,6 +1,7 @@
 # SpaceO 1.1.1
 
-Status: draft; public release and signed-artifact qualification are pending.
+Status: draft native-app and Chromium preview; publication is blocked by incomplete live and
+signed-artifact qualification. Managed Electron launches are explicitly refused.
 
 This maintenance release improves agent usability, bounds background work and memory, and
 simplifies the Viewer controls. It preserves explicit partial/unknown isolation results and
@@ -8,6 +9,13 @@ controller ownership rules.
 
 ## Changes
 
+- Contain display-service failures with bounded lifecycle waits, shared creation limits and a
+  persistent failure latch. Stop live suites after the first failure. The blanket macOS 27+
+  quarantine is removed; display-configuration guards remain.
+- Use verified display snapshots while a lifecycle mutation is busy, retain backings after
+  failed cleanup preflight, and report lifecycle health without journal I/O in ordinary replies.
+- Open reused Chromium files in background targets and return partial-completion receipts when
+  some opens fail, preserving evidence needed to avoid duplicate retries.
 - Reduce temporary allocations in MCP handling, Accessibility observations, event framing,
   capture, recording reports, and Viewer updates; bound queues, buffers, and retained work.
 - Apply monotonic deadlines across transport, browser discovery, waits, and capture admission;
@@ -26,7 +34,19 @@ docs/AGENT_EFFICIENCY.md. Synthetic benchmarks are not production latency or RSS
 
 ## Qualification
 
-Deterministic validation is recorded in docs/validation/2026-09-23-release-preparation.md.
+On source commit `2e0782821f89232eef19ccca4077fce1fa46f264`, 1,618 deterministic Swift tests,
+supervisor/Node fixtures and the 34-tool MCP smoke passed. CI is also green on documentation
+head `48e9e983abcd60110adf24d97d97d9dbe91e847d`.
+
+The latest full live run passed 13 cases, failed the two-session TextEdit Accessibility case,
+and skipped the final two cases after the failure. Its follow-up MCP matrix was not run. No
+WindowServer restart or panic was observed, but the failure latch remains set. These results do
+not complete live qualification. Earlier complete passes belong to an earlier source commit.
+See [the September 26 evidence](validation/2026-09-26-display-containment.md).
+
+The intermittent TextEdit Accessibility blackout and Apple's underlying display-driver defect
+remain unresolved. The containment changes do not guarantee prevention of kernel panics.
+
 No signed, notarized, stapled, or live-qualified binary is attached to this draft. Public
 publication requires the gates in docs/RELEASE_POLICY.md, including protected approval,
 current live evidence, exact-candidate verification, and release-owner GO.
