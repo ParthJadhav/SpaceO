@@ -1,6 +1,6 @@
 # Setup guide
 
-SpaceO is currently a development preview; no qualified public release is recorded.
+SpaceO is a preview; the current release is [1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1).
 This guide takes you from a source build to a session self-test and MCP configuration. If a step
 fails, see [Troubleshooting](TROUBLESHOOTING.md).
 
@@ -19,8 +19,7 @@ user's files and app sessions. Use a separate login or VM for untrusted workload
 ## 2. Install `spaceo`
 
 **From a release** — follow [Installing a SpaceO release](INSTALL.md). It verifies the
-publisher signature and checksum before you run anything. No public release is published yet,
-so most people build from source today.
+publisher signature and checksum before you run anything.
 
 **From source:**
 

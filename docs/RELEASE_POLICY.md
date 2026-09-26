@@ -133,16 +133,9 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-The repository contains the packaging and verification implementation, but no evidence in this
-repository proves that a Developer ID-signed, notarized, stapled, qualified public
-artifact has completed these gates. The source version is `1.1.1`; the historical source-only
-`v1.1.0` prerelease was removed during open-source history cleanup. A GitHub release draft for
-`v1.1.1` holds proposed notes only: it has no tag, no binary assets, and does not qualify a
-distribution. Release workflows
-remain disabled pending candidate preparation and qualification. Source publication and
-repository protection are complete. The additional `SPACEO_RELEASE_ENABLED`
-switch defaults off, and the workflow verifies reviewer and tag restrictions before accessing
-the signing environment. Follow
-[docs/INSTALL.md](INSTALL.md) for artifact verification and maintainer commands, and do not
-describe a public release as available until this section is updated with the retained approval
-record.
+The source version is `1.1.1`. Its live suite (16/16, no skips) and MCP matrix (36/36) passed
+on 2026-09-26; see [the 1.1.1 live record](validation/2026-09-26-release-1.1.1-live.md). The
+release owner directed publication of `v1.1.1` as a native-app and Chromium prerelease through
+the protected candidate and publication jobs. The historical source-only `v1.1.0` prerelease was
+removed during open-source history cleanup. Follow [docs/INSTALL.md](INSTALL.md) for artifact
+verification and maintainer commands.

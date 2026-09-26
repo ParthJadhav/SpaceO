@@ -190,9 +190,8 @@ containing both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar
 SpaceO publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or
 executing the payload; then verify the stapled ticket and Gatekeeper assessment.
 
-No signed, notarized, qualified public release is currently recorded in this
-repository. `VERSION` is the planned release number, not proof that an installable release exists.
-Do not treat a local build or ad-hoc-signed artifact as a public release.
+The current release is [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1). Do not treat a local build or ad-hoc-signed
+artifact as a public release.
 
 See [Installing a SpaceO release](INSTALL.md) for exact installation, upgrade, rollback,
 uninstall, artifact-verification, and maintainer publication procedures.

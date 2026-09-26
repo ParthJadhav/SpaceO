@@ -36,8 +36,7 @@ still counts as a match. `unknown` means the daemon is older than this check.
 ## Is a newer version available?
 
 - **Releases:** check the [GitHub releases page](https://github.com/ParthJadhav/SpaceO/releases).
-  No signed public release is published yet; `VERSION` on `main` is the planned number, not a
-  download.
+  `VERSION` on `main` may be ahead of the latest published release.
 - **Source builds:** compare your checkout with `main`:
 
   ```bash
