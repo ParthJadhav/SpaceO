@@ -5,7 +5,13 @@ import CoreGraphics
 final class DisplayLifecycleContainmentTests: XCTestCase {
     private final class Backing: StageDisplayBacking, @unchecked Sendable {
         let displayID: CGDirectDisplayID = 99_111
-        let bounds = CGRect(x: 2000, y: 0, width: 1280, height: 800)
+        private let lock = NSLock()
+        private var frame = CGRect(x: 2000, y: 0, width: 1280, height: 800)
+        var bounds: CGRect {
+            get { lock.withLock { frame } }
+            set { lock.withLock { frame = newValue } }
+        }
+        let pixelWidth: Int? = 2560
         let valid = true
         let block: () -> Void
         init(_ block: @escaping () -> Void = {}) { self.block = block }
@@ -42,6 +48,88 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         wait(for: [completed], timeout: 1)
         // The late empty inventory cannot turn the failed operation back into success.
         XCTAssertFalse(stage.invalidate(waitingForRemoval: 0.1))
+    }
+
+    func testGeometryReadUsesPublishedSnapshotWhileMutationOwnsWorker() {
+        let coordinator = DisplayLifecycleCoordinator()
+        let backing = Backing()
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [] }, coordinator: coordinator)
+        let expected = stage.bounds
+        XCTAssertEqual(stage.backingScale, 2)
+        let started = DispatchSemaphore(value: 0)
+        let unblock = DispatchSemaphore(value: 0)
+        let finished = expectation(description: "mutation finishes normally")
+        DispatchQueue.global().async {
+            do {
+                try coordinator.perform(timeout: 3) { _ in
+                    started.signal()
+                    unblock.wait()
+                }
+            } catch { XCTFail("query must not trip mutation: \(error)") }
+            finished.fulfill()
+        }
+        XCTAssertEqual(started.wait(timeout: .now() + 1), .success)
+        backing.bounds = CGRect(x: 3000, y: 0, width: 2560, height: 1600)
+        let start = ContinuousClock.now
+        XCTAssertEqual(stage.bounds, expected)
+        XCTAssertEqual(stage.backingScale, 2)
+        XCTAssertLessThan(start.duration(to: .now), .seconds(0.5))
+        XCTAssertNil(coordinator.failureReason)
+        unblock.signal()
+        wait(for: [finished], timeout: 2)
+        XCTAssertEqual(stage.bounds, backing.bounds, "refresh the snapshot when the worker is idle")
+        XCTAssertEqual(stage.backingScale, 1)
+        XCTAssertTrue(stage.invalidate(waitingForRemoval: 0.1))
+    }
+
+    func testFallbackPreInvalidationFailureRetainsBackingAfterStageIsDropped() {
+        let failed = expectation(description: "fallback quarantine completed")
+        let coordinator = DisplayLifecycleCoordinator { _ in failed.fulfill() }
+        var backing: Backing? = Backing { XCTFail("failed preflight must not invalidate") }
+        let observed = WeakBacking()
+        observed.value = backing
+        var stage: Stage? = Stage(testingBacking: backing!, onlineDisplayIDs: { [] },
+            coordinator: coordinator,
+            configuration: { throw SpaceOError.stageCreationFailed("preflight unavailable") })
+        XCTAssertNotNil(stage)
+        backing = nil
+        stage = nil
+        wait(for: [failed], timeout: 1)
+        XCTAssertNotNil(observed.value, "fallback failure must retain the backing before Stage deallocates")
+        XCTAssertNotNil(coordinator.failureReason)
+    }
+
+    func testPreInvalidationFailureRetainsBackingAfterStageIsDropped() {
+        let coordinator = DisplayLifecycleCoordinator()
+        var backing: Backing? = Backing { XCTFail("failed preflight must not invalidate") }
+        let observed = WeakBacking()
+        observed.value = backing
+        var stage: Stage? = Stage(testingBacking: backing!, onlineDisplayIDs: { [] },
+            coordinator: coordinator,
+            configuration: { throw SpaceOError.stageCreationFailed("preflight unavailable") })
+        backing = nil
+        XCTAssertFalse(stage!.invalidate(waitingForRemoval: 0.1))
+        stage = nil
+        XCTAssertNotNil(observed.value, "retain backing to prevent implicit deallocation teardown")
+        XCTAssertNotNil(coordinator.failureReason)
+    }
+
+    func testCachedLeaseStatusTracksPendingCompletionAndFailure() throws {
+        try withJournal { path in
+            let lease = DisplayLifecycleLease(path: path)
+            XCTAssertNil(lease.cachedStatus)
+            try lease.acquire()
+            XCTAssertEqual(lease.cachedStatus?.state, .ready)
+            try lease.begin(creation: false)
+            XCTAssertEqual(lease.cachedStatus?.state, .blocked)
+            try lease.finish()
+            XCTAssertEqual(lease.cachedStatus?.state, .ready)
+            // A response uses the acquired owner's snapshot, without reopening the journal.
+            try Data("unreadable external replacement".utf8).write(to: URL(fileURLWithPath: path))
+            XCTAssertEqual(lease.cachedStatus?.state, .ready)
+            lease.trip("injected failure")
+            XCTAssertEqual(lease.cachedStatus?.state, .blocked)
+        }
     }
 
     func testBlockedBackingInvalidationAlsoHasABoundedCaller() {

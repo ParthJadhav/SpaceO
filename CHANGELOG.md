@@ -8,6 +8,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Release qualification fixes
 
+- Keep healthy display mutations from causing false query timeouts, retain display backings
+  after failed cleanup preflight, and serve daemon display health from memory without journal I/O.
+- Return per-file completion receipts when reopening files in Chromium partially fails, so
+  clients can distinguish confirmed opens, unknown delivery and files never sent.
 - Surface persistent display-safety latches in daemon health and `doctor`, with blocked readiness
   and recovery guidance. Report the actual wait for the shared creation budget.
 - Use verified Space IDs when allocating a display, reject circuit-failed allocations, and use

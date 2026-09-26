@@ -1189,6 +1189,12 @@ public struct Response: Codable, Sendable {
         response.errorCode = (error as? SpaceOError)?.code ?? "operation_failed"
         response.nextAction = (error as? SpaceOError)?.nextAction
         response.recovery = (error as? SpaceOError)?.recovery
+        if let partial = error as? BackgroundPageOpenFailure {
+            response.errorCode = "file_open_incomplete"
+            response.steps = partial.steps
+            response.firstFailureIndex = partial.failedIndex < partial.total ? partial.failedIndex : nil
+            response.nextAction = "Do not replay confirmed opens. Inspect browser targets before retrying a file with unknown delivery."
+        }
         if case .notRunning = error as? Transport.TransportError {
             response.errorCode = "daemon_not_running"
             response.nextAction = "spaceo daemon"

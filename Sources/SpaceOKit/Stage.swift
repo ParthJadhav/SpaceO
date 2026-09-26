@@ -155,6 +155,12 @@ public final class Stage: @unchecked Sendable {
         return DisplayLifecycleLease.status()
     }
 
+    /// Socket responses must never perform journal I/O or wait for the journal owner's mutex.
+    public static func runtimeDisplaySafetyStatus() -> DisplaySafetyStatus? {
+        if let reason = lifecycle.failureReason { return .init(state: .blocked, reason: reason) }
+        return lease.cachedStatus
+    }
+
     /// XCTest's first recorded live failure also stops focused reruns through the shared latch.
     static func stopLiveDisplayWork() {
         lifecycle.trip("live integration test failed; do not continue or automatically rerun")
@@ -181,16 +187,23 @@ public final class Stage: @unchecked Sendable {
     private let usesLiveLease: Bool
     let retirementSpaces: [UInt64]
     private let stateLock = NSLock()
+    private var cachedBounds: CGRect
+    private var cachedScale: Double?
+    private var cachedSpaces: [UInt64]
     private var didInvalidate = false
     private var invalidatedDisplayID: CGDirectDisplayID = 0
     public var backingScale: Double? {
         stateLock.withLock {
             guard !didInvalidate, coordinator.failureReason == nil else { return nil }
-            return try? coordinator.perform(timeout: 1, retaining: backing) { [backing] _ in
-                let width = backing.bounds.width
-                guard let pixels = backing.pixelWidth, pixels > 0, width > 0 else { return nil }
-                return Double(pixels) / width
-            }
+            do {
+                cachedScale = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { [backing] _ in
+                    let width = backing.bounds.width
+                    guard let pixels = backing.pixelWidth, pixels > 0, width > 0 else { return nil }
+                    return Double(pixels) / width
+                }
+            } catch is DisplayLifecycleCoordinator.QueryDeferred { /* Use the last verified snapshot. */ }
+            catch { return nil }
+            return cachedScale
         }
     }
     public let identity = UUID()
@@ -217,9 +230,13 @@ public final class Stage: @unchecked Sendable {
     public var bounds: CGRect {
         stateLock.withLock {
             guard !didInvalidate, coordinator.failureReason == nil else { return .zero }
-            return (try? coordinator.perform(timeout: 1, retaining: backing) { [backing] _ in
-                backing.bounds
-            }) ?? .zero
+            do {
+                cachedBounds = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { [backing] _ in
+                    backing.bounds
+                }
+            } catch is DisplayLifecycleCoordinator.QueryDeferred { /* A mutation owns the worker. */ }
+            catch { return .zero }
+            return cachedBounds
         }
     }
 
@@ -233,7 +250,7 @@ public final class Stage: @unchecked Sendable {
                     ?? "virtual-display is unavailable on this host"
             )
         }
-        let published: (SPOVirtualDisplay, [UInt64]) = try Self.lifecycle.perform(timeout: 10) { operation in
+        let published: (SPOVirtualDisplay, [UInt64], CGRect, Double?) = try Self.lifecycle.perform(timeout: 10) { operation in
             try Self.lease.acquire()
             try operation.check()
             let userConfigurationBefore: UserDisplayConfiguration
@@ -289,13 +306,21 @@ public final class Stage: @unchecked Sendable {
             guard !spaces.isEmpty else {
                 throw SpaceOError.stageCreationFailed("published display has no verified managed Space")
             }
+            let bounds = display.bounds
+            let scale = display.pixelWidth.flatMap { pixels in
+                pixels > 0 && bounds.width > 0 ? Double(pixels) / bounds.width : nil
+            }
+            try operation.check()
             try Self.lease.finish()
             Self.recordOwned(display.displayID)
             completed = true
-            return (display, spaces)
+            return (display, spaces, bounds, scale)
         }
         self.backing = published.0
         self.retirementSpaces = published.1
+        cachedSpaces = published.1
+        cachedBounds = published.2
+        cachedScale = published.3
         self.onlineDisplayIDsProvider = { try Self.checkedOnlineDisplayIDs() }
         self.configurationProvider = { try Self.checkedUserDisplayConfiguration() }
         self.coordinator = Self.lifecycle
@@ -318,18 +343,29 @@ public final class Stage: @unchecked Sendable {
         usesLiveLease = false
         retirementSpaces = []
         self.name = name
-        requestedSize = testingBacking.bounds.size
+        cachedBounds = testingBacking.bounds
+        cachedScale = testingBacking.pixelWidth.flatMap {
+            $0 > 0 && testingBacking.bounds.width > 0 ? Double($0) / testingBacking.bounds.width : nil
+        }
+        cachedSpaces = []
+        requestedSize = cachedBounds.size
         Self.recordOwned(testingBacking.displayID)
     }
 
     /// Managed Space ids belonging to this display. A healthy stage owns exactly one, and it is
     /// always that display's current Space — which is what keeps agent windows composited.
     public var spaces: [UInt64] {
-        guard usesLiveLease, isValid else { return [] }
-        let id = displayID
-        return (try? coordinator.perform(timeout: 1, retaining: backing) { _ in
-            (SPOSpacesForDisplay(id) ?? []).map { $0.uint64Value }
-        }) ?? []
+        stateLock.withLock {
+            guard usesLiveLease, !didInvalidate, coordinator.failureReason == nil else { return [] }
+            let id = backing.displayID
+            do {
+                cachedSpaces = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { _ in
+                    (SPOSpacesForDisplay(id) ?? []).map { $0.uint64Value }
+                }
+            } catch is DisplayLifecycleCoordinator.QueryDeferred { /* A mutation owns the worker. */ }
+            catch { return [] }
+            return cachedSpaces
+        }
     }
 
     /// True when the stage has its own Space, distinct from the user's active one.
@@ -382,6 +418,7 @@ public final class Stage: @unchecked Sendable {
             }
         } catch {
             // Unknown is not removed. Keep the original id and refuse reuse/creation.
+            coordinator.quarantine(backing)
             coordinator.trip("display \(id) retirement was not confirmed")
             return false
         }
@@ -684,7 +721,10 @@ public final class Stage: @unchecked Sendable {
                                     configuration: configuration, liveLease: liveLease,
                                     coordinator: coordinator)
                 }
-            } catch { coordinator.trip("fallback display retirement was not confirmed") }
+            } catch {
+                coordinator.quarantine(pending.display)
+                coordinator.trip("fallback display retirement was not confirmed")
+            }
         }
     }
 }

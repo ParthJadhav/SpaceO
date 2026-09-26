@@ -26,6 +26,18 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    private let statusLock = NSLock()
+    private var observedStatus: DisplaySafetyStatus?
+    var cachedStatus: DisplaySafetyStatus? { statusLock.withLock { observedStatus } }
+
+    private func updateStatus() {
+        let state: DisplaySafetyStatus
+        if let failure = journal.failure { state = .init(state: .blocked, reason: String(failure.prefix(512))) }
+        else if journal.pending || journal.liveTestPending == true {
+            state = .init(state: .blocked, reason: "a display mutation or live case is pending or was interrupted")
+        } else { state = .init(state: .ready) }
+        statusLock.withLock { observedStatus = state }
+    }
     private let path: String
     private var descriptor: Int32 = -1
     private var journal = Journal()
@@ -111,6 +123,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             }
             descriptor = fd
             keep = true
+            updateStatus()
             try requireHealthy()
         }
     }
@@ -180,6 +193,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     func trip(_ reason: String) {
         lock.withLock {
             journal.failure = String(reason.prefix(512))
+            updateStatus()
             // pending was persisted BEFORE mutation, so even an unsuccessful failure write
             // still refuses a new process. Never clear it on a timeout or unknown teardown.
             if descriptor >= 0 { try? save() }
@@ -195,13 +209,18 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     }
 
     private func save() throws {
+        statusLock.withLock {
+            observedStatus = .init(state: .blocked, reason: "display lifecycle state is being persisted")
+        }
         let data = try JSONEncoder().encode(journal)
         let written = data.withUnsafeBytes { pwrite(descriptor, $0.baseAddress, $0.count, 0) }
         guard written == data.count, ftruncate(descriptor, off_t(data.count)) == 0,
               fsync(descriptor) == 0 else {
             journal.failure = "could not persist lifecycle state"
+            updateStatus()
             throw refused("could not persist lifecycle state")
         }
+        updateStatus()
     }
 
     private func refused(_ detail: String) -> SpaceOError {

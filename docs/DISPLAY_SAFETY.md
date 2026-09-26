@@ -40,7 +40,10 @@ Do not reproduce this incident on a daily-use desktop.
   cases that create no display; only a successful teardown clears it.
   `spaceo doctor` reports blocked or unknown lifecycle state in text and JSON, exits nonzero,
   and includes recovery guidance. Daemon health also reports an in-memory circuit failure even
-  if its journal write has not completed. Diagnostics never reset or acquire the lifecycle lease.
+  if its journal write has not completed. Ordinary daemon replies use a separately locked memory
+  snapshot and never reopen the journal or wait for its I/O mutex. Before that process acquires
+  a lifecycle lease the field is absent; doctor can inspect the journal directly. Diagnostics
+  never reset or acquire the lifecycle lease.
 - Lifecycle callers wait on a bounded worker completion, rather than a deadline checked only
   after IPC returns. The underlying OS call **cannot be cancelled**. A timed-out worker and its
   display references are retained; no replacement worker or automatic mutation retry runs.
@@ -48,6 +51,10 @@ Do not reproduce this incident on a daily-use desktop.
   unknown, never proof of removal. Cleanup uses cached Space IDs before the bounded path.
   Retirement uses one absolute total deadline, including queueing, preflight and verification.
   Allocation claims the Space IDs verified at publication and refuses a circuit-failed Stage.
+  Geometry/Space queries use their last verified snapshot while another lifecycle operation
+  owns the worker, avoiding short query deadlines expiring behind healthy mutations; idle queries
+  refresh the snapshot. Cleanup preflight failure retains the backing even when no invalidation
+  has started, including the deinitialization fallback.
   Failure persistence/logging runs separately with at most 100 ms of caller wait, so a worker
   stalled while holding the journal lock cannot also trap the timeout caller. If storage stalls,
   the failure write may remain outstanding; the already-persisted pending markers protect

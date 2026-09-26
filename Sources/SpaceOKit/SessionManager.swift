@@ -1874,6 +1874,7 @@ public actor SessionManager {
                         do {
                             try await browser.createBackgroundPages(
                                 files: files, region: session.frame, timeout: request.timeout ?? 15,
+                                reportPartialCompletion: true,
                                 validate: {
                                     guard existing.identity.isAlive else {
                                         throw SpaceOError.applicationExited("reused browser exited")

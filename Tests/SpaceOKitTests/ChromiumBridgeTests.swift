@@ -527,6 +527,73 @@ final class ChromiumBridgeTests: XCTestCase {
         XCTAssertNil(bound)
     }
 
+    func testReusedFileOpenReportsConfirmedUnknownAndUnexecutedPages() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let sent = CommandLog()
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, params in
+            sent.append(params["url"] as? String ?? "")
+            if sent.events.count == 1 { return ["targetId": "first-page"] }
+            throw SpaceOError.launchFailed("connection closed before reply")
+        })
+        do {
+            try await bridge.createBackgroundPages(
+                files: (0..<3).map { URL(fileURLWithPath: "/tmp/\($0).html") },
+                region: CGRect(x: 2000, y: 0, width: 1280, height: 800),
+                reportPartialCompletion: true)
+            XCTFail("the second open must fail")
+        } catch {
+            let wire = try JSONEncoder().encode(Response.failure(
+                AppLauncher.launchFailure(error, application: "Test Browser")))
+            let response = try JSONDecoder().decode(Response.self, from: wire)
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorCode, "file_open_incomplete")
+            XCTAssertEqual(response.firstFailureIndex, 1)
+            XCTAssertEqual(response.steps?.map(\.ok), [true, false, false])
+            XCTAssertEqual(response.steps?.map(\.executed), [true, true, false])
+            XCTAssertEqual(response.steps?.map(\.completion), ["confirmed", "unknown", "not_executed"])
+            XCTAssertTrue(response.steps?.first?.message?.contains("first-page") == true)
+        }
+        XCTAssertEqual(sent.events.count, 2, "do not open later files after unknown delivery")
+        let bound = await bridge.boundTargetID
+        XCTAssertNil(bound)
+    }
+
+    func testReusedFileOpenDistinguishesValidationFailureBeforeAndAfterDelivery() async throws {
+        for stopAfter in [1, 3] {
+            let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+                "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+            }))
+            defer { server.stop() }
+            let sent = CommandLog()
+            let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, _ in
+                sent.append("sent")
+                return ["targetId": "page-\(sent.events.count)"]
+            })
+            do {
+                try await bridge.createBackgroundPages(
+                    files: (0..<3).map { URL(fileURLWithPath: "/tmp/\($0).html") },
+                    region: CGRect(x: 2000, y: 0, width: 1280, height: 800),
+                    reportPartialCompletion: true, validate: {
+                        if sent.events.count == stopAfter {
+                            throw SpaceOError.applicationExited("test process exited")
+                        }
+                    })
+                XCTFail("process validation must fail")
+            } catch {
+                let response = Response.failure(error)
+                XCTAssertEqual(response.errorCode, "file_open_incomplete")
+                XCTAssertEqual(response.firstFailureIndex, stopAfter == 3 ? nil : 1)
+                XCTAssertEqual(response.steps?.map(\.executed), (0..<3).map { $0 < stopAfter })
+                XCTAssertEqual(response.steps?.map(\.completion),
+                    (0..<3).map { $0 < stopAfter ? "confirmed" : "not_executed" })
+            }
+            XCTAssertEqual(sent.events.count, stopAfter)
+        }
+    }
+
     func testStartupRejectsRemoteBrowserEndpointBeforeSendingCommands() async throws {
         let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
             "{\"webSocketDebuggerUrl\":\"ws://example.com:\(port)/devtools/browser/test\"}"

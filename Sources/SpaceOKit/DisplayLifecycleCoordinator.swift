@@ -4,6 +4,7 @@ import Foundation
 /// operation remains on this one worker; no replacement workers or subsequent mutations run.
 /// Retaining its context prevents ARC from turning a late result into an unplanned teardown.
 final class DisplayLifecycleCoordinator: @unchecked Sendable {
+    struct QueryDeferred: Error {}
     final class Operation: @unchecked Sendable {
         private let lock = NSLock()
         private var retained: [AnyObject] = []
@@ -63,9 +64,14 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
         }
     }
 
+    func quarantine(_ value: AnyObject) {
+        lock.withLock { quarantined[ObjectIdentifier(value)] = value }
+    }
+
     func perform<T>(
         timeout: TimeInterval,
         retaining value: AnyObject? = nil,
+        onlyWhenIdle: Bool = false,
         _ body: @escaping @Sendable (Operation) throws -> T
     ) throws -> T {
         let seconds = timeout.isFinite ? min(max(timeout, 0.1), 30) : 10
@@ -81,29 +87,32 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
         }
         if let value { operation.retain(value) }
         let id = UUID()
+        let completion = Completion<T>()
         // Keep contexts even on refusal after a failure: releasing a display-owning object
         // here could mutate the already unhealthy graph. Production stages are finite-budgeted.
-        let admitted = lock.withLock { () -> Bool in
+        let admitted = try lock.withLock { () throws -> Bool in
+            if onlyWhenIdle, failure == nil, !operations.isEmpty { throw QueryDeferred() }
             guard failure == nil, operations.count < 16 else {
                 if let value { quarantined[ObjectIdentifier(value)] = value }
                 return false
             }
             operations[id] = operation
+            // Enqueue while admission is locked, so another mutation cannot jump ahead of an
+            // idle-only query after it has been admitted with its short execution deadline.
+            queue.async {
+                let result = Result { () throws -> T in
+                    try operation.check()
+                    return try body(operation)
+                }
+                completion.lock.withLock { completion.result = result }
+                completion.signal.signal()
+            }
             return true
         }
         guard admitted else {
             trip("too many pending lifecycle operations or an earlier lifecycle failure")
             try check()
             throw SpaceOError.stageCreationFailed("display lifecycle admission refused")
-        }
-        let completion = Completion<T>()
-        queue.async {
-            let result = Result { () throws -> T in
-                try operation.check()
-                return try body(operation)
-            }
-            completion.lock.withLock { completion.result = result }
-            completion.signal.signal()
         }
         guard completion.signal.wait(timeout: deadline) == .success else {
             trip("a display operation exceeded \(seconds) seconds; its delivery is unknown")
