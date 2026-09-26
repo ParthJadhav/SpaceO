@@ -200,8 +200,8 @@ public actor ChromiumBridge {
                     parameters["width"] = Int(region.width)
                     parameters["height"] = Int(region.height)
                 }
-                attempted = true
-                let result = try await performCommand("Target.createTarget", parameters, budget: budget)
+                let result = try await performCommand("Target.createTarget", parameters, budget: budget,
+                                                      onSend: { attempted = true })
                 guard let id = result["targetId"] as? String, !id.isEmpty, id.utf8.count <= 1_024 else {
                     throw SpaceOError.launchFailed("browser did not confirm background page creation")
                 }
@@ -466,7 +466,8 @@ public actor ChromiumBridge {
     }
 
     private func performCommand(_ method: String, _ params: [String: Any],
-                                budget: DevToolsDeadline? = nil) async throws -> [String: Any] {
+                                budget: DevToolsDeadline? = nil,
+                                onSend: () -> Void = {}) async throws -> [String: Any] {
         // Fail closed on both halves of the binding. A socket without a target id would mean
         // the bridge reconnected to something it never chose, which must never happen silently.
         guard let socket, attachedTargetID != nil else {
@@ -482,6 +483,7 @@ public actor ChromiumBridge {
             throw SpaceOError.badRequest("DevTools command exceeds the 1 MiB limit")
         }
         if let commandExecutor {
+            onSend()
             let result = try await commandExecutor(method, params)
             do { try budget?.check() }
             catch { retireTransport(ifCurrent: socket); throw error }
@@ -495,6 +497,7 @@ public actor ChromiumBridge {
                 within: commandTimeout,
                 timeoutMessage: "DevTools send timed out",
                 start: { completion in
+                    onSend()
                     socket.send(message) { error in
                         if let error { completion(.failure(error)) }
                         else { completion(.success(())) }

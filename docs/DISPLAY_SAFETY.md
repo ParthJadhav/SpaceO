@@ -40,6 +40,9 @@ Do not reproduce this incident on a daily-use desktop.
   leaves a latch that prevents subsequent work and survives process restarts.
   Live cases separately persist a pending marker before their baseline or test body, including
   cases that create no display; only a successful teardown clears it.
+  An assertion stops admission to later cases immediately, while the failing case can still
+  retire its displays. Its failure is latched after cleanup verification. Unverified cleanup
+  suspends the owner for inspection instead of allowing process exit to detach retained displays.
   `spaceo doctor` reports blocked or unknown lifecycle state in text and JSON, exits nonzero,
   and includes recovery guidance. Daemon health also reports an in-memory circuit failure even
   if its journal write has not completed. Ordinary daemon replies use a separately locked memory

@@ -594,6 +594,35 @@ final class ChromiumBridgeTests: XCTestCase {
         }
     }
 
+    func testReusedFileOpenCancellationBeforeSendReportsNotExecuted() async throws {
+        let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
+            "{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:\(port)/devtools/browser/test\"}"
+        }))
+        defer { server.stop() }
+        let sent = CommandLog()
+        let bridge = ChromiumBridge(port: server.port, commandExecutor: { _, _ in
+            sent.append("sent")
+            return ["targetId": "first-page"]
+        })
+        let task = Task {
+            try await bridge.createBackgroundPages(
+                files: (0..<3).map { URL(fileURLWithPath: "/tmp/\($0).html") },
+                region: CGRect(x: 2000, y: 0, width: 1280, height: 800),
+                reportPartialCompletion: true, validate: {
+                    if sent.events.count == 1 { withUnsafeCurrentTask { $0?.cancel() } }
+                })
+        }
+        do { try await task.value; XCTFail("pre-send cancellation must fail") }
+        catch {
+            let response = Response.failure(error)
+            XCTAssertEqual(response.errorCode, "file_open_incomplete")
+            XCTAssertEqual(response.firstFailureIndex, 1)
+            XCTAssertEqual(response.steps?.map(\.executed), [true, false, false])
+            XCTAssertEqual(response.steps?.map(\.completion), ["confirmed", "not_executed", "not_executed"])
+        }
+        XCTAssertEqual(sent.events.count, 1)
+    }
+
     func testStartupRejectsRemoteBrowserEndpointBeforeSendingCommands() async throws {
         let server = try XCTUnwrap(FakeDevTools(behavior: .body { port in
             "{\"webSocketDebuggerUrl\":\"ws://example.com:\(port)/devtools/browser/test\"}"

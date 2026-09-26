@@ -8,6 +8,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Release qualification fixes
 
+- Let a failed live case retire its displays before latching failure; suspend the owner when
+  cleanup cannot be verified. Report pre-send Chromium failures as not executed.
 - Install Chromium startup containment before waiting for DevTools. Bound `doctor` journal
   inspection and report both persistent creation-rate windows, including in unrestricted mode.
 - Reject focused live runs with empty, skipped, or mismatched results. Suspend the isolated

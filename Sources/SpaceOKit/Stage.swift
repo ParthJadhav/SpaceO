@@ -180,6 +180,10 @@ public final class Stage: @unchecked Sendable {
     static func liveTestUserConfiguration() throws -> UserDisplayConfiguration {
         try lifecycle.perform(timeout: 1) { _ in try checkedUserDisplayConfiguration() }
     }
+
+    static func liveTestOnlineDisplayIDs() throws -> [CGDirectDisplayID] {
+        try lifecycle.perform(timeout: 10) { _ in try checkedOnlineDisplayIDs() }
+    }
     private let backing: any StageDisplayBacking
     private let onlineDisplayIDsProvider: @Sendable () throws -> [CGDirectDisplayID]
     private let configurationProvider: @Sendable () throws -> UserDisplayConfiguration?

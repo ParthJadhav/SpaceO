@@ -72,6 +72,12 @@ class LiveTestSupervisorTests(unittest.TestCase):
         self.assertIn("suspended", log)
         self.assertIn("No automatic kill or retry", log)
 
+    def test_unverified_cleanup_request_retains_the_child_for_inspection(self):
+        code, log = self.run_fixture(
+            "import time; print('LIVE SAFETY STOP REQUEST: cleanup unverified'); time.sleep(10)")
+        self.assertEqual(code, 124)
+        self.assertIn("suspended", log)
+
 
 if __name__ == "__main__":
     unittest.main()

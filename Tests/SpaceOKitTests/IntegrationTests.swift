@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
 import CoreGraphics
+import Darwin
 @testable import SpaceOKit
 
 /// Tests that touch the real WindowServer.
@@ -16,13 +17,15 @@ final class IntegrationTests: XCTestCase {
 
     override func record(_ issue: XCTIssue) {
         Self.failureLock.withLock { Self.stopped = true }
-        Stage.stopLiveDisplayWork()
+        // Stop admission to later cases immediately, but let this case's defers retire
+        // its displays before opening the lifecycle circuit in teardown.
         super.record(issue)
     }
 
     private var baselineDisplays: Set<CGDirectDisplayID> = []
     private var baselineUserDisplays: Stage.UserDisplayConfiguration?
     private var hasDisplayBaseline = false
+    private var admittedLiveCase = false
 
     override func setUpWithError() throws {
         // This guard is deliberately before the first WindowServer call, including baselines.
@@ -39,6 +42,7 @@ final class IntegrationTests: XCTestCase {
             throw XCTSkip("SpaceO cannot drive sessions on this host: \(capabilities.report)")
         }
         try Stage.beginLiveTestCase()
+        admittedLiveCase = true
         let initial = try Stage.liveTestUserConfiguration()
         baselineUserDisplays = Self.failureLock.withLock {
             if Self.initialUserConfiguration == nil { Self.initialUserConfiguration = initial }
@@ -50,7 +54,7 @@ final class IntegrationTests: XCTestCase {
         Thread.sleep(forTimeInterval: 90)
         try requireUnchangedUserConfiguration(Stage.liveTestUserConfiguration())
         // After admission, arm the baseline before any remaining prerequisite can skip.
-        baselineDisplays = Set(Stage.onlineDisplayIDs())
+        baselineDisplays = Set(try Stage.liveTestOnlineDisplayIDs())
         hasDisplayBaseline = true
 
         try XCTSkipUnless(capabilities.canDrive, """
@@ -71,23 +75,46 @@ final class IntegrationTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        guard hasDisplayBaseline else { return }
-        guard !Self.failureLock.withLock({ Self.stopped }) else { return }
-        // Give any asynchronous teardown a bounded chance to finish before we accuse it.
-        let deadline = Date().addingTimeInterval(15)
-        while Date() < deadline, Set(Stage.onlineDisplayIDs()) != baselineDisplays {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        guard admittedLiveCase else { return }
+        guard hasDisplayBaseline else {
+            // Setup creates no display before the baseline. Keep its pending marker latched.
+            Self.failureLock.withLock { Self.stopped = true }
+            Stage.stopLiveDisplayWork()
+            return
         }
-        let leaked = Set(Stage.onlineDisplayIDs()).subtracting(baselineDisplays)
-        XCTAssertTrue(leaked.isEmpty, "leaked virtual display(s): \(leaked.sorted())")
-        if let baselineUserDisplays {
-            let changes = Stage.userDisplayConfiguration().changes(from: baselineUserDisplays)
-            XCTAssertTrue(
-                changes.isEmpty,
-                "SpaceO changed the user's display configuration: \(changes.joined(separator: "; "))")
+        do {
+            // Assertion failures must not disarm this verification. Defers have had a chance
+            // to use the still-healthy retirement path; an OS failure still closes it itself.
+            let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+            var current = Set(try Stage.liveTestOnlineDisplayIDs())
+            while ContinuousClock.now < deadline, current != baselineDisplays {
+                RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+                current = Set(try Stage.liveTestOnlineDisplayIDs())
+            }
+            guard current == baselineDisplays else {
+                throw SpaceOError.stageCreationFailed("live cleanup did not restore the display baseline")
+            }
+            if let baselineUserDisplays {
+                let changes = try Stage.liveTestUserConfiguration().changes(from: baselineUserDisplays)
+                guard changes.isEmpty else {
+                    throw SpaceOError.stageCreationFailed("live cleanup changed the physical display configuration")
+                }
+            }
+            if Self.failureLock.withLock({ Self.stopped }) {
+                Stage.stopLiveDisplayWork()
+            } else {
+                try Stage.finishLiveTestCase()
+            }
+        } catch {
+            Self.failureLock.withLock { Self.stopped = true }
+            Stage.stopLiveDisplayWork()
+            // Do not let normal XCTest exit deallocate an unverified display backing. The
+            // supervisor records this request and retains the entire owned group. Self-stop
+            // also protects direct invocations if no supervisor is present.
+            FileHandle.standardError.write(Data("LIVE SAFETY STOP REQUEST: live cleanup could not be verified; inspect the retained owner\n".utf8))
+            raise(SIGSTOP)
+            while true { pause() } // A manual SIGCONT is not permission to resume test work.
         }
-        guard !Self.failureLock.withLock({ Self.stopped }) else { return }
-        try Stage.finishLiveTestCase()
     }
 
     // MARK: - Stage lifecycle

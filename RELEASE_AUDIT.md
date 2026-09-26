@@ -120,6 +120,11 @@ startup interval before containment was installed. These have deterministic regr
 Chromium startup change still needs new live evidence. The existing failed qualification and
 failure latch are not cleared by merging the source.
 
+A delayed review also found that immediate assertion latching blocked the failing case's own
+retirement. Case admission now stops separately from the lifecycle circuit: cleanup is verified
+before latching, and an unverified owner requests supervisor suspension and self-stops. Chromium
+file-open receipts also distinguish pre-send cancellation/deadline failures from unknown delivery.
+
 ### RA-001 and RA-012 — local display/input freeze and ownerless displays
 
 **Observed:** The physical screen stopped updating and the local keyboard, trackpad, and mouse

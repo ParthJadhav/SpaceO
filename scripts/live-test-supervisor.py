@@ -26,6 +26,7 @@ def supervise(command: list[str], log_path: str, case_timeout: float = 180,
     os.ftruncate(fd, 0)
     with os.fdopen(fd, "wb", buffering=0) as log:
         interrupted = False
+        safety_stop_requested = False
 
         def interrupt(_signal, _frame):
             nonlocal interrupted
@@ -59,12 +60,12 @@ def supervise(command: list[str], log_path: str, case_timeout: float = 180,
             selector.register(process.stdout, selectors.EVENT_READ)
             while True:
                 now = time.monotonic()
-                if (interrupted or now - started > run_timeout
+                if (interrupted or safety_stop_requested or now - started > run_timeout
                         or (case_started is not None and now - case_started > case_timeout)
                         or total > 32 * 1024 * 1024):
                     suspend()
                     message = (f"\nLIVE SAFETY STOP: process group {process.pid} suspended after "
-                               "a deadline, interrupt, or log limit. No automatic kill or retry. "
+                               "a cleanup stop request, deadline, interrupt, or log limit. No automatic kill or retry. "
                                "Inspect docs/DISPLAY_SAFETY.md; retain this log.\n").encode()
                     log.write(message)
                     sys.stderr.buffer.write(message)
@@ -82,12 +83,14 @@ def supervise(command: list[str], log_path: str, case_timeout: float = 180,
                     lines = pending.split(b"\n")
                     pending = lines.pop()[-16384:]
                     for line in lines:
+                        if line.startswith(b"LIVE SAFETY STOP REQUEST:"):
+                            safety_stop_requested = True
                         if b"Test Case " in line:
                             if b" started." in line:
                                 case_started = time.monotonic()
                             elif any(word in line for word in (b" passed (", b" failed (", b" skipped (")):
                                 case_started = None
-                if process.poll() is not None and not selector.get_map():
+                if not safety_stop_requested and process.poll() is not None and not selector.get_map():
                     return process.returncode
         except BaseException:
             # Losing stdout/log storage must not silently leave an unsupervised live worker.

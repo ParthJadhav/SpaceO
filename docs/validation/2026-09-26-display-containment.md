@@ -158,3 +158,13 @@ pixels and durations after coalescing repeated frames.
 
 No new live run was made, and the failure journal remains intact. The changed Chromium startup
 behavior requires fresh live qualification before publication; earlier passes do not qualify it.
+
+A delayed review found two further issues. Assertion recording now stops later-case admission
+without disabling the failing case's retirement. Teardown checks the full display and physical
+configuration baselines before persisting failure; unverified cleanup requests supervisor
+suspension and self-stops instead of exiting with retained display backings. Browser file-open
+receipts mark an attempt at transport send, so cancellation or expiry before sending remains
+`not_executed`. The earlier signal-handler-before-spawn fix also covers the delayed startup-race
+finding. The 45 Chromium bridge tests and six disposable-process supervisor tests passed,
+followed by `make verify-release` with 1,624 Swift tests, six supervisor tests, 15 Node tests and
+the 34-tool MCP smoke. These are deterministic checks, not a new live qualification.
