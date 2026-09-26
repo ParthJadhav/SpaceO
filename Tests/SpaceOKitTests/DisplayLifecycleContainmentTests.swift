@@ -398,6 +398,30 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         }
     }
 
+    func testDiagnosticDeadlineDoesNotStartReplacementReadsOrAcceptLateHealth() {
+        let worker = DisplayLifecycleCoordinator()
+        let release = DispatchSemaphore(value: 0)
+        let completed = expectation(description: "late reader completed")
+        let start = Date()
+        let result = DisplayLifecycleLease.inspectStatus(using: worker, timeout: 0.1) {
+            release.wait()
+            completed.fulfill()
+            return .init(state: .ready)
+        }
+        XCTAssertEqual(result.state, .unknown)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertEqual(DisplayLifecycleLease.inspectStatus(using: worker) {
+            XCTFail("a timed-out reader must not start replacement work")
+            return .init(state: .ready)
+        }.state, .unknown)
+        release.signal()
+        wait(for: [completed], timeout: 1)
+        XCTAssertEqual(DisplayLifecycleLease.inspectStatus(using: worker) {
+            XCTFail("late completion must not clear failed inspection")
+            return .init(state: .ready)
+        }.state, .unknown)
+    }
+
     func testDiagnosticRefusesMalformedNonPrivateAndNonRegularJournals() throws {
         try withJournal { path in
             var owner: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)

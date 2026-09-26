@@ -114,6 +114,12 @@ leftover virtual display was observed. The persistent failure latch remains inta
 source is not fully live-qualified. Normal builds retain mirrored/high-refresh precautions;
 neither containment nor an earlier successful experiment resolves Apple's internal driver defect.
 
+Pre-merge review also closes terminal-hangup supervision, empty/mismatched focused-run results,
+unbounded doctor journal reads, incomplete creation-rate reporting, and the Chromium DevTools
+startup interval before containment was installed. These have deterministic regressions; the
+Chromium startup change still needs new live evidence. The existing failed qualification and
+failure latch are not cleared by merging the source.
+
 ### RA-001 and RA-012 — local display/input freeze and ownerless displays
 
 **Observed:** The physical screen stopped updating and the local keyboard, trackpad, and mouse

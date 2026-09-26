@@ -31,6 +31,8 @@ Do not reproduce this incident on a daily-use desktop.
   binaries, other users, third-party virtual-display software, or direct users of private APIs.
 - A persistent budget allows at most **4 creation attempts per minute and 12 per ten minutes**.
   Budget refusals report the actual remaining wait across both windows.
+  CLI/MCP limits report the effective `maximumCreationsPerMinute` and the persistent
+  `maximumCreationsPerTenMinutes`; stricter pool limits still apply.
   Attempts, including failures, count before creation; changing pools or restarting the process
   cannot reset the window. `SPACEO_UNRESTRICTED_RESOURCES` does not lift this safety budget.
 - Before a mutation, the journal records it as pending. Success clears pending only after
@@ -42,8 +44,10 @@ Do not reproduce this incident on a daily-use desktop.
   and includes recovery guidance. Daemon health also reports an in-memory circuit failure even
   if its journal write has not completed. Ordinary daemon replies use a separately locked memory
   snapshot and never reopen the journal or wait for its I/O mutex. Before that process acquires
-  a lifecycle lease the field is absent; doctor can inspect the journal directly. Diagnostics
-  never reset or acquire the lifecycle lease.
+  a lifecycle lease the field is absent. Doctor inspects the journal on one dedicated worker,
+  with a one-second read deadline (plus at most 100 ms of failure bookkeeping). A busy or
+  timed-out inspection reports unknown; no replacement reader or late healthy result is accepted.
+  Diagnostics never reset or acquire the lifecycle lease.
 - Lifecycle callers wait on a bounded worker completion, rather than a deadline checked only
   after IPC returns. The underlying OS call **cannot be cancelled**. A timed-out worker and its
   display references are retained; no replacement worker or automatic mutation retry runs.
@@ -99,7 +103,9 @@ proof that a normal release supports a configuration it refuses. Do not remove t
 protections or automatically clear the journal to continue a failed experiment.
 
 The external supervisor retains an owner-only log. A case exceeding 180 seconds, a run exceeding
-40 minutes, interruption, or excessive output suspends the owned process group and exits nonzero.
+40 minutes, interruption (including terminal SIGHUP), or excessive output suspends the owned
+process group and exits nonzero. A focused `--case` run requires exactly one passing result for
+the named method; empty filters, skips, different cases, and extra results cannot pass.
 It does **not** kill a display owner automatically: killing can itself reconfigure the display
 graph. The log reports the suspended process-group ID. Stop the qualification attempt and inspect
 it during a reserved recovery window; do not automatically rerun or resume it. A failed, stopped,

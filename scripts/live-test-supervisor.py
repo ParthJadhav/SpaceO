@@ -25,29 +25,38 @@ def supervise(command: list[str], log_path: str, case_timeout: float = 180,
     os.fchmod(fd, 0o600)
     os.ftruncate(fd, 0)
     with os.fdopen(fd, "wb", buffering=0) as log:
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
         interrupted = False
 
         def interrupt(_signal, _frame):
             nonlocal interrupted
             interrupted = True
 
-        old_handlers = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGINT, signal.SIGTERM)}
+        # Install before spawning the isolated child: a terminal hangup must not orphan it
+        # during startup or while it is blocked in a display call.
+        old_handlers = {sig: signal.signal(sig, interrupt)
+                        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+        process = None
+        selector = None
         started = time.monotonic()
         case_started = None
         pending = b""
         total = 0
 
         def suspend():
+            if process is None:
+                return
             try:
                 os.killpg(process.pid, signal.SIGSTOP)
             except ProcessLookupError:
                 pass
 
         try:
+            if interrupted:
+                return 124
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       start_new_session=True)
+            selector = selectors.DefaultSelector()
+            selector.register(process.stdout, selectors.EVENT_READ)
             while True:
                 now = time.monotonic()
                 if (interrupted or now - started > run_timeout
@@ -83,7 +92,8 @@ def supervise(command: list[str], log_path: str, case_timeout: float = 180,
         except BaseException:
             # Losing stdout/log storage must not silently leave an unsupervised live worker.
             suspend()
-            message = f"LIVE SAFETY STOP: process group {process.pid} suspended after supervisor failure.\n"
+            message = (f"LIVE SAFETY STOP: process group {process.pid} suspended after supervisor failure.\n"
+                       if process is not None else "LIVE SAFETY STOP: child could not be started.\n")
             try:
                 log.write(message.encode())
                 sys.stderr.write(message)
@@ -93,8 +103,10 @@ def supervise(command: list[str], log_path: str, case_timeout: float = 180,
         finally:
             for sig, handler in old_handlers.items():
                 signal.signal(sig, handler)
-            selector.close()
-            process.stdout.close()
+            if selector is not None:
+                selector.close()
+            if process is not None:
+                process.stdout.close()
 
 
 def main() -> int:

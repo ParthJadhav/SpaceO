@@ -260,76 +260,98 @@ public enum AppLauncher {
             try await onMaterialized(app)
             try Task.checkCancellation()
 
-            if let profile = temporaryProfile {
-                let startupBudget = try DevToolsDeadline(timeout: min(timeout, 10))
-                guard let port = try await waitForDevToolsPort(in: profile,
-                    timeout: try startupBudget.remaining(), validate: {
-                        guard identity.isAlive else {
-                            throw SpaceOError.applicationExited("browser exited during startup")
-                        }
-                    }) else {
-                    throw SpaceOError.launchFailed("browser did not publish its private DevTools endpoint")
+            return try await withStartupContainment(install: {
+                guard chromium else { return {} }
+                // A Chromium derivative may ignore --no-startup-window. Install both AX
+                // notifications and the periodic backstop before waiting on its endpoint.
+                // If containment cannot start, fail before spending the DevTools budget.
+                let watcher = try WindowWatcher(pid: pid, region: { region })
+                watcher.sweep()
+                return { watcher.stop() }
+            }, operation: {
+                if let profile = temporaryProfile {
+                    let startupBudget = try DevToolsDeadline(timeout: min(timeout, 10))
+                    guard let port = try await waitForDevToolsPort(in: profile,
+                        timeout: try startupBudget.remaining(), validate: {
+                            guard identity.isAlive else {
+                                throw SpaceOError.applicationExited("browser exited during startup")
+                            }
+                        }) else {
+                        throw SpaceOError.launchFailed("browser did not publish its private DevTools endpoint")
+                    }
+                    app.devToolsPort = port
+                    let startup = ChromiumBridge(port: port)
+                    try await startup.createBackgroundPages(files: files, region: region,
+                        timeout: try startupBudget.remaining(), validate: {
+                            guard identity.isAlive else {
+                                throw SpaceOError.applicationExited("browser exited during startup")
+                            }
+                        })
                 }
-                app.devToolsPort = port
-                let startup = ChromiumBridge(port: port)
-                try await startup.createBackgroundPages(files: files, region: region,
-                    timeout: try startupBudget.remaining(), validate: {
-                        guard identity.isAlive else {
-                            throw SpaceOError.applicationExited("browser exited during startup")
-                        }
-                    })
-            }
 
-            // `hides` is advisory — Apple explicitly allows an application to unhide itself,
-            // and TextEdit's separate-instance launch never reports hidden at all. Do not burn
-            // slow browser/controller readiness windows while an ordinary first window could be
-            // sitting on the user's display. Detect it at high frequency and place it first.
-            if allowNoWindows, try !WindowPlacement.hasWindows(of: app.pid) {
-                try Task.checkCancellation()
-                guard app.identity.isAlive else { throw SpaceOError.applicationExited("launched process exited") }
-                _ = runningApp.unhide()
-                try Task.checkCancellation()
-                return (app, [])
-            }
-            try await WindowPlacement.waitForWindowPresence(
-                of: app.pid,
-                timeout: timeout,
-                pollNanoseconds: 25_000_000)
-            try Task.checkCancellation()
-            _ = try WindowPlacement.placeAll(of: app.pid, into: region)
-
-            // Cover restore prompts and other windows created as the hidden application becomes
-            // ready. Install containment before DevTools discovery or settle delays; the session
-            // installs its long-lived watcher immediately after this method returns.
-            let revealWatcher = try? WindowWatcher(
-                pid: app.pid,
-                region: { region },
-                periodicSweep: false)
-            defer { revealWatcher?.stop() }
-
-            // Settle and re-verify: some apps resize or add restore UI shortly after the first
-            // window. A best-effort watcher handles notifications during the wait; the full
-            // placement pass is authoritative even if AXObserver registration was not ready.
-            try await Task.sleep(nanoseconds: 300_000_000)
-            try Task.checkCancellation()
-            revealWatcher?.sweep()
-            _ = try WindowPlacement.placeAll(of: app.pid, into: region)
-
-            try await reveal(name: app.name, validate: {
-                guard app.identity.isAlive else {
-                    throw SpaceOError.applicationExited("launched process exited")
+                // `hides` is advisory — Apple explicitly allows an application to unhide itself,
+                // and TextEdit's separate-instance launch never reports hidden at all. Do not burn
+                // slow browser/controller readiness windows while an ordinary first window could be
+                // sitting on the user's display. Detect it at high frequency and place it first.
+                if allowNoWindows, try !WindowPlacement.hasWindows(of: app.pid) {
+                    try Task.checkCancellation()
+                    guard app.identity.isAlive else { throw SpaceOError.applicationExited("launched process exited") }
+                    _ = runningApp.unhide()
+                    try Task.checkCancellation()
+                    return (app, [])
                 }
-            }, isHidden: { runningApp.isHidden }, unhide: { _ = runningApp.unhide() })
-            try await Task.sleep(nanoseconds: 150_000_000)
-            try Task.checkCancellation()
-            revealWatcher?.sweep()
-            let placed = try WindowPlacement.placeAll(of: app.pid, into: region)
-            try Task.checkCancellation()
-            return (app, placed)
+                try await WindowPlacement.waitForWindowPresence(
+                    of: app.pid,
+                    timeout: timeout,
+                    pollNanoseconds: 25_000_000)
+                try Task.checkCancellation()
+                _ = try WindowPlacement.placeAll(of: app.pid, into: region)
+
+                // Chromium already has startup containment. Cover native restore prompts before
+                // settle delays; the session installs its long-lived watcher on return.
+                let revealWatcher: WindowWatcher? = chromium ? nil : (try? WindowWatcher(
+                    pid: app.pid,
+                    region: { region },
+                    periodicSweep: false))
+                defer { revealWatcher?.stop() }
+
+                // Settle and re-verify: some apps resize or add restore UI shortly after the first
+                // window. A best-effort watcher handles notifications during the wait; the full
+                // placement pass is authoritative even if AXObserver registration was not ready.
+                try await Task.sleep(nanoseconds: 300_000_000)
+                try Task.checkCancellation()
+                revealWatcher?.sweep()
+                _ = try WindowPlacement.placeAll(of: app.pid, into: region)
+
+                try await reveal(name: app.name, validate: {
+                    guard app.identity.isAlive else {
+                        throw SpaceOError.applicationExited("launched process exited")
+                    }
+                }, isHidden: { runningApp.isHidden }, unhide: { _ = runningApp.unhide() })
+                try await Task.sleep(nanoseconds: 150_000_000)
+                try Task.checkCancellation()
+                revealWatcher?.sweep()
+                let placed = try WindowPlacement.placeAll(of: app.pid, into: region)
+                try Task.checkCancellation()
+                return (app, placed)
+            })
         } catch {
             await LaunchFailureCleanup.run(app)
             throw launchFailure(error, application: app.name)
         }
+    }
+
+    /// Keep startup containment active across every readiness await and stop it on all exits.
+    /// Installation must succeed before any browser discovery or page creation can begin.
+    static func withStartupContainment<T>(
+        install: () throws -> () -> Void,
+        operation: () async throws -> T
+    ) async throws -> T {
+        try Task.checkCancellation()
+        let stop = try install()
+        defer { stop() }
+        try Task.checkCancellation()
+        return try await operation()
     }
 
     static func launchFailure(_ error: Error, application: String) -> Error {

@@ -1,7 +1,6 @@
 """Fault injection uses only disposable Python children, never WindowServer."""
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -16,6 +15,9 @@ class LiveTestSupervisorTests(unittest.TestCase):
     def run_fixture(self, child, case_timeout=0.2, run_timeout=2):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "live.log"
+            pid_path = Path(directory) / "child.pid"
+            child = ("import os; from pathlib import Path; "
+                     f"Path({str(pid_path)!r}).write_text(str(os.getpid())); " + child)
             script = (
                 "import importlib.util,sys; sys.dont_write_bytecode=True; "
                 "s=importlib.util.spec_from_file_location('supervisor',sys.argv[1]); "
@@ -28,16 +30,18 @@ class LiveTestSupervisorTests(unittest.TestCase):
                                          str(log), child], capture_output=True, timeout=5)
                 contents = log.read_text()
                 self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+                if result.returncode == 124:
+                    state = subprocess.check_output(
+                        ["ps", "-o", "stat=", "-p", pid_path.read_text()], text=True, timeout=2)
+                    self.assertIn("T", state, "the retained fixture child must actually be stopped")
                 return result.returncode, contents
             finally:
                 # Only the disposable fixture group we just created; production never kills.
-                if log.exists():
-                    match = re.search(r"process group (\d+) suspended", log.read_text())
-                    if match:
-                        try:
-                            os.killpg(int(match[1]), signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
+                if pid_path.exists():
+                    try:
+                        os.killpg(int(pid_path.read_text()), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def test_preserves_exit_code_and_log(self):
         code, log = self.run_fixture("print('fixture failure'); raise SystemExit(7)")
@@ -60,6 +64,13 @@ class LiveTestSupervisorTests(unittest.TestCase):
             "import time; print(\"Test Case 'fixture' started.\"); "
             "print(\"Test Case 'fixture' passed (0.01 seconds).\"); time.sleep(0.4)")
         self.assertEqual(code, 0)
+
+    def test_terminal_hangup_suspends_the_isolated_child(self):
+        code, log = self.run_fixture(
+            "import signal,time; os.kill(os.getppid(), signal.SIGHUP); time.sleep(10)")
+        self.assertEqual(code, 124)
+        self.assertIn("suspended", log)
+        self.assertIn("No automatic kill or retry", log)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,9 @@ public struct DisplaySafetyStatus: Codable, Sendable, Equatable {
 /// attempts and an unfinished-mutation/failure latch across daemon and XCTest restarts.
 /// This coordinates same-user clients; it is not a security boundary.
 final class DisplayLifecycleLease: @unchecked Sendable {
+    static let maximumCreationsPerMinute = 4
+    static let maximumCreationsPerTenMinutes = 12
+    private static let inspectionWorker = DisplayLifecycleCoordinator()
     private struct Journal: Codable {
         var attempts: [TimeInterval] = []
         var pending = false
@@ -56,7 +59,22 @@ final class DisplayLifecycleLease: @unchecked Sendable {
 
     /// Never acquire the owner's lease, create/reset a file, or wait for its mutex in doctor.
     /// A concurrent write can yield unknown, which must not be reported as healthy.
-    static func status(path: String = defaultPath) -> DisplaySafetyStatus {
+    static func status(path: String? = nil) -> DisplaySafetyStatus {
+        inspectStatus(using: inspectionWorker) {
+            // Resolve the account home on the worker too; directory services may stall.
+            readStatus(path: path ?? defaultPath)
+        }
+    }
+
+    /// One bounded reader per process. A stuck read cannot grow a replacement-worker queue,
+    /// and a late result cannot turn a timed-out inspection into a healthy report.
+    static func inspectStatus(using worker: DisplayLifecycleCoordinator, timeout: TimeInterval = 1,
+                              read: @escaping @Sendable () -> DisplaySafetyStatus) -> DisplaySafetyStatus {
+        do { return try worker.perform(timeout: timeout, onlyWhenIdle: true) { _ in read() } }
+        catch { return .init(state: .unknown, reason: "lifecycle journal inspection is unavailable or exceeded its deadline") }
+    }
+
+    private static func readStatus(path: String) -> DisplaySafetyStatus {
         let fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else {
             return errno == ENOENT ? .init(state: .ready)
@@ -76,7 +94,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         }
         if count == 0 { return .init(state: .ready) }
         guard let journal = try? JSONDecoder().decode(Journal.self, from: Data(bytes.prefix(count))),
-              journal.attempts.count <= 12,
+              journal.attempts.count <= maximumCreationsPerTenMinutes,
               journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
             return .init(state: .unknown, reason: "lifecycle journal is unreadable; inspection is required")
         }
@@ -116,7 +134,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             if count > 0 {
                 do { journal = try JSONDecoder().decode(Journal.self, from: Data(bytes.prefix(count))) }
                 catch { throw refused("lifecycle journal is unreadable; inspection is required") }
-                guard journal.attempts.count <= 12,
+                guard journal.attempts.count <= Self.maximumCreationsPerTenMinutes,
                       journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
                     throw refused("invalid lifecycle history")
                 }
@@ -141,14 +159,16 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                 journal.attempts.removeAll { time - $0 >= 600 }
                 let minute = journal.attempts.filter { time - $0 < 60 }.sorted()
                 let tenMinutes = journal.attempts.sorted()
-                let minuteWait = minute.count >= 4 ? minute[minute.count - 4] + 60 - time : 0
-                let tenMinuteWait = tenMinutes.count >= 12 ? tenMinutes[tenMinutes.count - 12] + 600 - time : 0
+                let minuteCap = Self.maximumCreationsPerMinute
+                let tenMinuteCap = Self.maximumCreationsPerTenMinutes
+                let minuteWait = minute.count >= minuteCap ? minute[minute.count - minuteCap] + 60 - time : 0
+                let tenMinuteWait = tenMinutes.count >= tenMinuteCap ? tenMinutes[tenMinutes.count - tenMinuteCap] + 600 - time : 0
                 let retryAfter = max(minuteWait, tenMinuteWait)
                 guard retryAfter <= 0 else {
                     throw SpaceOError.resourceLimit(
                         kind: .creationRate,
-                        detail: "display safety limit: at most 4 creation attempts per minute "
-                            + "and 12 per ten minutes across SpaceO processes",
+                        detail: "display safety limit: at most \(minuteCap) creation attempts per minute "
+                            + "and \(tenMinuteCap) per ten minutes across SpaceO processes",
                         retryAfter: retryAfter)
                 }
                 journal.attempts.append(time)

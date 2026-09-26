@@ -787,6 +787,9 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var maximumTotalPixels: Int
     public var maximumTotalBytes: Int
     public var maximumCreationsPerMinute: Int
+    /// Persistent per-user lifecycle cap, including the unrestricted resource mode.
+    /// Nil when decoding an older daemon that did not report the ten-minute window.
+    public var maximumCreationsPerTenMinutes: Int?
     public var minimumTileWidth: Int
     public var minimumTileHeight: Int
     public var maximumDisplayEdge: Int
@@ -799,7 +802,9 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
         maximumDisplays = budget.maximumDisplays
         maximumTotalPixels = budget.maximumTotalPixels
         maximumTotalBytes = budget.maximumTotalBytes
-        maximumCreationsPerMinute = budget.maximumCreationsPerMinute
+        maximumCreationsPerMinute = min(budget.maximumCreationsPerMinute,
+                                        DisplayLifecycleLease.maximumCreationsPerMinute)
+        maximumCreationsPerTenMinutes = DisplayLifecycleLease.maximumCreationsPerTenMinutes
         minimumTileWidth = Int(budget.minimumTileSize.width)
         minimumTileHeight = Int(budget.minimumTileSize.height)
         maximumDisplayEdge = budget.maximumDisplayEdge

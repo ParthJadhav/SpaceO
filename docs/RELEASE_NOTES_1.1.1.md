@@ -16,6 +16,10 @@ controller ownership rules.
   failed cleanup preflight, and report lifecycle health without journal I/O in ordinary replies.
 - Open reused Chromium files in background targets and return partial-completion receipts when
   some opens fail, preserving evidence needed to avoid duplicate retries.
+- Contain Chromium startup windows before DevTools readiness, bound diagnostic journal reads,
+  and report both persistent creation-rate limits even with resource overrides.
+- Reject empty or mismatched focused live runs and suspend live children on terminal hangup.
+- Use a dedicated vector template mark for the Viewer's menu-bar item.
 - Reduce temporary allocations in MCP handling, Accessibility observations, event framing,
   capture, recording reports, and Viewer updates; bound queues, buffers, and retained work.
 - Apply monotonic deadlines across transport, browser discovery, waits, and capture admission;
@@ -40,6 +44,9 @@ head `48e9e983abcd60110adf24d97d97d9dbe91e847d`.
 
 A subsequent CLI test-harness fix isolates Foundation's home-directory reads from host state;
 the full deterministic check now passes 1,619 Swift tests plus the same fixtures and MCP smoke.
+
+The pre-merge review fixes pass 1,623 deterministic Swift tests, five supervisor tests,
+15 Node tests, the 34-tool MCP smoke, and the release-security/live-gate fixtures.
 
 The latest full live run passed 13 cases, failed the two-session TextEdit Accessibility case,
 and skipped the final two cases after the failure. Its follow-up MCP matrix was not run. No

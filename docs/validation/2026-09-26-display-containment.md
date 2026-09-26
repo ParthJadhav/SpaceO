@@ -134,3 +134,27 @@ the fixture journal. Production journal resolution and the real failure latch ar
 Both targeted tests passed, followed by `make verify-release`: 1,619 deterministic Swift tests,
 the supervisor/Node fixtures and the 34-tool MCP smoke passed. No additional live run was
 attempted. This test-only fix does not change the incomplete live-qualification status above.
+
+## Pre-merge review closure
+
+Five later review findings were reproduced or confirmed and corrected before the main merge:
+
+- Focused live runs require one passing result for the exact defined method; empty, skipped,
+  different-method and extra-result logs fail. A focused run cannot claim full qualification.
+- The supervisor installs SIGHUP, SIGINT and SIGTERM handling before creating its isolated
+  child. A disposable-process regression verifies the child is actually stopped after hangup.
+- Chromium startup installs notification and periodic containment before DevTools discovery;
+  installation failure prevents browser readiness work, and all exits stop the temporary watcher.
+- Doctor resolves and reads the lifecycle journal on one bounded worker. A timed-out read
+  reports unknown and cannot spawn replacements or publish a late healthy result.
+- Wire limits include the effective per-minute cap and persistent ten-minute cap, including
+  unrestricted mode; older responses without the new optional field still decode.
+
+All 60 targeted Swift tests passed. The full `make verify-release` passed 1,623 deterministic
+Swift tests, five supervisor tests, 15 Node tests and the 34-tool MCP smoke. Release-security
+and live-gate fixtures also passed. These checks include the dedicated Viewer menu-bar mark and
+ImgBot's lossless image changes. The PNG decoded pixels match; the GIF has the same displayed
+pixels and durations after coalescing repeated frames.
+
+No new live run was made, and the failure journal remains intact. The changed Chromium startup
+behavior requires fresh live qualification before publication; earlier passes do not qualify it.

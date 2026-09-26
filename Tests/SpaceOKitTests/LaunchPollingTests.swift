@@ -33,6 +33,44 @@ final class LaunchPollingTests: XCTestCase {
         XCTAssertTrue(message.contains("DevTools"))
     }
 
+    func testStartupContainmentCoversReadinessAndStopsOnSuccessFailureAndCancellation() async throws {
+        for outcome in 0..<3 {
+            var active = false
+            var stops = 0
+            do {
+                let value = try await AppLauncher.withStartupContainment(install: {
+                    active = true
+                    return { active = false; stops += 1 }
+                }, operation: {
+                    XCTAssertTrue(active, "containment must precede endpoint discovery")
+                    await Task.yield()
+                    XCTAssertTrue(active, "containment must cover readiness waits")
+                    if outcome == 1 { throw SpaceOError.launchFailed("fixture") }
+                    if outcome == 2 { throw CancellationError() }
+                    return 43123
+                })
+                XCTAssertEqual(outcome, 0)
+                XCTAssertEqual(value, 43123)
+            } catch {
+                XCTAssertNotEqual(outcome, 0)
+                if outcome == 2 { XCTAssertTrue(error is CancellationError) }
+            }
+            XCTAssertFalse(active)
+            XCTAssertEqual(stops, 1)
+        }
+    }
+
+    func testStartupContainmentFailurePreventsBrowserReadinessWork() async {
+        do {
+            try await AppLauncher.withStartupContainment(install: {
+                throw SpaceOError.launchFailed("watcher unavailable")
+            }, operation: { XCTFail("discovery must not run without containment") })
+            XCTFail("installation failure must propagate")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("watcher unavailable"))
+        }
+    }
+
     func testStartupErrorMappingPreservesCancellationAndProcessExit() {
         XCTAssertTrue(AppLauncher.launchFailure(CancellationError(), application: "Test") is CancellationError)
         let error = AppLauncher.launchFailure(

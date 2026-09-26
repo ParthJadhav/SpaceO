@@ -8,6 +8,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Release qualification fixes
 
+- Install Chromium startup containment before waiting for DevTools. Bound `doctor` journal
+  inspection and report both persistent creation-rate windows, including in unrestricted mode.
+- Reject focused live runs with empty, skipped, or mismatched results. Suspend the isolated
+  live-test child on terminal hangup as well as interrupts and timeouts.
 - Keep healthy display mutations from causing false query timeouts, retain display backings
   after failed cleanup preflight, and serve daemon display health from memory without journal I/O.
 - Return per-file completion receipts when reopening files in Chromium partially fails, so

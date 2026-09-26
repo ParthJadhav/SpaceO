@@ -217,9 +217,23 @@ if run_test_sh_live "$TEST_ROOT/real-count.log" 0 >/dev/null 2>&1; then
 fi
 rmdir "$STUB_BIN/StaleTests.xctest"
 mv "$STUB_BIN/SpaceOPackageTests.xctest" "$STUB_BIN/SpaceOKitTests.xctest"
-run_test_sh_live "$TEST_ROOT/real-count.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null
+echo "Test Case '-[SpaceOKitTests.IntegrationTests testStageCreateAndDestroyLeavesNoDisplay]' passed (0.1 seconds)." >"$TEST_ROOT/focused.log"
+run_test_sh_live "$TEST_ROOT/focused.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null
 grep -Fq -- "-XCTest SpaceOKitTests.IntegrationTests/testStageCreateAndDestroyLeavesNoDisplay" "$TEST_ROOT/invocation.txt" \
     || fail "test.sh did not select exactly the requested case"
+for fixture in empty all-skipped real-count; do
+    if run_test_sh_live "$TEST_ROOT/$fixture.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null; then
+        fail "focused run accepted $fixture instead of its single passing case"
+    fi
+done
+if run_test_sh_live "$TEST_ROOT/focused.log" 0 --case=testDoesNotExist >/dev/null; then
+    fail "focused run accepted a nonexistent case"
+fi
+if run_test_sh_live "$TEST_ROOT/focused.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay --require-full >/dev/null; then
+    fail "focused run was accepted as full qualification"
+fi
+echo "Test Case 'SpaceOKitTests.IntegrationTests.testStageCreateAndDestroyLeavesNoDisplay' passed (0.1 seconds)." >"$TEST_ROOT/focused-swift.log"
+run_test_sh_live "$TEST_ROOT/focused-swift.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null
 if output="$(run_test_sh_live "$TEST_ROOT/real-count.log" 0 --filter SomeOtherTests)"; then
     fail "raw filters can widen the live suite and must be rejected"
 fi

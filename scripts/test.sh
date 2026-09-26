@@ -36,6 +36,7 @@ run_live() {
     local require_full=0
     local skip_build=0
     local test_filter="$LIVE_TEST_CLASS"
+    local test_case=""
     local -a swift_arguments=()
     local argument
     for argument in "$@"; do
@@ -43,7 +44,7 @@ run_live() {
             --require-full) require_full=1 ;;
             --skip-build) skip_build=1 ;;
             --case=test[A-Za-z0-9_]*)
-                local test_case="${argument#--case=}"
+                test_case="${argument#--case=}"
                 [[ "$test_case" =~ ^test[A-Za-z0-9_]+$ ]] || fail "invalid live test case"
                 test_filter="$LIVE_TEST_CLASS/$test_case" ;;
             --filter|--filter=*) fail "use --case=testName to select one live test" ;;
@@ -52,6 +53,9 @@ run_live() {
             *) swift_arguments+=("$argument") ;;
         esac
     done
+    if (( require_full )) && [[ -n "$test_case" ]]; then
+        fail "--case cannot qualify the full suite; omit --require-full for a focused run"
+    fi
 
     cd "$REPOSITORY_ROOT"
     # SwiftPM captures XCTest output and starts it in another process group. Supervise XCTest
@@ -82,6 +86,8 @@ run_live() {
         "$xctest" -XCTest "$test_filter" "$test_bundle" || status=$?
     if (( require_full )); then
         bash "$SCRIPT_DIR/check-live-test-run.sh" "$log" || return 1
+    elif [[ -n "$test_case" ]]; then
+        bash "$SCRIPT_DIR/check-live-test-run.sh" "$log" "--case=$test_case" || return 1
     fi
     return "$status"
 }
@@ -95,7 +101,7 @@ Commands:
   live   Run IntegrationTests against the real WindowServer.
 
 Options for `live`:
-  --case=testName  Run exactly one IntegrationTests method for staged qualification.
+  --case=testName  Require one passing result for exactly this IntegrationTests method.
   --require-full   Fail when any live test skips or when the filter selects fewer tests
                    than the suite defines. For a host that claims to qualify SpaceO, a
                    skipped live test is a failure rather than a pass.
