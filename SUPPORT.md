@@ -2,7 +2,7 @@
 
 SpaceO is maintained on a best-effort basis. The supported public line is the latest
 independently qualified release; older releases and builds from `main` are not guaranteed support.
-No qualified public release is currently recorded.
+The current supported release is [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1).
 
 Before requesting help, check the [troubleshooting guide](docs/TROUBLESHOOTING.md), then run
 `spaceo version --json` and `spaceo doctor --json`. Search existing

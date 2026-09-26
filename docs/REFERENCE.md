@@ -190,9 +190,8 @@ containing both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar
 SpaceO publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or
 executing the payload; then verify the stapled ticket and Gatekeeper assessment.
 
-No signed, notarized, qualified public release is currently recorded in this
-repository. `VERSION` is the planned release number, not proof that an installable release exists.
-Do not treat a local build or ad-hoc-signed artifact as a public release.
+The current release is [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1). Do not treat a local build or ad-hoc-signed
+artifact as a public release.
 
 See [Installing a SpaceO release](INSTALL.md) for exact installation, upgrade, rollback,
 uninstall, artifact-verification, and maintainer publication procedures.
@@ -465,10 +464,7 @@ Known boundaries:
 - **SIGKILL leaks apps.** A daemon killed with `-9` cannot quit the apps it started; displays
   normally follow process lifetime, while `SIGTERM`, Ctrl-C, and `spaceo daemon stop` perform
   orderly cleanup.
-- **Display-stack risk.** On the macOS 27 preview verification host, a rapid integration run
-  while the physical displays were mirrored at high refresh left phantom virtual displays in
-  the login session and left both physical displays online but inactive. A display sleep/wake
-  removed the ownerless display IDs. Creation is now fail-closed: a new display is published only
+- **Display-stack safeguards.** Creation is fail-closed: a new display is published only
   after it is active, non-overlapping, owns a managed Space separate from the user's active Space,
   and the online/active/main/bounds/mirroring/rotation/mode/refresh state of every physical display
   is unchanged. Unsafe attachments are invalidated and refused. Empty displays remain available

@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14 or later">
   <img src="https://img.shields.io/badge/Apple_Silicon-arm64-black" alt="Apple Silicon">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/status-development_preview-orange" alt="Development preview">
+  <img src="https://img.shields.io/badge/status-preview-orange" alt="Preview">
 </p>
 
 <p align="center">
@@ -32,8 +32,9 @@
 [View the still screenshot](docs/images/viewer.png).*
 
 > [!NOTE]
-> **Development preview · 1.1.1 source.** There is no qualified signed DMG available yet.
-> Build from source below; approved DMGs will appear on the [Releases page](https://github.com/ParthJadhav/SpaceO/releases).
+> **Preview · [SpaceO 1.1.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.1).** Download the signed, notarized DMG from the
+> [Releases page](https://github.com/ParthJadhav/SpaceO/releases) and verify it with
+> [INSTALL.md](docs/INSTALL.md), or build from source below.
 >
 > **First DMG scope: native apps and Chromium browsers.** Managed Electron apps such as
 > Cursor and VS Code are refused before launch because they can take desktop focus.
@@ -102,10 +103,8 @@ reported as a confirmed result.
 You need Apple Silicon, macOS 14 or later, and a recent Xcode toolchain with Swift 6.2 or later.
 CI selects Xcode 26.3. Runtime support depends on your macOS build; start with the read-only check.
 
-Virtual-display creation uses runtime capability checks on macOS 14 and later, including macOS 27.
-Display-graph checks, lifecycle deadlines, and persistent creation limits remain enforced.
-See [display safety and qualification](docs/DISPLAY_SAFETY.md); API availability alone is not
-proof of safe operation.
+Virtual-display creation uses runtime capability checks on macOS 14 and later, with bounded
+lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md).
 
 ```bash
 git clone https://github.com/ParthJadhav/SpaceO.git
@@ -159,8 +158,8 @@ SPACEO_CODESIGN_IDENTITY=- make viewer
 open ".build/SpaceO Viewer.app"
 ```
 
-This produces a local development build. Approved releases will contain a Developer ID-signed,
-notarized Viewer and CLI in a signed, stapled DMG. See [installation and verification](docs/INSTALL.md).
+This produces a local development build. Releases contain a Developer ID-signed, notarized
+Viewer and CLI in a signed, stapled DMG. See [installation and verification](docs/INSTALL.md).
 
 ## From request to result
 
