@@ -138,8 +138,9 @@ approval, or instructing users to disable Gatekeeper or SIP.
 The repository contains the packaging and verification implementation, but no evidence in this
 repository proves that a Developer ID-signed, notarized, stapled, qualified public
 artifact has completed these gates. The source version is `1.1.1`; the historical source-only
-`v1.1.0` prerelease and empty `v1.1.1` draft were removed during open-source history cleanup.
-Neither contained binary assets or qualified a distribution. Release workflows
+`v1.1.0` prerelease was removed during open-source history cleanup. A GitHub release draft for
+`v1.1.1` holds proposed notes only: it has no tag, no binary assets, and does not qualify a
+distribution. Release workflows
 remain disabled pending candidate preparation and qualification. Source publication and
 repository protection are complete. The additional `SPACEO_RELEASE_ENABLED`
 switch defaults off, and the workflow verifies reviewer and tag restrictions before accessing
