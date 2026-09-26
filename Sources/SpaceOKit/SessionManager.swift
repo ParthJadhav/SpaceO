@@ -1100,6 +1100,11 @@ public actor SessionManager {
     /// forever would be false. Every reader must come through here so they agree.
     private func liveDisplayLifecycleFailures() -> Set<CGDirectDisplayID> {
         guard !displayLifecycleFailures.isEmpty else { return [] }
+        // A Stage deadline already established that the server cannot be trusted. Re-querying
+        // synchronously here would immediately undo containment and could erase unknown IDs.
+        guard !pool.stages.contains(where: \.hasLifecycleFailure) else {
+            return displayLifecycleFailures
+        }
         displayLifecycleFailures.formIntersection(onlineDisplayIDs())
         return displayLifecycleFailures
     }
@@ -1861,15 +1866,35 @@ public actor SessionManager {
                 response.reused = true
                 var message = "\(existing.name) (pid \(existing.pid)) is already running in '\(session.id)'; reused it"
                 if !files.isEmpty {
-                    let configuration = NSWorkspace.OpenConfiguration()
-                    configuration.activates = false
-                    configuration.addsToRecentItems = false
-                    configuration.promptsUserIfNeeded = false
-                    do {
-                        _ = try await NSWorkspace.shared.open(files, withApplicationAt: appURL, configuration: configuration)
-                        message += " and asked it to open \(files.count) file(s)"
-                    } catch {
-                        response.warnings = ["the running instance did not confirm opening the files: \(error.localizedDescription)"]
+                    if let port = try AppLauncher.reusedBrowserPort(
+                        appURL: existing.url, devToolsPort: existing.devToolsPort) {
+                        // Use a separate browser-level connection so the retained page binding
+                        // is unchanged. Failure is explicit and never falls back to activation.
+                        let browser = ChromiumBridge(port: port)
+                        do {
+                            try await browser.createBackgroundPages(
+                                files: files, region: session.frame, timeout: request.timeout ?? 15,
+                                reportPartialCompletion: true,
+                                validate: {
+                                    guard existing.identity.isAlive else {
+                                        throw SpaceOError.applicationExited("reused browser exited")
+                                    }
+                                })
+                            message += " and opened \(files.count) background page(s)"
+                        } catch {
+                            throw AppLauncher.launchFailure(error, application: existing.name)
+                        }
+                    } else {
+                        let configuration = NSWorkspace.OpenConfiguration()
+                        configuration.activates = false
+                        configuration.addsToRecentItems = false
+                        configuration.promptsUserIfNeeded = false
+                        do {
+                            _ = try await NSWorkspace.shared.open(files, withApplicationAt: appURL, configuration: configuration)
+                            message += " and asked it to open \(files.count) file(s)"
+                        } catch {
+                            response.warnings = ["the running instance did not confirm opening the files: \(error.localizedDescription)"]
+                        }
                     }
                 }
                 message += "; pass new_instance=true to launch another instance"

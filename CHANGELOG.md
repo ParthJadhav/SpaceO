@@ -6,6 +6,40 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+### Release qualification fixes
+
+- Let a failed live case retire its displays before latching failure; suspend the owner when
+  cleanup cannot be verified. Report pre-send Chromium failures as not executed.
+- Install Chromium startup containment before waiting for DevTools. Bound `doctor` journal
+  inspection and report both persistent creation-rate windows, including in unrestricted mode.
+- Reject focused live runs with empty, skipped, or mismatched results. Suspend the isolated
+  live-test child on terminal hangup as well as interrupts and timeouts.
+- Keep healthy display mutations from causing false query timeouts, retain display backings
+  after failed cleanup preflight, and serve daemon display health from memory without journal I/O.
+- Return per-file completion receipts when reopening files in Chromium partially fails, so
+  clients can distinguish confirmed opens, unknown delivery and files never sent.
+- Surface persistent display-safety latches in daemon health and `doctor`, with blocked readiness
+  and recovery guidance. Report the actual wait for the shared creation budget.
+- Use verified Space IDs when allocating a display, reject circuit-failed allocations, and use
+  one total deadline for display retirement. Reused Chromium file opens now use background
+  DevTools targets, with no LaunchServices fallback.
+
+- Contain the September 25 display incident: refuse unsafe display graphs, coordinate creation
+  across processes,
+  persist lifecycle failures and creation budgets, and bound lifecycle waits even when display
+  IPC stalls. Live tests now require reserved-host opt-in, stop after a failure, and have an
+  external supervisor. These safeguards do not fix or guarantee prevention of Apple's driver
+  panic; see `docs/DISPLAY_SAFETY.md`. The temporary macOS 27+ blanket quarantine was removed
+  at the owner’s request; runtime checks and lifecycle safeguards remain enforced.
+- Report exhausted Chromium startup deadlines as `launch_failed` after owned-process cleanup,
+  preserving cancellation and application-exit errors.
+- Create managed Chromium pages in the background through DevTools instead of allowing the
+  first browser window to activate the user’s desktop during launch.
+- Scope the first DMG to a native-app and Chromium preview. Refuse managed Electron launches
+  before startup because Cursor can take desktop focus; MCP clients in those editors remain usable.
+- Give the Viewer's menu bar extra a dedicated tilted-rings mark (`Assets/Brand/spaceo-menubar.svg`)
+  in place of a shrunken app icon, which rendered as a solid tile as a template image.
+
 ### Open-source preparation
 
 - Finish retired daemon socket cleanup before allowing the same server to restart, avoiding

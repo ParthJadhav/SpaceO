@@ -7,6 +7,25 @@ import Darwin
 /// Regressions for exclusive process ownership and runtime geometry/accounting.
 final class OwnershipAndBudgetTests: XCTestCase {
 
+    func testWireLimitsIncludePersistentLifecycleCapsEvenInUnrestrictedMode() throws {
+        for budget in [ResourceBudget.default, .unrestricted] {
+            let report = ResourceLimitsReport(budget)
+            XCTAssertEqual(report.maximumCreationsPerMinute, 4)
+            XCTAssertEqual(report.maximumCreationsPerTenMinutes, 12)
+            let encoded = try JSONEncoder().encode(report)
+            XCTAssertEqual(try JSONDecoder().decode(ResourceLimitsReport.self, from: encoded), report)
+            var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            legacy.removeValue(forKey: "maximumCreationsPerTenMinutes")
+            let decoded = try JSONDecoder().decode(ResourceLimitsReport.self,
+                from: JSONSerialization.data(withJSONObject: legacy))
+            XCTAssertNil(decoded.maximumCreationsPerTenMinutes,
+                         "an older daemon's omitted window must remain unknown")
+        }
+        var strict = ResourceBudget.default
+        strict.maximumCreationsPerMinute = 2
+        XCTAssertEqual(ResourceLimitsReport(strict).maximumCreationsPerMinute, 2)
+    }
+
     override func setUp() {
         super.setUp()
         ProcessOwnership.reset()

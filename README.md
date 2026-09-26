@@ -33,6 +33,10 @@
 > [!NOTE]
 > **Development preview · 1.1.1 source.** There is no qualified signed DMG available yet.
 > Build from source below; approved DMGs will appear on the [Releases page](https://github.com/ParthJadhav/SpaceO/releases).
+>
+> **First DMG scope: native apps and Chromium browsers.** Managed Electron apps such as
+> Cursor and VS Code are refused before launch because they can take desktop focus.
+> These editors can still connect to SpaceO as MCP clients to drive supported apps.
 
 ## A screen for every agent
 
@@ -81,6 +85,11 @@ reported as a confirmed result.
 
 You need Apple Silicon, macOS 14 or later, and a recent Xcode toolchain with Swift 6.2 or later.
 CI selects Xcode 26.3. Runtime support depends on your macOS build; start with the read-only check.
+
+Virtual-display creation uses runtime capability checks on macOS 14 and later, including macOS 27.
+Display-graph checks, lifecycle deadlines, and persistent creation limits remain enforced.
+See [display safety and qualification](docs/DISPLAY_SAFETY.md); API availability alone is not
+proof of safe operation.
 
 ```bash
 git clone https://github.com/ParthJadhav/SpaceO.git

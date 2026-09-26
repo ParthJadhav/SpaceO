@@ -50,18 +50,23 @@ window-local points and includes the browser chrome above the viewport.
 
 Without `web: true`, coordinates are window-local points exactly as for a native app.
 
-## What synthetic input cannot do in web and Electron content
+## Preview boundary
+
+Managed Electron launches, including Cursor and VS Code, are refused before startup because
+startup can take desktop focus. No managed Electron controller can be established in this
+preview, so semantic editor selection, typing and scrolling are unavailable. Do not retry those
+actions or adopt a user-owned editor to bypass the launch refusal. Use a native app or managed
+Chromium browser instead.
+
+## What synthetic input cannot do in web content
 
 Background renderers ignore some synthetic events. SpaceO refuses or reports `unconfirmed`
 rather than pretending:
 
 | You want | Direct route | What SpaceO does instead |
 |---|---|---|
-| Hover a page element | Renderer ignores background pointer moves | `spaceo_move` with `web: true` goes through the DevTools bridge for Chromium pages; in Electron apps hover has no confirmed channel |
-| Drag inside a page or editor | Renderer ignores synthetic drags | Use the app's own selection or reorder controls; in a VS Code-family editor use `spaceo_select_text` (line/character range, read back from the editor) |
-| Scroll an Electron editor with a modifier held | No confirmed channel | Scroll without modifiers, aimed at a single visible editor pane; horizontal scroll is delivered but unconfirmed |
-| Scroll in Cursor or VS Code | Background wheel events are ignored | SpaceO uses the editor's own scroll command; grid layouts and non-editor panes (Settings, welcome) are refused |
-| Type into an Electron editor | Keystroke may not change the document | The receipt says `unobserved` when nothing changed; click into the editor first, then retry |
+| Hover a page element | Renderer ignores background pointer moves | `spaceo_move` with `web: true` goes through the DevTools bridge for Chromium pages |
+| Drag inside a page | Renderer ignores synthetic drags | Use the page's own selection or reorder controls |
 | Canvas, WebGL, game, or video surfaces | Do not accept synthetic background events | Use a purpose-built API if one exists; SpaceO cannot confirm delivery |
 
 Paste inside a page goes through the session clipboard broker (`spaceo_clipboard_set`, then

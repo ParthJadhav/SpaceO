@@ -62,9 +62,11 @@ are brokered through it. The user's pasteboard is never touched.
 ## Web
 
 `web: true` makes `x`/`y` CSS viewport coordinates. Renderer hover, true renderer drag, and
-modifier-held editor scroll have no confirmed channel in web and Electron content; use
-`spaceo_select_text` in VS Code-family editors and expect `unconfirmed` where SpaceO cannot see
-an effect. Canvas, game, and video surfaces ignore synthetic input.
+modifier-held scroll have no confirmed channel in some web content; expect `unconfirmed` where
+SpaceO cannot see an effect. Canvas, game, and video surfaces ignore synthetic input.
+Managed Electron launches, including Cursor and VS Code, are refused in this preview because
+startup can take desktop focus. Their semantic editor controls are unavailable; do not retry
+with `spaceo_select_text` or editor scrolling. Use a supported native app or managed Chromium.
 
 ## Depth
 

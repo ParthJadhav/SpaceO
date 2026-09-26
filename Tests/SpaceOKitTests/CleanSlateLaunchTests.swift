@@ -70,4 +70,16 @@ final class CleanSlateLaunchTests: XCTestCase {
         XCTAssertFalse(AppLauncher.acceptsDefaultsArguments(unknown),
                        "no principal class means no evidence the app parses AppKit defaults")
     }
+    func testReusedBrowserFilesRequirePrivateEndpointAndNeverFallBackToNativeOpen() throws {
+        let chrome = try bundle("Browser", info: [:], frameworks: ["Chromium Framework.framework"])
+        XCTAssertEqual(try AppLauncher.reusedBrowserPort(appURL: chrome, devToolsPort: 43123), 43123)
+        for port: Int? in [nil, 0, 65536] {
+            XCTAssertThrowsError(try AppLauncher.reusedBrowserPort(appURL: chrome, devToolsPort: port))
+        }
+        let native = try bundle("NativeReuse", info: ["NSPrincipalClass": "NSApplication"])
+        XCTAssertNil(try AppLauncher.reusedBrowserPort(appURL: native, devToolsPort: nil))
+        let electron = try bundle("Editor", info: [:], frameworks: ["Electron Framework.framework"])
+        XCTAssertThrowsError(try AppLauncher.reusedBrowserPort(appURL: electron, devToolsPort: 43123))
+    }
+
 }

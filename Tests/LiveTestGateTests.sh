@@ -153,26 +153,43 @@ skip_line="$(grep -nE '^[[:space:]]*try XCTSkipUnless\(' <<<"$suite_setup" | hea
 # --- scripts/test.sh live plumbing -------------------------------------------------------------
 #
 # The gate is only useful if `live --require-full` actually reaches it. A stub compiler stands in
-# for `swift test` so the wiring -- flag parsing, tee, PIPESTATUS, and the check's exit status --
+# for building tests, and a stub XCTest exercises selection, supervision and exit status --
 # is exercised without a WindowServer.
 
 STUB_BIN="$TEST_ROOT/bin"
 mkdir -p "$STUB_BIN"
 cat >"$STUB_BIN/swift" <<'STUB'
 #!/usr/bin/env bash
-# Emits a canned XCTest transcript. STUB_LOG is the transcript, STUB_EXIT the status to report.
-[[ "${1:-}" == "test" ]] || { echo "stub swift: unexpected invocation: $*" >&2; exit 99; }
-echo "stub swift invoked with: $*" >"${STUB_INVOCATION:-/dev/null}"
+[[ "${1:-}" == "build" ]] || { echo "stub swift: unexpected invocation: $*" >&2; exit 99; }
+if [[ "${2:-}" == "--show-bin-path" ]]; then dirname "$0"; fi
+STUB
+cat >"$STUB_BIN/xctest" <<'STUB'
+#!/usr/bin/env bash
+echo "stub xctest invoked with: $*" >"${STUB_INVOCATION:-/dev/null}"
 cat "$STUB_LOG"
 exit "${STUB_EXIT:-0}"
 STUB
-chmod +x "$STUB_BIN/swift"
+cat >"$STUB_BIN/xcrun" <<'STUB'
+#!/usr/bin/env bash
+[[ "$*" == "--find xctest" ]] || exit 99
+echo "$(dirname "$0")/xctest"
+STUB
+mkdir -p "$STUB_BIN/SpaceOPackageTests.xctest"
+chmod +x "$STUB_BIN/swift" "$STUB_BIN/xctest" "$STUB_BIN/xcrun"
+
+# The fixture compiler never touches macOS. Exercise the wrapper on the Ubuntu CI preflight
+# too, while leaving its real-host Darwin admission check intact.
+cat >"$STUB_BIN/uname" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-s" ]]; then echo Darwin; else /usr/bin/uname "$@"; fi
+STUB
+chmod +x "$STUB_BIN/uname"
 
 run_test_sh_live() {
     local stub_log="$1" stub_exit="$2"
     shift 2
     STUB_LOG="$stub_log" STUB_EXIT="$stub_exit" STUB_INVOCATION="$TEST_ROOT/invocation.txt" \
-        SWIFT="$STUB_BIN/swift" SPACEO_LIVE_LOG="$TEST_ROOT/live.log" \
+        PATH="$STUB_BIN:$PATH" SPACEO_LIVE_TESTS=1 SWIFT="$STUB_BIN/swift" SPACEO_LIVE_LOG="$TEST_ROOT/live.log" \
         bash "$REPOSITORY_ROOT/scripts/test.sh" live "$@" 2>&1
 }
 
@@ -188,13 +205,49 @@ $output"
 # --require-full must be consumed by test.sh, never forwarded to swift.
 grep -Fq -- "--require-full" "$TEST_ROOT/invocation.txt" \
     && fail "test.sh forwarded --require-full to swift test"
-grep -Fq -- "--filter" "$TEST_ROOT/invocation.txt" \
+grep -Fq -- "-XCTest SpaceOKitTests.IntegrationTests" "$TEST_ROOT/invocation.txt" \
     || fail "test.sh did not filter to the live suite: $(cat "$TEST_ROOT/invocation.txt")"
 
-# Unrecognised arguments still reach swift test.
-run_test_sh_live "$TEST_ROOT/real-count.log" 0 --require-full --parallel >/dev/null 2>&1 || true
-grep -Fq -- "--parallel" "$TEST_ROOT/invocation.txt" \
-    || fail "test.sh dropped a passthrough argument: $(cat "$TEST_ROOT/invocation.txt")"
+# Parallel workers must be rejected before they reach the compiler.
+grep -Fq -- "/SpaceOPackageTests.xctest" "$TEST_ROOT/invocation.txt" \
+    || fail "test.sh did not discover the package test product"
+mkdir -p "$STUB_BIN/StaleTests.xctest"
+if run_test_sh_live "$TEST_ROOT/real-count.log" 0 >/dev/null 2>&1; then
+    fail "ambiguous test products must be rejected"
+fi
+rmdir "$STUB_BIN/StaleTests.xctest"
+mv "$STUB_BIN/SpaceOPackageTests.xctest" "$STUB_BIN/SpaceOKitTests.xctest"
+echo "Test Case '-[SpaceOKitTests.IntegrationTests testStageCreateAndDestroyLeavesNoDisplay]' passed (0.1 seconds)." >"$TEST_ROOT/focused.log"
+run_test_sh_live "$TEST_ROOT/focused.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null
+grep -Fq -- "-XCTest SpaceOKitTests.IntegrationTests/testStageCreateAndDestroyLeavesNoDisplay" "$TEST_ROOT/invocation.txt" \
+    || fail "test.sh did not select exactly the requested case"
+for fixture in empty all-skipped real-count; do
+    if run_test_sh_live "$TEST_ROOT/$fixture.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null; then
+        fail "focused run accepted $fixture instead of its single passing case"
+    fi
+done
+if run_test_sh_live "$TEST_ROOT/focused.log" 0 --case=testDoesNotExist >/dev/null; then
+    fail "focused run accepted a nonexistent case"
+fi
+if run_test_sh_live "$TEST_ROOT/focused.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay --require-full >/dev/null; then
+    fail "focused run was accepted as full qualification"
+fi
+echo "Test Case 'SpaceOKitTests.IntegrationTests.testStageCreateAndDestroyLeavesNoDisplay' passed (0.1 seconds)." >"$TEST_ROOT/focused-swift.log"
+run_test_sh_live "$TEST_ROOT/focused-swift.log" 0 --case=testStageCreateAndDestroyLeavesNoDisplay >/dev/null
+if output="$(run_test_sh_live "$TEST_ROOT/real-count.log" 0 --filter SomeOtherTests)"; then
+    fail "raw filters can widen the live suite and must be rejected"
+fi
+
+if output="$(run_test_sh_live "$TEST_ROOT/real-count.log" 0 --parallel)"; then
+    fail "parallel live execution was accepted"
+fi
+grep -Fq "parallel live tests are unsafe" <<<"$output" || fail "missing parallel refusal"
+
+# Direct live invocation is inert without the reserved-host opt-in.
+if output="$(PATH="$STUB_BIN:$PATH" SPACEO_LIVE_TESTS=0 SWIFT="$STUB_BIN/swift" bash "$REPOSITORY_ROOT/scripts/test.sh" live 2>&1)"; then
+    fail "live execution was accepted without opt-in"
+fi
+grep -Fq "SPACEO_LIVE_TESTS=1" <<<"$output" || fail "missing opt-in refusal"
 
 # A fully executed run passes, and SPACEO_LIVE_LOG retains the transcript for the CI artifact.
 run_test_sh_live "$TEST_ROOT/real-count.log" 0 --require-full >/dev/null \
@@ -208,7 +261,7 @@ mkdir -p "$TEST_ROOT/tmp"
 : >"$TEST_ROOT/tmp/spaceo-live-tests.XXXXXX.log"
 STUB_LOG="$TEST_ROOT/real-count.log" STUB_EXIT=0 \
     STUB_INVOCATION="$TEST_ROOT/invocation-auto-log.txt" SWIFT="$STUB_BIN/swift" \
-    TMPDIR="$TEST_ROOT/tmp" bash "$REPOSITORY_ROOT/scripts/test.sh" live --require-full \
+    PATH="$STUB_BIN:$PATH" SPACEO_LIVE_TESTS=1 TMPDIR="$TEST_ROOT/tmp" bash "$REPOSITORY_ROOT/scripts/test.sh" live --require-full \
     >/dev/null \
     || fail "test.sh could not create a unique automatic live-test log"
 
@@ -219,6 +272,6 @@ fi
 
 # Without --require-full the developer default is unchanged: skips do not fail the run.
 run_test_sh_live "$TEST_ROOT/all-skipped.log" 0 >/dev/null 2>&1 \
-    || fail "test.sh live (no flag) must keep skipping benign, matching the Round 9 posture"
+    || fail "test.sh live (no flag) must keep skipping benign, on an explicitly reserved host"
 
 echo "live test gate tests passed"

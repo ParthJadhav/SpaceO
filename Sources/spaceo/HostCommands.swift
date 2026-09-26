@@ -377,8 +377,10 @@ func runDoctor() -> Never {
         readiness: permissionReadiness,
         focusLine: AttentionMitigation.focusStatusLine(focusActive: nil))
     report.logging = LoggingSettings.load()
+    report.displaySafety = Stage.displaySafetyStatus()
     let doctorOK = effectiveCanDrive && (!daemonIsRunning || daemonMatchesCLI == true)
         && !daemonUnresponsive
+        && report.effectiveDisplaySafety?.allowsCreation == true
         && (!args.bool("interactive") || permissionReadiness.state == "ready")
 
     if !args.hasJSON { print(report.render()) }
@@ -496,11 +498,23 @@ func doctorPayload(report: DoctorReport, ok: Bool, capabilities: Capabilities,
         daemonPayload["canCapture"] = daemonRuntime.canCapture.map { $0 as Any } ?? NSNull()
         daemonPayload["responsibleProcess"] = daemonRuntime.responsibleProcess.map { $0 as Any } ?? NSNull()
         daemonPayload["draining"] = daemonRuntime.draining ?? false
+        daemonPayload["displaySafety"] = daemonRuntime.displaySafety.flatMap {
+            try? JSONSerialization.jsonObject(with: Wire.encoder.encode($0))
+        } ?? NSNull()
     }
-    let readinessPayload = (try? JSONSerialization.jsonObject(with: Wire.encoder.encode(report.readiness))) ?? [:]
+    var readinessPayload = ((try? JSONSerialization.jsonObject(with: Wire.encoder.encode(report.readiness))) as? [String: Any]) ?? [:]
+    if let safety = report.effectiveDisplaySafety, !safety.allowsCreation {
+        readinessPayload["state"] = "blocked"
+        readinessPayload["blockers"] = report.blockers.map(\.code)
+        readinessPayload["nextAction"] = report.blockers.first?.next
+    }
+    let safetyPayload = report.effectiveDisplaySafety.flatMap {
+        try? JSONSerialization.jsonObject(with: Wire.encoder.encode($0))
+    } ?? NSNull()
     var payload: [String: Any] = [
         "ok": ok,
         "readiness": readinessPayload,
+        "displaySafety": safetyPayload,
         "readinessBlockers": report.blockers.map { ["code": $0.code, "sentence": $0.sentence, "next": $0.next] },
         "scope": "host-health; readiness additionally requires the daemon",
         "macOS": report.macOS,

@@ -38,6 +38,11 @@ const runID = process.env.SPACEO_RUN_ID || `cu-${randomUUID()}`;
 const runStartedAt = new Date();
 const runStartedMonotonic = performance.now();
 
+if (process.env.SPACEO_LIVE_TESTS !== "1") {
+  console.error("computer-use tests require SPACEO_LIVE_TESTS=1 on a reserved host; see docs/LIVE_TESTS.md");
+  process.exit(1);
+}
+
 if (!suites.every((suite) => ["native", "web", "electron"].includes(suite))) {
   console.error(`unknown suite: ${suiteArg}`);
   process.exit(1);
@@ -136,13 +141,18 @@ function detailLines(detail, full) {
   const lines = full ? text.split("\n") : [text.split("\n")[0].slice(0, 150)];
   return `\n${lines.map((l) => `        ${l}`).join("\n")}`;
 }
-function step(label, ok, detail = "") {
+class QualificationStopped extends Error {}
+function recordStep(label, ok, detail = "") {
   results.push({
     label,
     status: ok ? "pass" : "fail",
     atMs: Math.round(performance.now() - runStartedMonotonic),
   });
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detailLines(detail, !ok)}`);
+}
+function step(label, ok, detail = "") {
+  recordStep(label, ok, detail);
+  if (!ok) throw new QualificationStopped(label);
 }
 function blocked(label, detail = "") {
   results.push({
@@ -151,6 +161,7 @@ function blocked(label, detail = "") {
     atMs: Math.round(performance.now() - runStartedMonotonic),
   });
   console.log(`BLOCK ${label}${detailLines(detail, true)}`);
+  throw new QualificationStopped(label);
 }
 /// A capability that was never exercised. Deliberately not a pass: it contributes to no pass
 /// count and keeps the run out of exit 0.
@@ -168,7 +179,9 @@ function cliJSON(args) {
   const output = execFileSync(binary, args, {
     encoding: "utf8",
     maxBuffer: 1024 * 1024,
-    timeout: 10_000,
+    // Display retirement can occupy the daemon for its own 10-second removal budget.
+    // Leave bounded response headroom instead of killing the CLI at that exact boundary.
+    timeout: 15_000,
   });
   return JSON.parse(output);
 }
@@ -252,16 +265,10 @@ writeFileSync(pageFixture, `<!doctype html><meta charset="utf-8"><title>SpaceO C
  render();
 </script>`);
 
-// Cursor persists an editor's visible range by file URL across launches. A fixed fixture can
-// therefore reopen at the bottom and make a valid downward-scroll effect impossible to observe.
-// Give every harness process a fresh document identity so the initial viewport is deterministic.
-const electronFixture = join(fixtureRoot, "spaceo-cu-electron.txt");
-writeFileSync(
-  electronFixture,
-  `${Array.from({ length: 400 }, (_, i) =>
-    `electron line ${i + 1}: ${i === 349 ? "ELECTRON-TARGET-BELOW-THE-FOLD" : "the quick brown fox"}`
-  ).join("\n")}\n`,
-);
+// A synthetic Electron bundle exercises refusal even when Cursor is not installed.
+const electronFixture = join(fixtureRoot, "Refused Electron.app");
+mkdirSync(join(electronFixture, "Contents/Frameworks/Electron Framework.framework"),
+          { recursive: true });
 
 // ---------------------------------------------------------------- helpers
 
@@ -300,6 +307,13 @@ function pointFor(listing, label) {
 }
 
 // ---------------------------------------------------------------- suites
+
+async function verifyIsolation(session, label) {
+  const result = await call("spaceo_verify_isolation", { session });
+  const status = isolationStatus(result);
+  if (status === "blocked") blocked(`[${label}] isolation coverage is incomplete`, result.text);
+  else step(`[${label}] isolation checks are intact`, status === "pass", result.text);
+}
 
 async function nativeSuite() {
   const s = await newSession("cu-native");
@@ -360,6 +374,7 @@ async function nativeSuite() {
     }
     step("[native] type reaches the document",
          typed.ok && /NATIVE-OK/.test(typedText), typedText.split("\n")[0]);
+    await verifyIsolation(s, "native");
   } finally {
     await destroy("cu-native");
   }
@@ -487,81 +502,33 @@ async function webSuite() {
       step("[web] right-click opens the page context action",
            openedContext.ok && state.events.includes("context"), state.raw);
     }
+    const reopened = await call("spaceo_open_app", {
+      session: s, app: "Google Chrome", files: [pageFixture],
+    });
+    const reusedWindows = await call("spaceo_list_windows", { session: s });
+    const windowCount = (listing) => (listing.text.match(/^\s*window \d+/gm) ?? []).length;
+    step("[web] reused Chrome opens files through background targets",
+         reopened.ok && /reused it/.test(reopened.text) && /background page/.test(reopened.text)
+         && windowCount(reusedWindows) > windowCount(launchWindows), reopened.text);
+    assertWindowsContained("[web] reused file-open windows remain contained", reusedWindows);
+    await verifyIsolation(s, "web");
   } finally {
     await destroy("cu-web");
   }
 }
 
 async function electronSuite() {
-  if (!existsSync(cursorApp)) {
-    skipped("[electron] whole suite: renderer control went unexercised",
-            `Cursor is not installed at ${cursorApp}`);
-    return;
-  }
   const s = await newSession("cu-electron");
   try {
-    const opened = await call(
-      "spaceo_open_app",
-      { session: s, app: "Cursor", files: [electronFixture] },
-    );
-    step("[electron] launch Cursor onto the agent display", opened.ok, opened.text);
-    if (!opened.ok) throw new Error(`Electron launch failed: ${opened.text}`);
-    // A cold Electron boot opens a small transient window first; the editor window that can
-    // absorb the scroll below arrives seconds later. Launch only guarantees *a* window, so
-    // wait for one large enough to contain the scroll target instead of trusting a fixed
-    // sleep — an observed cold run still showed only a 260x316 window 7 s after launch.
-    const readyBy = Date.now() + 30_000;
-    let editorWindowSeen = false;
-    while (Date.now() < readyBy) {
-      const listed = await call("spaceo_list_windows", { session: s });
-      editorWindowSeen = [...listed.text.matchAll(/window \d+ (\d+)x(\d+)/g)]
-        .some(([, w, h]) => Number(w) >= 700 && Number(h) >= 500);
-      if (editorWindowSeen) break;
-      await sleep(1000);
-    }
-    if (!editorWindowSeen) {
-      blocked("[electron] no editor-sized window appeared within 30 s",
-              "later steps will report against whatever window exists");
-    }
-    await sleep(2000);
-
-    const launchWindows = await call("spaceo_list_windows", { session: s });
-    assertWindowsContained("[electron] every published window is contained on the agent display",
-                           launchWindows);
-
-    const read = await call("spaceo_read_screen", { session: s, full: true });
-    step("[electron] accessibility tree is readable", read.ok && read.text.length > 40,
-         `${read.text.split("\n").length} outline lines`);
-
-    const shot = await call("spaceo_screenshot", { session: s });
-    step("[electron] window renders on the virtual display",
-         shot.ok && /rendered=true/.test(shot.text), shot.text);
-
-    // Cursor's editor is renderer content. A successful return is not evidence: the private
-    // semantic adapter verifies a visible-range change itself, and the harness independently
-    // compares rendered pixels before and after the request.
-    const before = await call("spaceo_screenshot", { session: s });
-    const scrolled = await call("spaceo_scroll",
-      { session: s, x: 500, y: 400, dy: -1600, ticks: 4, web: true });
-    await sleep(900);
-    const after = await call("spaceo_screenshot", { session: s });
-    const electronControlled =
-      scrolled.ok && !scrolled.unconfirmed && imagesChanged(before, after);
-    if (electronControlled) {
-      step("[electron] pointer scroll changes renderer pixels", true,
-           "confirmed by a before/after screenshot difference");
-    } else {
-      blocked("[electron] renderer scroll has no confirmed safe effect (SPAO-179)",
-              scrolled.ok ? "no observable renderer effect" : scrolled.text);
-    }
-
-    const isolation = await call("spaceo_verify_isolation", { session: s });
-    const status = isolationStatus(isolation);
-    if (status === "blocked") {
-      blocked("[electron] isolation coverage is incomplete", isolation.text);
-    } else {
-      step("[electron] isolation checks are intact", status === "pass", isolation.text);
-    }
+    const opened = await call("spaceo_open_app", {
+      session: s, app: existsSync(cursorApp) ? cursorApp : electronFixture,
+    });
+    step("[electron] preview refuses managed launch before app startup",
+         !opened.ok && /unsupported_target/.test(opened.text)
+         && /managed Electron launches are unavailable/.test(opened.text), opened.text);
+    const windows = await call("spaceo_list_windows", { session: s });
+    step("[electron] refused launch publishes no windows",
+         windows.ok && !/window \d+/.test(windows.text), windows.text);
   } finally {
     await destroy("cu-electron");
   }
@@ -596,9 +563,10 @@ try {
     try {
       await suiteRunners[suite]();
     } catch (error) {
-      // Each suite tears down its own session in finally. A failed suite must not prevent
-      // the remaining coverage or the final display-cleanup assertions from running.
-      step(`[${suite}] suite error`, false, error.message);
+      // Each suite tears down its own session in finally. Do not launch more applications or
+      // attach another display after the first failed assertion, blocked result or RPC error.
+      if (!(error instanceof QualificationStopped)) recordStep(`[${suite}] suite error`, false, error.message);
+      break;
     }
   }
 
@@ -620,7 +588,7 @@ try {
            : `before ${JSON.stringify(displayBaseline)}; after ${JSON.stringify(after)}`);
   }
 } catch (error) {
-  step("harness error", false, error.message);
+  if (!(error instanceof QualificationStopped)) recordStep("harness error", false, error.message);
 } finally {
   server.stdin.end();
   // Register close handling at spawn time: a child that already exited must not hang cleanup.
@@ -635,7 +603,7 @@ try {
   clearTimeout(shutdownTimer);
   clearTimeout(killTimer);
   if (shutdownTimedOut || server.exitCode !== 0) {
-    step("MCP shutdown", false, "MCP did not exit cleanly after input closed");
+    recordStep("MCP shutdown", false, "MCP did not exit cleanly after input closed");
   }
   try { rmSync(fixtureRoot, { recursive: true, force: true }); } catch {}
   const failed = results.filter((r) => r.status === "fail");

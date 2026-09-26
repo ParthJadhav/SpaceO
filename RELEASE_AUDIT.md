@@ -1,8 +1,8 @@
 # SpaceO Release Audit
 
 This is the defect log for the end-to-end release-hardening pass started on 2026-07-26.
-Rounds 1–8 preserve the historical containment and policy record. Round 9 records the current
-unrestricted creation, control, and live-testing posture.
+Rounds 1–9 preserve the historical containment and policy record. RA-055 supersedes the
+unrestricted display-creation and live-testing posture after the September 25 incident.
 
 ## Environment
 
@@ -15,6 +15,7 @@ unrestricted creation, control, and live-testing posture.
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
+| RA-055 | Critical | Containment implemented; latest live qualification blocked by TextEdit AX failure; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
 | RA-002 | High | Fixed | Release daemon can ignore SIGTERM and remain orphaned |
 | RA-003 | High | Fixed | A negative MCP `window` argument crashes the stdio server |
@@ -69,6 +70,60 @@ unrestricted creation, control, and live-testing posture.
 | RA-052 | Low | Fixed | Daemon transport errors lost their message through `localizedDescription`; page-read failures reported as an empty page |
 | RA-053 | Low | Fixed | MCP daemon auto-start resolved a bare/relative argv[0] against the client's working directory |
 | RA-054 | Low | Fixed | Socket line reads issued one syscall per byte; the cursor fence queried the display list twice per event |
+
+### RA-055 — September 25 ColorSync/WindowServer stall and display-driver panic
+
+The local investigation strongly links SpaceO display churn to the initial service stall, with
+75 WindowServer workers waiting synchronously for ColorSync. Cleanup was sampled inside
+`Stage.invalidate → CGGetOnlineDisplayList`, beyond the reach of its nominal deadline.
+The subsequent `UnifiedPipeline.cpp` assertion recurred before user processes started; the
+internal Apple defect and exact initiating call remain unresolved. Older “Fixed” entries below
+describe their specific historical defects, not a blanket claim of kernel-panic prevention.
+
+The owner requested removal of the temporary macOS 27+ blanket quarantine. Runtime class/symbol
+checks again determine capability availability; this is not live qualification or evidence that
+Apple’s defect is resolved. Containment retains unsafe-graph refusal,
+a per-user lifecycle lease and persistent budgets/failure latch, bounded caller waits with
+retained late results, fail-fast live cases, and an external suspension supervisor. Randomized
+display identities are preserved pending evidence about the stale-identity tradeoff. This
+supersedes the relevant Round 7/9 removals; resource overrides do not bypass display safety.
+
+See [DISPLAY_SAFETY.md](docs/DISPLAY_SAFETY.md) for the causal limits, recovery procedure and
+required reserved-host requalification. On September 25 the owner reserved the Mac and requested
+the original mirrored Alienware 240 Hz setup. One supervised lifecycle experiment passed with
+no remaining virtual display or topology change. The subsequent 16-case run passed its XCTest
+assertions, but the external monitor disconnected during the final pacing interval and the shell
+wrapper later errored. The 34-step MCP matrix passed on built-in display only. These are not a
+complete qualification of the requested setup. The suite now rejects topology changes between
+cases, too; see the [experiment record](docs/validation/2026-09-25-display-containment.md).
+September 26 follow-up closes review gaps in lifecycle diagnostics, allocation-time Space queries,
+shared retirement deadlines and creation-budget retry intervals. Reused Chromium file opens use
+the private background-target endpoint, and the live matrix exercises that path. Shipped agent
+playbooks now state the Electron managed-launch refusal. The follow-up passed 1,612 deterministic
+tests, all 16 live cases and all 36 MCP checks on the mirrored 240 Hz setup, with no skips or
+topology changes. The isolated test daemon exited after verified cleanup. See the
+[September 26 source regression record](docs/validation/2026-09-26-display-containment.md).
+
+The owner confirmed the earlier physical disconnect/setup change was intentional. The restored
+original topology experiment passed on `79da94e`. The subsequent review follow-up (`2e07828`)
+also fixes queued-query false timeouts, preflight-failure backing retention, journal I/O in daemon
+replies and partial browser-open receipts. Its 1,618 deterministic tests and pinned CI passed,
+but its full live run stopped after 13 passes on the previously documented TextEdit AX blackout;
+two remaining cases skipped and its MCP matrix did not run. No panic, WindowServer restart or
+leftover virtual display was observed. The persistent failure latch remains intact. This later
+source is not fully live-qualified. Normal builds retain mirrored/high-refresh precautions;
+neither containment nor an earlier successful experiment resolves Apple's internal driver defect.
+
+Pre-merge review also closes terminal-hangup supervision, empty/mismatched focused-run results,
+unbounded doctor journal reads, incomplete creation-rate reporting, and the Chromium DevTools
+startup interval before containment was installed. These have deterministic regressions; the
+Chromium startup change still needs new live evidence. The existing failed qualification and
+failure latch are not cleared by merging the source.
+
+A delayed review also found that immediate assertion latching blocked the failing case's own
+retirement. Case admission now stops separately from the lifecycle circuit: cleanup is verified
+before latching, and an unverified owner requests supervisor suspension and self-stops. Chromium
+file-open receipts also distinguish pre-send cancellation/deadline failures from unknown delivery.
 
 ### RA-001 and RA-012 — local display/input freeze and ownerless displays
 

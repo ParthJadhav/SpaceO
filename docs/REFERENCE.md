@@ -374,11 +374,11 @@ host-compatibility coverage. It explicitly excludes `IntegrationTests`: ordinary
 tests never create virtual displays, launch GUI applications, or send input.
 
 The live target creates real virtual displays and drives installed applications. It runs in the
-current graphical login and needs Accessibility and Screen Recording granted, with no opt-in
-environment variables:
+current graphical login, requires a reserved desktop plus Accessibility and Screen Recording
+grants, and requires explicit opt-in. Read [display safety](DISPLAY_SAFETY.md) first:
 
 ```bash
-make test-live
+SPACEO_LIVE_TESTS=1 make test-live
 ```
 
 The live suite asserts the isolation invariant end-to-end, proves DOM clicks actually reach a
@@ -406,7 +406,7 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 
 | | |
 |---|---|
-| headless displays | enabled without a pool count cap or display-graph preflight refusal |
+| headless displays | runtime capability checks, display-graph admission, bounded lifecycle waits, and persistent creation/failure limits; see [display safety](DISPLAY_SAFETY.md) |
 | tiling | any positive density, non-overlapping tiles, per-tile capture, spill when full |
 | Spaces | each display owns its own; windows placed there stay composited |
 | launch | isolated new application instances placed into the session tile |
@@ -417,28 +417,27 @@ node scripts/mcp-smoke.mjs .build/release/spaceo
 | session hygiene | shared clipboard shortcuts refused, audit, clean shutdown; no pointer fencing |
 | the invariant | checked after every agent action and by the live suite |
 
-App classes actually exercised, by `scripts/computer-use-check.mjs` driving the real MCP server:
+Preview capabilities exercised by `scripts/computer-use-check.mjs` through the real MCP server:
 
-| | native AppKit | Chromium web content | Electron |
-|---|---|---|---|
-| read screen | yes, values clipped at 480 bytes and disclosed | yes, page elements under `wN` | yes |
-| screenshot | yes | yes | yes |
-| click | accessibility press; a coordinate click with no element under it is reported unconfirmed | yes, via DevTools | accessibility press only |
-| type / keys | yes | yes | posted through AX/per-PID paths, then checked against the editor's document version and selection; an unobserved keystroke is reported, not assumed |
-| scroll | yes, via the accessibility scroll bar | yes, via DevTools | yes for VS Code-family editors, via a private semantic adapter, including split panes; horizontal is reported unconfirmed |
-| hover / drag | posted, unconfirmed | yes, via DevTools, including sliders, multi-select modifier clicks, and context actions | no confirmed renderer channel |
+| | native AppKit | Chromium web content |
+|---|---|---|
+| read screen | yes, values clipped at 480 bytes and disclosed | yes, page elements under `wN` |
+| screenshot | yes | yes |
+| click | accessibility press; a coordinate click with no element under it is reported unconfirmed | yes, via DevTools |
+| type / keys | yes | yes |
+| scroll | yes, via the accessibility scroll bar | yes, via DevTools |
+| hover / drag | posted, unconfirmed | yes, via DevTools, including sliders, multi-select modifier clicks, and context actions |
 
-Electron effects are reported rather than inferred: the editor adapter compares semantic visible
-ranges, and the conformance harness independently compares rendered pixels. An action that could
-not be confirmed does not become a pass merely because the request returned successfully.
+The native + Chromium preview matrix also verifies that managed Electron launches are
+refused before startup. It does not claim Electron renderer qualification.
 
 ```bash
-make computer-use-check
+SPACEO_LIVE_TESTS=1 make computer-use-check
 ```
 
 The harness exits `0` only when every capability was exercised and passed, `1` for a regression,
 and `2` when the run is otherwise healthy but a documented product blocker remains — or when a
-suite was skipped. A suite whose host application is missing (Chrome for web, Cursor for Electron)
+suite was skipped. A suite whose host application is missing (Chrome for web)
 is reported as `SKIP`, counts toward no pass total, and keeps the run out of exit `0`: an
 unexercised capability is unknown, not working. Pass `--require-full` for release-time runs to
 turn any skip into an exit `1`. The harness reports `passed / exercised` and a computer-use parity
@@ -457,26 +456,11 @@ Known boundaries:
   port for reliable page actions. Multiple page targets are listed explicitly and remain
   fail-closed until one is attached; when no bridge exists, web-content input is refused rather
   than silently sent through an ineffective native route.
-- **Self-activating apps.** Some Electron shells activate themselves despite `activates=false`.
-  SpaceO hands focus straight back and reports that it had to, so the theft is a blip rather
-  than a state change — but there is a visible moment.
-- **Electron renderer input.** Cursor's editor has no settable AX scroll area and ignores
-  synthetic background wheel delivery. For VS Code-family bundles, SpaceO loads a private,
-  per-launch semantic adapter from a `0700` temporary root and uses the editor's own scroll
-  command. Requests are authenticated over a `0600` Unix socket, require the point to hit the
-  exact editor/window with one visible editor, and pass only after the editor reports a
-  visible-range change. This path does not activate the app or move the physical pointer.
-  A split window is addressed by view column: Accessibility supplies the pane frames and their
-  order supplies the column, and a pane is scrolled through the editor's own `revealRange` so
-  focus never moves. Panes arranged as a two-dimensional grid are refused by name, because VS
-  Code's own column numbering for a grid is not determined by pane order and guessing would
-  scroll a pane the caller did not aim at. Horizontal scrolling is performed but reported
-  unconfirmed — the editor exposes no horizontal viewport offset to check against. Modifier-held
-  editor scrolling, other Electron shells, renderer hover, and true renderer drag still have no
-  confirmed channel. Non-editor VS Code-family surfaces such as Agents, Settings, welcome pages,
-  and extension panes are also outside the semantic editor-scroll channel and are refused rather
-  than reported as successfully scrolled. See FINDINGS §4.8 for which of those are missing APIs
-  rather than missing work.
+- **Managed Electron launches are refused in this preview.** Cursor, VS Code, and other
+  Electron bundles can activate themselves during startup despite background-launch options.
+  SpaceO returns `unsupported_target` before starting them. Electron renderer implementation
+  remains experimental and is not part of this preview's support promise. Cursor and VS Code
+  may still act as MCP clients controlling native apps and Chromium browsers.
 - **Cmd-Tab, the Dock, and notifications** still show agent apps. Not solvable on-host.
 - **SIGKILL leaks apps.** A daemon killed with `-9` cannot quit the apps it started; displays
   normally follow process lifetime, while `SIGTERM`, Ctrl-C, and `spaceo daemon stop` perform

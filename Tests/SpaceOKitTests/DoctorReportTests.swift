@@ -195,4 +195,23 @@ final class DoctorReportTests: XCTestCase {
         XCTAssertTrue(report.blockers[0].next.contains("launchctl kickstart -k gui/"))
         XCTAssertTrue(report.blockers[0].next.contains("`spaceo daemon status`"))
     }
+    func testLifecycleLatchBlocksReadinessEvenWhenDaemonPermissionsAreHealthy() throws {
+        var runtime = Self.runtime()
+        runtime.displaySafety = DisplaySafetyStatus(state: .blocked, reason: "injected timeout")
+        var report = Self.report(daemon: .running(runtime), matches: true)
+        report.readiness = PermissionReadinessReport(clientAX: true, clientCapture: true, daemon: runtime)
+        report.displaySafety = DisplaySafetyStatus(state: .ready)
+        XCTAssertFalse(try XCTUnwrap(report.effectiveDisplaySafety).allowsCreation)
+        XCTAssertEqual(report.blockers.map(\.code), ["display_safety_blocked"])
+        XCTAssertTrue(report.render().contains("Readiness: blocked"))
+        XCTAssertTrue(report.render().contains("injected timeout"))
+
+        runtime.displaySafety = nil // Older daemon: still use the local persistent journal.
+        report.daemon = .running(runtime)
+        report.displaySafety = DisplaySafetyStatus(state: .unknown, reason: "unreadable journal")
+        XCTAssertEqual(report.blockers.map(\.code), ["display_safety_unknown"])
+        report.daemon = .notRunning
+        XCTAssertTrue(report.blockers.contains { $0.code == "display_safety_unknown" })
+    }
+
 }

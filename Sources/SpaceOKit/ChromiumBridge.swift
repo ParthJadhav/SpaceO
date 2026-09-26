@@ -2,6 +2,35 @@ import Foundation
 import AppKit
 import CoreGraphics
 
+/// Reused browsers survive an open failure, so callers need receipts before deciding to retry.
+struct BackgroundPageOpenFailure: Error, LocalizedError, Sendable {
+    let confirmedTargetIDs: [String]
+    let failedIndex: Int
+    let attempted: Bool
+    let total: Int
+    let reason: String
+    var errorDescription: String? {
+        if failedIndex == total {
+            return "All \(total) background pages were confirmed, but final process validation failed. "
+                + "Do not replay these opens. \(reason)"
+        }
+        return "file open incomplete: \(confirmedTargetIDs.count) background page(s) confirmed; "
+            + "file index \(failedIndex) \(attempted ? "has unknown delivery" : "was not sent"). "
+            + "Inspect current targets before retrying; do not replay completed opens. \(reason)"
+    }
+    var steps: [StepReceipt] {
+        (0..<total).map { index in
+            if index < confirmedTargetIDs.count {
+                return StepReceipt(index: index, cmd: "run.file", ok: true, executed: true,
+                    message: "opened target \(confirmedTargetIDs[index])", completion: "confirmed")
+            }
+            return StepReceipt(index: index, cmd: "run.file", ok: false,
+                executed: index == failedIndex && attempted,
+                completion: index == failedIndex && attempted ? "unknown" : "not_executed")
+        }
+    }
+}
+
 /// Drives Chromium web content through the DevTools Protocol.
 ///
 /// Why this exists: measured against Google Chrome on macOS 27, synthetic input reaches a
@@ -124,6 +153,68 @@ public actor ChromiumBridge {
     /// limit.
     public func targets() async throws -> [Target] {
         try await targets(budget: nil)
+    }
+
+    /// Browser-level bridge for startup and reused file opens, separate from page binding.
+    /// One deadline covers discovery and every requested page; foreground fallback is forbidden.
+    func createBackgroundPages(files: [URL], region: CGRect, timeout: TimeInterval = 10,
+                               reportPartialCompletion: Bool = false,
+                               validate: @Sendable () throws -> Void = {}) async throws {
+        guard (1...65_535).contains(port), files.count <= 256, socket == nil else {
+            throw SpaceOError.badRequest("invalid browser startup request")
+        }
+        try WindowPlacement.validate(frame: region)
+        guard [region.minX, region.minY, region.width, region.height].allSatisfy({
+            $0 >= CGFloat(Int32.min) && $0 <= CGFloat(Int32.max)
+        }) else {
+            throw SpaceOError.badRequest("browser startup bounds exceed the protocol integer range")
+        }
+        let budget = try DevToolsDeadline(timeout: timeout)
+        try validate()
+        let data = try await boundedBody(from: URL(string: "http://127.0.0.1:\(port)/json/version")!,
+                                         budget: budget)
+        guard let version = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let raw = version["webSocketDebuggerUrl"] as? String,
+              let endpoint = Self.validatedWebSocketURL(raw, port: port),
+              endpoint.path.hasPrefix("/devtools/browser/") else {
+            throw SpaceOError.launchFailed("browser did not expose a private browser endpoint")
+        }
+        try await connect(to: Target(id: endpoint.lastPathComponent, title: "", url: "",
+                                     webSocketURL: endpoint))
+        defer { detach() }
+        let pages = files.isEmpty ? ["about:blank"] : files.map(\.absoluteString)
+        var confirmed: [String] = []
+        var failedIndex = 0
+        var attempted = false
+        do {
+            for (index, page) in pages.enumerated() {
+                failedIndex = index
+                attempted = false
+                try validate()
+                var parameters: [String: Any] = [
+                    "url": page, "background": true, "newWindow": index == 0,
+                ]
+                if index == 0 {
+                    parameters["left"] = Int(region.minX)
+                    parameters["top"] = Int(region.minY)
+                    parameters["width"] = Int(region.width)
+                    parameters["height"] = Int(region.height)
+                }
+                let result = try await performCommand("Target.createTarget", parameters, budget: budget,
+                                                      onSend: { attempted = true })
+                guard let id = result["targetId"] as? String, !id.isEmpty, id.utf8.count <= 1_024 else {
+                    throw SpaceOError.launchFailed("browser did not confirm background page creation")
+                }
+                confirmed.append(id)
+            }
+            failedIndex = pages.count
+            attempted = false
+            try validate()
+        } catch {
+            guard reportPartialCompletion else { throw error }
+            throw BackgroundPageOpenFailure(confirmedTargetIDs: confirmed, failedIndex: failedIndex,
+                attempted: attempted, total: pages.count, reason: String(error.localizedDescription.prefix(512)))
+        }
     }
 
     func targets(budget: DevToolsDeadline?) async throws -> [Target] {
@@ -375,7 +466,8 @@ public actor ChromiumBridge {
     }
 
     private func performCommand(_ method: String, _ params: [String: Any],
-                                budget: DevToolsDeadline? = nil) async throws -> [String: Any] {
+                                budget: DevToolsDeadline? = nil,
+                                onSend: () -> Void = {}) async throws -> [String: Any] {
         // Fail closed on both halves of the binding. A socket without a target id would mean
         // the bridge reconnected to something it never chose, which must never happen silently.
         guard let socket, attachedTargetID != nil else {
@@ -391,6 +483,7 @@ public actor ChromiumBridge {
             throw SpaceOError.badRequest("DevTools command exceeds the 1 MiB limit")
         }
         if let commandExecutor {
+            onSend()
             let result = try await commandExecutor(method, params)
             do { try budget?.check() }
             catch { retireTransport(ifCurrent: socket); throw error }
@@ -404,6 +497,7 @@ public actor ChromiumBridge {
                 within: commandTimeout,
                 timeoutMessage: "DevTools send timed out",
                 start: { completion in
+                    onSend()
                     socket.send(message) { error in
                         if let error { completion(.failure(error)) }
                         else { completion(.success(())) }

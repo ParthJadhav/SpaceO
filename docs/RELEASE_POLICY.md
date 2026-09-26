@@ -42,14 +42,27 @@ slices and the combined artifact are independently verified.
 
 ## Required artifact qualification
 
+The release owner selected a **native-app and Chromium preview** on 2026-09-24.
+Managed Electron launches are outside this preview's support scope and must return
+`unsupported_target` before starting a process. The full computer-use matrix must exercise
+native and Chromium behavior and verify Electron refusal; refusal is an enforced product
+limit, not a skipped renderer qualification. Electron support requires separate live
+qualification before this limit can be removed. Publish this first DMG as a GitHub prerelease.
+All signing, notarization, isolation, cleanup, and owner approval gates below still apply.
+
 Before public approval, exercise the exact Developer ID-signed, notarized, and stapled candidate
 obtained through the intended distribution path, not binaries left in `.build`. By explicit owner
 direction on 2026-09-05, the implementer may perform this qualification in the owner-authorized
 existing graphical login. A separate tester, clean Mac, or clean login is not required.
+After the September 25 display incident, that desktop must be explicitly reserved for testing;
+follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md). The owner reserved the current Mac and separately
+authorized an experiment with the original mirrored 240 Hz setup. That experiment uses an
+explicit qualification build; it does not approve distribution or qualify the final signed DMG.
 
 Record existing applications, sessions, display topology, and permission state before testing;
 preserve unrelated user state and verify it afterward. Do not switch users, log out, or change
-display settings during a run. An interrupted run must be discarded and repeated. Label the
+display settings during a run. An interrupted run is not evidence: retain it, inspect and recover
+the host before deciding whether another run is appropriate. Never automatically rerun it. Label the
 result as implementer qualification on an existing login, not independent or fresh-user research.
 
 The retained record must identify the commit and immutable tag candidate, version, artifact
