@@ -15,7 +15,7 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
-| RA-055 | Critical | Containment implemented; Apple root cause and live requalification remain open | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
+| RA-055 | Critical | Containment implemented; latest live qualification blocked by TextEdit AX failure; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
 | RA-002 | High | Fixed | Release daemon can ignore SIGTERM and remain orphaned |
 | RA-003 | High | Fixed | A negative MCP `window` argument crashes the stdio server |
@@ -99,11 +99,20 @@ cases, too; see the [experiment record](docs/validation/2026-09-25-display-conta
 September 26 follow-up closes review gaps in lifecycle diagnostics, allocation-time Space queries,
 shared retirement deadlines and creation-budget retry intervals. Reused Chromium file opens use
 the private background-target endpoint, and the live matrix exercises that path. Shipped agent
-playbooks now state the Electron managed-launch refusal. Deterministic verification passes;
-live requalification of this follow-up remains pending.
+playbooks now state the Electron managed-launch refusal. The follow-up passed 1,612 deterministic
+tests, all 16 live cases and all 36 MCP checks on the mirrored 240 Hz setup, with no skips or
+topology changes. The isolated test daemon exited after verified cleanup. See the
+[September 26 source regression record](docs/validation/2026-09-26-display-containment.md).
 
-The owner confirmed the physical disconnect/setup change was intentional. Full qualification
-on the restored original topology remains open.
+The owner confirmed the earlier physical disconnect/setup change was intentional. The restored
+original topology experiment passed on `79da94e`. The subsequent review follow-up (`2e07828`)
+also fixes queued-query false timeouts, preflight-failure backing retention, journal I/O in daemon
+replies and partial browser-open receipts. Its 1,618 deterministic tests and pinned CI passed,
+but its full live run stopped after 13 passes on the previously documented TextEdit AX blackout;
+two remaining cases skipped and its MCP matrix did not run. No panic, WindowServer restart or
+leftover virtual display was observed. The persistent failure latch remains intact. This later
+source is not fully live-qualified. Normal builds retain mirrored/high-refresh precautions;
+neither containment nor an earlier successful experiment resolves Apple's internal driver defect.
 
 ### RA-001 and RA-012 — local display/input freeze and ownerless displays
 

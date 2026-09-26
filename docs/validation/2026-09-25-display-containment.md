@@ -4,6 +4,7 @@ This is source-level incident evidence, **not completed qualification of the inc
 setup or a signed distribution**. The temporary macOS 27+ version quarantine is removed;
 normal builds retain the display-configuration and lifecycle checks in
 [DISPLAY_SAFETY.md](../DISPLAY_SAFETY.md). Apple's driver defect remains unresolved.
+The complete follow-up source experiment passed on [September 26](2026-09-26-display-containment.md).
 
 ## Host and authorization
 
@@ -61,10 +62,11 @@ for the entire suite and checks before and after each pacing interval. A change 
 the run before another display is created. Live-case admission is also persisted before any
 baseline or test work, so a failure in a case that creates no display still blocks a restart.
 
-## Outstanding qualification
+## Follow-up qualification
 
-Reconnect the intended mirrored Alienware 240 Hz setup, then retain a complete run from the final
-build and its MCP matrix without topology changes or harness errors.
+The intended mirrored Alienware 240 Hz setup was present on September 26. The follow-up source
+passed the complete suite and MCP matrix without topology changes or harness errors; see the
+[separate result record](2026-09-26-display-containment.md).
 Do not describe the requested mirrored 240 Hz setup, the final source, or a DMG as fully qualified
 from these mixed-topology experiments. Distribution additionally requires the exact signed,
 notarized, stapled candidate and owner GO under [RELEASE_POLICY.md](../RELEASE_POLICY.md).
