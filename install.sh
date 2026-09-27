@@ -262,7 +262,10 @@ uninstall_spaceo() {
         "$cli" daemon stop >/dev/null 2>&1 || true
         rm -f "$cli"; ok "removed $cli"; removed=1
     fi
-    for dir in "$app_dir" "/Applications"; do
+    # Like install, only look in /Applications when no location was chosen.
+    local -a dirs=("$app_dir")
+    [[ -n "${SPACEO_APP_DIR:-}" ]] || dirs+=("/Applications")
+    for dir in "${dirs[@]}"; do
         [[ -d "$dir/SpaceO Viewer.app" ]] || continue
         if rm -rf "$dir/SpaceO Viewer.app" 2>/dev/null; then
             ok "removed $dir/SpaceO Viewer.app"; removed=1
