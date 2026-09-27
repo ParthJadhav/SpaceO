@@ -1740,7 +1740,7 @@ case "logging":
             print(line)
         }
         if sub == "enable" {
-            print("running daemons and 1.1.1+ MCP servers apply this within 5 seconds; older MCP servers need a client restart")
+            print("running daemons and 1.0.0+ MCP servers apply this within 5 seconds; older MCP servers need a client restart")
         }
     }
     exit(0)

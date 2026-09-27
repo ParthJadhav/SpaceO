@@ -16,12 +16,12 @@ SpaceO uses private macOS behavior and its deployment target is not a compatibil
 Review “Requirements and support status” in the project README and run `spaceo doctor` on every
 intended host before creating a session.
 
-The current release is [SpaceO 1.1.2](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.2), a signed and notarized prerelease that passed the
+The current release is [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0), the first public release. It is signed and notarized and passed the
 [public-release gates](RELEASE_POLICY.md). Always verify a download as described below.
 
 ## Verify and install
 
-The first DMG is a native-app and Chromium preview for Apple Silicon. Managed Electron
+SpaceO 1.0.0 supports native apps and Chromium browsers on Apple Silicon. Managed Electron
 launches are refused before startup; Cursor and VS Code can still connect as MCP clients.
 
 Download the `.dmg`, `.sha256`, and `.sha256.sig` files from the same release. Authenticate the
