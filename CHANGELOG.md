@@ -6,6 +6,12 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-09-28
+
+This maintenance release includes the verified installer and privacy hardening below. Public Git
+history uses noreply contributor metadata. Its new signed candidate record binds the release
+to the rewritten source history; earlier release provenance is not relabeled.
+
 ### Added
 
 - One-command install: `curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash`.

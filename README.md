@@ -32,11 +32,11 @@
 [View the still screenshot](docs/images/viewer.png).*
 
 > [!NOTE]
-> **Latest release · [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0).** Install it with
+> **Latest release · [latest signed SpaceO release](https://github.com/ParthJadhav/SpaceO/releases/latest).** Install it with
 > [one command](#get-started), which verifies the signed, notarized release for you. You can also
 > download the DMG from the [Releases page](https://github.com/ParthJadhav/SpaceO/releases).
 >
-> **1.0.0 scope: native apps and Chromium browsers.** Managed Electron apps such as
+> **Supported scope: native apps and Chromium browsers.** Managed Electron apps such as
 > Cursor and VS Code are refused before launch because they can take desktop focus.
 > These editors can still connect to SpaceO as MCP clients to drive supported apps.
 

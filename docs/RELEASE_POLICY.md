@@ -134,10 +134,17 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-The source version is `1.0.0`, the first public release. The live suite (16/16, no skips) and
-MCP matrix (36/36) passed on 2026-09-26; see [the live record](validation/2026-09-26-release-1.1.1-live.md).
-Display, input, and session code is unchanged since that run. On 2026-09-27 the release owner
-withdrew the earlier `v1.1.0`–`v1.1.2` preview tags and their prerelease, and directed
-publication of `v1.0.0` as the first release through the protected candidate and publication
-jobs. Follow [docs/INSTALL.md](INSTALL.md) for artifact
-verification and maintainer commands.
+Version `1.0.1` is being qualified for a privacy maintenance release. The owner authorized public
+history cleanup and a new release on September 28, 2026. This authorizes the migration and release
+work; successful candidate qualification is still required before publication. The existing
+signed download remains available until its replacement is verified. The former release tag,
+artifacts, and provenance will then be retired as part of the authorized privacy migration.
+
+Display, input, and session implementation is unchanged from the September 26 live qualification;
+only the embedded version changes in runtime source. The new candidate must receive exact-artifact
+verification and reserved-host qualification. Results will be retained under
+`docs/validation/2026-09-28-privacy-release.md`; until those results exist, publication is pending.
+
+Publisher name and Team ID remain public code-signing metadata. GitHub retains read-only PR refs
+and cached historical views independently of branch rewrites; source cleanup cannot promise
+removal from those views or from third-party clones.

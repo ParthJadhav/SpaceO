@@ -1,6 +1,6 @@
 # Setup guide
 
-The current release is [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0), the first public release.
+The current release is [latest signed SpaceO release](https://github.com/ParthJadhav/SpaceO/releases/latest).
 This guide takes you from a source build to a session self-test and MCP configuration. If a step
 fails, see [Troubleshooting](TROUBLESHOOTING.md).
 

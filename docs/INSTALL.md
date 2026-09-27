@@ -16,8 +16,9 @@ SpaceO uses private macOS behavior and its deployment target is not a compatibil
 Review “Requirements and support status” in the project README and run `spaceo doctor` on every
 intended host before creating a session.
 
-The current release is [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0), the first public release. It is signed and notarized and passed the
-[public-release gates](RELEASE_POLICY.md). Always verify a download as described below.
+Download the [latest signed release](https://github.com/ParthJadhav/SpaceO/releases/latest).
+The commands below use version `1.0.1`; only install a published artifact that passes all
+publisher, checksum, and notarization checks. See the [release policy](RELEASE_POLICY.md).
 
 ## Quick install
 
@@ -46,7 +47,7 @@ To do each step yourself, continue below.
 
 ## Verify and install
 
-SpaceO 1.0.0 supports native apps and Chromium browsers on Apple Silicon. Managed Electron
+SpaceO supports native apps and Chromium browsers on Apple Silicon. Managed Electron
 launches are refused before startup; Cursor and VS Code can still connect as MCP clients.
 
 Download the `.dmg`, `.sha256`, and `.sha256.sig` files from the same release. Authenticate the
@@ -54,31 +55,31 @@ checksum as an official SpaceO publisher artifact before using it:
 
 ```bash
 codesign --verify \
-  --detached SpaceO-1.0.0-macOS-arm64.sha256.sig \
+  --detached SpaceO-1.0.1-macOS-arm64.sha256.sig \
   --strict --verbose=2 \
   -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.release-checksum"' \
-  SpaceO-1.0.0-macOS-arm64.sha256
+  SpaceO-1.0.1-macOS-arm64.sha256
 ```
 
 Only after that command succeeds, verify the disk image from the directory containing all three
 files:
 
 ```bash
-shasum -a 256 -c SpaceO-1.0.0-macOS-arm64.sha256
+shasum -a 256 -c SpaceO-1.0.1-macOS-arm64.sha256
 ```
 
 Ask Gatekeeper to assess the stapled disk image before mounting it:
 
 ```bash
 spctl --assess --type open --context context:primary-signature --verbose=4 \
-  SpaceO-1.0.0-macOS-arm64.dmg
+  SpaceO-1.0.1-macOS-arm64.dmg
 ```
 
 Mount it at a private temporary path and verify both payload signatures:
 
 ```bash
 SPACEO_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-install.XXXXXX")"
-hdiutil attach SpaceO-1.0.0-macOS-arm64.dmg \
+hdiutil attach SpaceO-1.0.1-macOS-arm64.dmg \
   -readonly -nobrowse -mountpoint "$SPACEO_MOUNT"
 codesign --verify --strict --verbose=2 \
   -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.cli"' \
