@@ -29,7 +29,9 @@ cat > "$PAYLOAD/spaceo" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SPACEO_TEST_LOG"
 case "$1 ${2:-}" in
-    "version "*) echo "spaceo 9.9.9" ;;
+    "version --json") printf '{"version":"%s"}\n' "${SPACEO_TEST_EMBEDDED:-9.9.9}" ;;
+    "version "*) echo "spaceo ${SPACEO_TEST_EMBEDDED:-9.9.9}" ;;
+    "setup --client") [[ "${3:-}" == "${SPACEO_TEST_STALL_CLIENT:-}" ]] && sleep 30; exit 0 ;;
     "daemon wait") [[ -e "$SPACEO_TEST_DAEMON" ]] ;;
     "daemon status")
         if [[ -e "$SPACEO_TEST_AGENT" ]]; then echo '{"installed":true}'; else echo '{"installed":false}'; fi ;;
@@ -46,6 +48,9 @@ esac
 MOCK
 chmod 755 "$PAYLOAD/spaceo"
 printf 'viewer\n' > "$PAYLOAD/SpaceO Viewer.app/Contents/marker"
+plutil -create xml1 "$PAYLOAD/SpaceO Viewer.app/Contents/Info.plist"
+plutil -insert CFBundleShortVersionString -string 9.9.9 "$PAYLOAD/SpaceO Viewer.app/Contents/Info.plist"
+plutil -insert CFBundleVersion -string 9.9.9 "$PAYLOAD/SpaceO Viewer.app/Contents/Info.plist"
 
 NAME="SpaceO-9.9.9-macOS-arm64"
 printf 'disk image\n' > "$RELEASE/$NAME.dmg"
@@ -87,6 +92,8 @@ run_installer() {
         SPACEO_TEST_PAYLOAD="$PAYLOAD" SPACEO_TEST_BAD_SIGNATURE="${SPACEO_TEST_BAD_SIGNATURE:-}" \
         SPACEO_TEST_DAEMON="$SPACEO_TEST_DAEMON" SPACEO_TEST_AGENT="$SPACEO_TEST_AGENT" \
         ${SPACEO_TEST_BIN_DIR:+SPACEO_BIN_DIR="$SPACEO_TEST_BIN_DIR"} \
+        SPACEO_TEST_EMBEDDED="${SPACEO_TEST_EMBEDDED:-}" SPACEO_TEST_STALL_CLIENT="${SPACEO_TEST_STALL_CLIENT:-}" \
+        ${SPACEO_CLIENT_TIMEOUT:+SPACEO_CLIENT_TIMEOUT="$SPACEO_CLIENT_TIMEOUT"} \
         SPACEO_TEST_MACOS="${SPACEO_TEST_MACOS:-}" SPACEO_APP_DIR="$home/Applications" \
         bash "$INSTALL_SCRIPT" "$@" < /dev/null
 }
@@ -214,6 +221,40 @@ fi
 kill "$hung_daemon"; wait "$hung_daemon" 2>/dev/null || true
 [[ -x "$HOME_H/.local/bin/spaceo" ]] || fail "CLI removed while its daemon process lived"
 [[ "$output" == *"did not stop"* ]] || fail "wrong refusal: $output"
+
+# 15. A correctly signed image holding a different build is refused before anything is copied.
+HOME_I="$TEST_ROOT/home-i"
+if output="$(SPACEO_TEST_EMBEDDED=9.9.8 run_installer "$HOME_I" --no-clients 2>&1)"; then
+    fail "installed a payload whose embedded version is not the release"
+fi
+[[ "$output" == *"contains spaceo 9.9.8"* ]] || fail "wrong refusal: $output"
+[[ ! -e "$HOME_I/.local/bin/spaceo" ]] || fail "installed a mismatched build"
+
+# 16. A Claude Code entry with the right command but broken args is re-registered.
+HOME_J="$TEST_ROOT/home-j"
+mkdir -p "$HOME_J"
+printf '{"mcpServers":{"spaceo":{"command":"%s","args":[]}}}\n' "$HOME_J/.local/bin/spaceo" > "$HOME_J/.claude.json"
+: > "$SPACEO_TEST_LOG"
+run_installer "$HOME_J" >/dev/null 2>&1 || fail "install with a broken Claude Code entry failed"
+grep -Fqx 'setup --client claude-code --yes' "$SPACEO_TEST_LOG" || fail "broken Claude Code entry was not repaired"
+
+# 17. A client config that is not UTF-8 is left alone rather than handed to setup to rewrite.
+HOME_K="$TEST_ROOT/home-k"
+mkdir -p "$HOME_K/.codex"
+printf '\xff\xfe[mcp_servers]\n' > "$HOME_K/.codex/config.toml"
+: > "$SPACEO_TEST_LOG"
+output="$(run_installer "$HOME_K" 2>&1)" || fail "install with an undecodable config failed: $output"
+grep -Fq 'setup --client codex' "$SPACEO_TEST_LOG" && fail "handed an undecodable Codex config to setup"
+[[ "$output" == *"is not UTF-8 text"* ]] || fail "no warning for the undecodable config: $output"
+
+# 18. A client registration that stalls times out instead of hanging the installer.
+HOME_L="$TEST_ROOT/home-l"
+mkdir -p "$HOME_L/.codex"
+started=$SECONDS
+output="$(SPACEO_TEST_STALL_CLIENT=codex SPACEO_CLIENT_TIMEOUT=1 run_installer "$HOME_L" 2>&1)" \
+    || fail "install with a stalled client failed: $output"
+(( SECONDS - started < 20 )) || fail "a stalled client registration was not bounded"
+[[ "$output" == *"connecting Codex timed out"* ]] || fail "no timeout warning: $output"
 
 # No mount point or work directory may outlive a run.
 leftovers="$(find "$TEST_ROOT" -maxdepth 1 -name 'spaceo-install.*')"

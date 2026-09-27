@@ -104,6 +104,22 @@ main() {
     fi
     ok "signed by $team_id, notarized, checksum matches"
 
+    # Provenance is not identity: a correctly signed image could still hold another build. Like
+    # the release verifier, require the embedded versions to be the release being installed.
+    local embedded=""
+    if run_bounded 15 "$mount/spaceo" version --json </dev/null >"$work/version.json" 2>/dev/null; then
+        embedded="$(plutil -extract version raw -o - "$work/version.json" 2>/dev/null || true)"
+    fi
+    [[ "$embedded" == "$version" ]] \
+        || die "the release for $version contains spaceo ${embedded:-of unknown version}; not installing"
+    if [[ "$install_viewer" == 1 ]]; then
+        local plist="$mount/SpaceO Viewer.app/Contents/Info.plist" short build
+        short="$(plutil -extract CFBundleShortVersionString raw -o - "$plist" 2>/dev/null || true)"
+        build="$(plutil -extract CFBundleVersion raw -o - "$plist" 2>/dev/null || true)"
+        [[ "$short" == "$version" && "$build" == "$version" ]] \
+            || die "the release for $version contains SpaceO Viewer ${short:-of unknown version}; not installing"
+    fi
+
     step "Installing"
     # Whatever is already at this path is replaced, never run: it is unverified and could be
     # anything a custom SPACEO_BIN_DIR happens to hold.
@@ -158,6 +174,27 @@ main() {
         note "Open a new terminal (or run: export PATH=\"$bin_dir:\$PATH\") to use \`spaceo\`."
     fi
     note "Docs: https://github.com/$repository#get-started · Uninstall: re-run with --uninstall"
+}
+
+# run_bounded SECONDS COMMAND... runs COMMAND with a deadline (macOS has no `timeout`). On expiry
+# it is terminated, then killed, and the status is 124.
+run_bounded() {
+    local seconds="$1" pid tick
+    shift
+    "$@" &
+    pid=$!
+    for (( tick = 0; tick < seconds * 10; tick++ )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid"
+            return
+        fi
+        sleep 0.1
+    done
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 124
 }
 
 # Detach before deleting: removing a mounted image's directory would fail and leak the mount.
@@ -284,14 +321,26 @@ detect_clients() {
     fi
 }
 
-# The command of Claude Code's user-scope `spaceo` server, or nothing. plutil reads JSON.
-claude_code_command() {
-    [[ -f "$HOME/.claude.json" ]] || return 0
-    plutil -extract mcpServers.spaceo.command raw -o - "$HOME/.claude.json" 2>/dev/null || true
+# Whether Claude Code's user-scope `spaceo` server is exactly `CLI mcp`. plutil reads JSON.
+claude_code_registered() {
+    local config="$HOME/.claude.json" key="mcpServers.spaceo"
+    [[ -f "$config" ]] || return 1
+    [[ "$(plutil -extract "$key.command" raw -o - "$config" 2>/dev/null)" == "$1" ]] \
+        && [[ "$(plutil -extract "$key.args" raw -o - "$config" 2>/dev/null)" == 1 ]] \
+        && [[ "$(plutil -extract "$key.args.0" raw -o - "$config" 2>/dev/null)" == mcp ]]
+}
+
+# The config file `setup --client` rewrites, for clients that have one.
+client_config_file() {
+    case "$1" in
+        codex) echo "$HOME/.codex/config.toml" ;;
+        cursor) echo "$HOME/.cursor/mcp.json" ;;
+        claude-desktop) echo "$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;;
+    esac
 }
 
 connect_mcp_clients() {
-    local cli="$1" assume_yes="$2" interactive="$3" log="$4" found entry id label
+    local cli="$1" assume_yes="$2" interactive="$3" log="$4" found entry id label config
     found="$(detect_clients)"
     if [[ -z "$found" ]]; then
         note "No MCP clients found. Connect one later: spaceo setup --client claude-code|codex|cursor|claude-desktop"
@@ -306,14 +355,25 @@ connect_mcp_clients() {
         fi
         # Re-registering Claude Code is remove-then-add; when the entry already names this CLI,
         # an upgrade has nothing to change and must not risk losing the entry.
-        if [[ "$id" == claude-code && "$(claude_code_command)" == "$cli" ]]; then
+        if [[ "$id" == claude-code ]] && claude_code_registered "$cli"; then
             ok "$label already connected"
             continue
         fi
+        # SpaceO 1.0.0 treats a config it cannot decode as missing and would replace it whole.
+        config="$(client_config_file "$id")"
+        if [[ -n "$config" && -e "$config" ]] && ! iconv -f UTF-8 -t UTF-8 "$config" >/dev/null 2>&1; then
+            warn "not connecting $label: $config is not UTF-8 text, and rewriting it could lose settings"
+            continue
+        fi
         # setup edits only the `spaceo` entry and keeps every other server. Its own prompt cannot
-        # read the piped stdin, so the answer given here is passed on as --yes.
-        if "$cli" setup --client "$id" --yes </dev/null >/dev/null 2>"$log"; then
+        # read the piped stdin, so the answer given here is passed on as --yes. A client CLI that
+        # stalls (claude waiting on a lock or prompt) must not hang the installer.
+        if run_bounded "${SPACEO_CLIENT_TIMEOUT:-60}" "$cli" setup --client "$id" --yes \
+            </dev/null >/dev/null 2>"$log"; then
             ok "$label connected (restart it to load SpaceO)"
+        elif [[ $? == 124 ]]; then
+            warn "connecting $label timed out"
+            note "  retry with: spaceo setup --client $id"
         else
             warn "could not connect $label: $(tail -n 3 "$log" | tr '\n' ' ')"
             note "  retry with: spaceo setup --client $id"

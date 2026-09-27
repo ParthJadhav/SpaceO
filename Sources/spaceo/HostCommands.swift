@@ -117,7 +117,7 @@ func registerFileClient(_ client: MCPClient, executable: String) -> Never {
         fail("no config file location for \(client.rawValue)", exit: .failure)
     }
     do {
-        let existing = try? String(contentsOf: url, encoding: .utf8)
+        let existing = try MCPClientConfig.readExisting(at: url)
         let merged = try MCPClientConfig.merged(existing: existing, client: client, executablePath: executable)
         if args.bool("print") {
             print(args.hasJSON
