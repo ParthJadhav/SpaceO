@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14 or later">
   <img src="https://img.shields.io/badge/Apple_Silicon-arm64-black" alt="Apple Silicon">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/status-preview-orange" alt="Preview">
+  <img src="https://img.shields.io/github/v/release/ParthJadhav/SpaceO?label=release" alt="Latest release">
 </p>
 
 <p align="center">
@@ -32,11 +32,11 @@
 [View the still screenshot](docs/images/viewer.png).*
 
 > [!NOTE]
-> **Preview · [SpaceO 1.1.2](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.2).** Download the signed, notarized DMG from the
+> **Latest release · [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0).** Download the signed, notarized DMG from the
 > [Releases page](https://github.com/ParthJadhav/SpaceO/releases) and verify it with
 > [INSTALL.md](docs/INSTALL.md), or build from source below.
 >
-> **First DMG scope: native apps and Chromium browsers.** Managed Electron apps such as
+> **1.0.0 scope: native apps and Chromium browsers.** Managed Electron apps such as
 > Cursor and VS Code are refused before launch because they can take desktop focus.
 > These editors can still connect to SpaceO as MCP clients to drive supported apps.
 
@@ -223,8 +223,8 @@ activate themselves. When that happens, SpaceO reports the breach instead of hid
 
 **Which apps work?**
 Native macOS apps and Chromium browsers (Chrome, Chromium, Edge, Brave, Vivaldi, Opera, Arc) are in scope.
-Apps built on Electron, such as Cursor, VS Code, and Slack, are refused before launch in this
-preview, because their renderers can take desktop focus.
+Apps built on Electron, such as Cursor, VS Code, and Slack, are refused before launch in
+1.0.0, because their renderers can take desktop focus.
 
 **Is it a sandbox?**
 No. Agent apps run as your user, with your files, network, and credentials. Use a separate login

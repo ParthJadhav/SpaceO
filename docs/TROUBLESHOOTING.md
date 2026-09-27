@@ -54,7 +54,7 @@ after a timed-out wait. `SPACEO_SESSION` and `SPACEO_LEASE` fill in `--session` 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `daemon matches CLI: NO — run spaceo daemon restart --operator` | You upgraded, but the old daemon is still running | `spaceo daemon restart --operator` drains it (existing sessions keep working) and starts the new build. A daemon too old to drain is waited on until it has no live sessions, then stopped; `--now` skips the wait. |
-| `warning: the running daemon is 1.0.0 (pid N); this CLI is 1.1.1` | Same: the CLI was upgraded, the daemon was not | `spaceo daemon restart --operator`. |
+| `warning: the running daemon is 1.0.0 (pid N); this CLI is 1.0.1` | Same: the CLI was upgraded, the daemon was not | `spaceo daemon restart --operator`. |
 | `daemon_outdated` / `the running daemon (1.0.0) predates spaceo find` (exit 3) | The old daemon does not know a command this CLI sends | Same restart. Before this check it looked like `unknown command 'find'`, a typo it was not. |
 | `daemon running: yes (did not answer within 2s — busy?)` | A daemon holds the socket but is busy with a long request | Retry `spaceo doctor` in a few seconds. Doctor reports no orphaned displays and offers no fixes in this state, because the daemon still owns them. |
 | Agents see `daemon_draining` | A restart is in progress | Existing sessions keep working; retry `session create` in a few seconds. The MCP server retries automatically. |

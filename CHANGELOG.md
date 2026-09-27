@@ -6,7 +6,21 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
-### Release qualification fixes
+## [1.0.0] - 2026-09-27
+
+First public release of SpaceO: a native-app and Chromium release for Apple Silicon. It ships as
+a Developer ID-signed, notarized, and stapled DMG containing the `spaceo` CLI, daemon, MCP server,
+and SpaceO Viewer, with a signed SHA-256 checksum and a signed candidate provenance record.
+Managed Electron launches (including Cursor and VS Code) are refused before startup because they
+can take desktop focus; those editors can still connect as MCP clients.
+
+Earlier `v1.1.0`, `v1.1.1`, and `v1.1.2` preview tags were withdrawn and their GitHub prerelease
+removed; 1.0.0 is the first supported version. Their changes are consolidated below by
+development round, newest first.
+
+### Final qualification round
+
+#### Release qualification fixes
 
 - Let a failed live case retire its displays before latching failure; suspend the owner when
   cleanup cannot be verified. Report pre-send Chromium failures as not executed.
@@ -39,7 +53,7 @@ All notable user-visible changes are recorded here. SpaceO follows
 - Give the Viewer's menu bar extra a dedicated tilted-rings mark (`Assets/Brand/spaceo-menubar.svg`)
   in place of a shrunken app icon, which rendered as a solid tile as a template image.
 
-### Open-source preparation
+#### Open-source preparation
 
 - Finish retired daemon socket cleanup before allowing the same server to restart, avoiding
   an intermittent stale-socket removal failure.
@@ -56,7 +70,7 @@ All notable user-visible changes are recorded here. SpaceO follows
 UX round of 2026-09-23 (SPAO-240 – SPAO-271). The plan, evidence and verification for every item
 are in [docs/plans/2026-09-23-ux-improvements.md](docs/plans/2026-09-23-ux-improvements.md).
 
-### Added
+#### Added
 
 - Local diagnostic logging for improvement loops. `spaceo logging enable|disable|status` writes
   owner-only settings that the daemon and MCP servers pick up within five seconds.
@@ -99,7 +113,7 @@ are in [docs/plans/2026-09-23-ux-improvements.md](docs/plans/2026-09-23-ux-impro
   from any tile, banner or menu-bar row; a key-destination banner; a stalled-stream indicator; a
   daemon banner (offline, draining, restarted, version mismatch); and an Events filter.
 
-### Changed
+#### Changed
 
 - The Viewer is redesigned around the session, not the plumbing.
   - Two columns by default: sessions on the left and the live screen in the middle. A details
@@ -172,7 +186,7 @@ are in [docs/plans/2026-09-23-ux-improvements.md](docs/plans/2026-09-23-ux-impro
   afterwards; Reclaim became "Clean Up…" with a confirmation; Resume All skips agents waiting for
   a person; events read as sentences with verdict-based severity.
 
-### Fixed
+#### Fixed
 
 - An exclusive session now reuses an idle display of the same size instead of building a new one.
   Creating and ending exclusive sessions in a loop used to fill the display budget with idle
@@ -182,7 +196,7 @@ are in [docs/plans/2026-09-23-ux-improvements.md](docs/plans/2026-09-23-ux-impro
 - A click refused before delivery (an index past the end of the snapshot) no longer expires the
   agent's valid indices, and the out-of-range index is a recoverable `stale_snapshot` naming the
   valid range instead of a terminal `bad_request`. Both were found by the first journal report.
-- Every app launch failed on 1.1.1 with "window count is unavailable": a still-launching app's
+- Every app launch failed during qualification with "window count is unavailable": a still-launching app's
   transient `kAXErrorCannotComplete` aborted the launch. Busy answers are retried a bounded number
   of times, presence waits retry provider failures within their budget, and the same transient
   answer no longer fails `verify`.
@@ -198,27 +212,21 @@ are in [docs/plans/2026-09-23-ux-improvements.md](docs/plans/2026-09-23-ux-impro
 - Hosts with Accessibility granted were told to grant it on every PARTIAL verdict.
 - Recorder finish errors were swallowed on destroy, and detached recovery quit apps without logging.
 
-## [1.1.2] - 2026-09-26
+### Release packaging
 
-First published build of the 1.1 line: a native-app and Chromium preview for Apple Silicon. It
-contains every change listed under [Unreleased] above and [1.1.1] below.
-
-### Fixed
+#### Fixed
 
 - The release packaging check now reads the `version` field from `spaceo version --json`
-  instead of requiring the exact pre-1.1 output, which stopped the `v1.1.1` candidate.
+  instead of requiring the exact pre-1.1 output, which stopped an earlier candidate.
 - Release verification no longer runs Gatekeeper's execute assessment on the bare CLI, which
   rejects every command-line tool; the CLI stays pinned by its designated requirement inside the
   notarized DMG. `docs/INSTALL.md` drops the same command.
 - The publication job downloads the candidate into the directory it verifies, and a re-run of
   publication no longer fails on a changed workflow run attempt.
 
-## [1.1.1] - Not published
+### Viewer, display containment, and live qualification round
 
-The `v1.1.1` tag exists, but its candidate build stopped before notarization; no artifacts
-were published. Its changes ship in 1.1.2.
-
-### Changed
+#### Changed
 
 - Simplified the Viewer around Take Control and Pause/Resume Agent. Screenshot, maintenance,
   and destructive actions live in More Actions; zoom and Fit/Actual Size are in the status bar.
@@ -227,7 +235,7 @@ were published. Its changes ship in 1.1.2.
 - Reduced sidebar repetition, collapsed display infrastructure, honored session titles in the
   canvas header, and reduced the minimum window size to 900 × 560.
 
-### Fixed
+#### Fixed
 
 - Release gate tests enforce the current self-hosted runner and exact toolchain pins, fixing
   stale expectations while retaining rejection of incompatible Xcode and Swift versions.
@@ -551,18 +559,16 @@ were published. Its changes ship in 1.1.2.
   pause actions no longer nest inside the tile selection button, and the pan hint passes clicks
   through to the canvas.
 
-### Changed
+#### Changed
 
 - CI, the release workflow and the live-test preflight run on the repository-owned Apple Silicon
   runner `spaceo-mac` (Xcode 27.0 / Swift 6.4) instead of billed hosted `macos-15` runners.
 
-## [1.1.0] - 2026-09-17
+### UX round
 
-The 36-item UX round from `docs/plans/2026-09-16-ux-improvements.md`. Deterministic coverage
-only: this version has not completed the live qualification, Developer ID signing, notarization
-or publication gates in `docs/RELEASE_POLICY.md`, so it is tagged as a pre-release.
+The 36-item UX round from `docs/plans/2026-09-16-ux-improvements.md`.
 
-### Added
+#### Added
 
 - Agent ergonomics (SPAO-140, 143, 144, 146, 207–213): `spaceo_open_url` / `spaceo open-url`,
   `spaceo_wait_for` / `spaceo wait` (bounded waits on labels, titles, selectors or pixel
@@ -610,7 +616,7 @@ or publication gates in `docs/RELEASE_POLICY.md`, so it is tagged as a pre-relea
   for the four events a human must know about, Copy from Session and drop-to-open, a menu bar
   extra and mini monitor.
 
-### Changed
+#### Changed
 
 - Screen reads that hit the traversal budget return the partial tree flagged `truncated:
   traversal_budget` instead of failing; the web element cap is reported as `web_cap`.
@@ -620,16 +626,14 @@ or publication gates in `docs/RELEASE_POLICY.md`, so it is tagged as a pre-relea
   accept loop no longer reads requests on the accept thread (SPAO-152).
 - MCP tool count is 32.
 
-### Fixed
+#### Fixed
 
 - The full computer-use matrix expects the current MCP tools and continues to the remaining
   suites and final display-cleanup checks when one suite fails.
 
-## [1.0.0] - Planned
+### Foundation
 
-Release contents are consolidated below. Set the publication date after qualification and owner approval.
-
-### Added
+#### Added
 
 - Transcript-review contract: offline help at every command depth and versioned CLI schema,
   structured readiness/error codes, optional strict isolation/window assertions, unique AX
@@ -669,7 +673,7 @@ Release contents are consolidated below. Set the publication date after qualific
 - Viewer session creation, confirmed destruction, recovery cleanup, recent agent-action status,
   and pause/resume arbitration when a person takes Control.
 
-### Changed
+#### Changed
 
 - `spaceo doctor` now compares the current CLI with the running daemon's executable image and
   reports the daemon's version, build UUID, digest, permissions, and restart requirement. MCP
@@ -694,7 +698,7 @@ Release contents are consolidated below. Set the publication date after qualific
   cooperating clients sharing one daemon, not a security boundary: the uid remains the trust
   line, and the flags are deliberate confirmations rather than credentials.
 
-### Fixed
+#### Fixed
 
 - Preserve normal window sizes and remove the 40-point overflow for display-sized panels across
   initial placement, watchers and re-parking. Report requested/observed explicit placement bounds.
@@ -804,7 +808,7 @@ Release contents are consolidated below. Set the publication date after qualific
   to a slow reader is written to completion rather than abandoned mid-body, which used to reach
   the CLI and MCP clients as a JSON decode error rather than as the transport stall it was.
 
-### Security
+#### Security
 
 - Public release requires qualification of the exact signed artifact and explicit
   approval after all security and display-safety gates pass.
