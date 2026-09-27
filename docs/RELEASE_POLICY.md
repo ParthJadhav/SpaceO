@@ -42,12 +42,13 @@ slices and the combined artifact are independently verified.
 
 ## Required artifact qualification
 
-The release owner selected a **native-app and Chromium preview** on 2026-09-24.
-Managed Electron launches are outside this preview's support scope and must return
+The release owner selected a **native-app and Chromium** scope on 2026-09-24.
+Managed Electron launches are outside this scope and must return
 `unsupported_target` before starting a process. The full computer-use matrix must exercise
 native and Chromium behavior and verify Electron refusal; refusal is an enforced product
 limit, not a skipped renderer qualification. Electron support requires separate live
-qualification before this limit can be removed. Publish this first DMG as a GitHub prerelease.
+qualification before this limit can be removed. On 2026-09-27 the owner directed publishing
+1.0.0 with this scope as a full (non-prerelease) GitHub release.
 All signing, notarization, isolation, cleanup, and owner approval gates below still apply.
 
 Before public approval, exercise the exact Developer ID-signed, notarized, and stapled candidate
