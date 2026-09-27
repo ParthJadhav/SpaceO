@@ -6,6 +6,14 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+### Added
+
+- One-command install: `curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash`.
+  The installer checks the release signature, checksum, and notarization before installing the
+  CLI and Viewer without `sudo`. It adds `spaceo` to `PATH` and connects Claude Code, Codex,
+  Cursor, and Claude Desktop if they are installed. It then offers guided setup. Run it again to
+  upgrade, or pass `--uninstall` to remove SpaceO.
+
 ## [1.0.0] - 2026-09-27
 
 First public release of SpaceO: a native-app and Chromium release for Apple Silicon. It ships as

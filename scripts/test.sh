@@ -18,6 +18,7 @@ run_safe() {
     cd "$REPOSITORY_ROOT"
     "$SWIFT" test --skip "$LIVE_TEST_CLASS" "$@"
     bash "$REPOSITORY_ROOT/Tests/ViewerInstallTests.sh"
+    bash "$REPOSITORY_ROOT/Tests/InstallScriptTests.sh"
     python3 "$REPOSITORY_ROOT/Tests/LiveTestSupervisorTests.py"
     "$NODE" --test "$REPOSITORY_ROOT/Tests/ComputerUseEvidenceTests.mjs" \
         "$REPOSITORY_ROOT/Tests/PresentationEvidenceTests.mjs" \

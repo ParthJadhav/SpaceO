@@ -49,7 +49,7 @@ jobs:
           test "$(uname -m)" = arm64
           bash -n scripts/build-brand-assets.sh scripts/check-swift-toolchain.sh \
             scripts/make-viewer-app.sh scripts/release.sh scripts/test.sh
-          bash -n scripts/check-live-test-run.sh
+          bash -n scripts/check-live-test-run.sh install.sh
           node --check scripts/mcp-smoke.mjs
           bash scripts/release.sh check
           bash scripts/release.sh dry-run

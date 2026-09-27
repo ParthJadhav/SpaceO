@@ -19,6 +19,27 @@ intended host before creating a session.
 The current release is [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0), the first public release. It is signed and notarized and passed the
 [public-release gates](RELEASE_POLICY.md). Always verify a download as described below.
 
+## Quick install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash
+```
+
+[`install.sh`](../install.sh) automates the verification and installation below. It checks the
+host, finds the latest release, verifies the checksum signature against Team ID `75LRT8TRQY`, then
+checks the checksum and Gatekeeper assessment. It mounts the image privately and verifies the
+designated requirements of both payloads. If any check fails, it stops before installing. After
+verification it installs to `~/.local/bin` and `~/Applications`. If `~/.local/bin` is missing from
+`PATH`, it adds a line to your shell profile. It then registers SpaceO with detected MCP clients
+through `spaceo setup --client` and, in a terminal, offers to run `spaceo setup`.
+
+A daemon that is already running is never restarted. The installer says when it is a different
+version. Options, passed as `| bash -s -- OPTIONS`: `--yes`, `--no-setup`, `--no-clients`,
+`--no-viewer`, `--no-modify-path`, `--version X.Y.Z`, `--uninstall`. `SPACEO_BIN_DIR` and
+`SPACEO_APP_DIR` change the install locations.
+
+To do each step yourself, continue below.
+
 ## Verify and install
 
 SpaceO 1.0.0 supports native apps and Chromium browsers on Apple Silicon. Managed Electron
