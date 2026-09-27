@@ -18,8 +18,16 @@ user's files and app sessions. Use a separate login or VM for untrusted workload
 
 ## 2. Install `spaceo`
 
-**From a release** — follow [Installing a SpaceO release](INSTALL.md). It verifies the
-publisher signature and checksum before you run anything.
+**From a release (recommended)**, in one command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash
+```
+
+The installer verifies the publisher signature, checksum, and notarization before running
+anything from the release. It then installs the CLI and Viewer and connects detected MCP clients.
+It also offers to run steps 3–5 of this guide for you. [Installing a SpaceO release](INSTALL.md)
+describes each check and the equivalent manual steps.
 
 **From source:**
 

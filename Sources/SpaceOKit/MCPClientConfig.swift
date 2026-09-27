@@ -16,6 +16,7 @@ public enum MCPClientConfigError: Error, LocalizedError, Equatable {
     case missingExecutable(String)
     case tooLarge(Int)
     case malformedJSON(String)
+    case unreadable(String)
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +30,8 @@ public enum MCPClientConfigError: Error, LocalizedError, Equatable {
             return "existing configuration is \(bytes) bytes; refusing to rewrite files over \(MCPClientConfig.maximumConfigBytes) bytes"
         case .malformedJSON(let why):
             return "existing configuration is not a JSON object: \(why)"
+        case .unreadable(let path):
+            return "could not read \(path) as UTF-8 text; not overwriting it. Fix or move it, then retry"
         }
     }
 }
@@ -73,6 +76,16 @@ public struct MCPClientConfig {
         case .codex, .cursor, .claudeDesktop:
             return nil
         }
+    }
+
+    /// The current contents of a client config: nil only when no file exists. A file that exists
+    /// but cannot be read as UTF-8 throws, because treating it as absent would overwrite it.
+    public static func readExisting(at url: URL, fileManager: FileManager = .default) throws -> String? {
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            throw MCPClientConfigError.unreadable(url.path)
+        }
+        return text
     }
 
     /// New file contents with the `spaceo` entry set to `executablePath mcp`.

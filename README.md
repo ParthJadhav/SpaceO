@@ -32,9 +32,9 @@
 [View the still screenshot](docs/images/viewer.png).*
 
 > [!NOTE]
-> **Latest release · [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0).** Download the signed, notarized DMG from the
-> [Releases page](https://github.com/ParthJadhav/SpaceO/releases) and verify it with
-> [INSTALL.md](docs/INSTALL.md), or build from source below.
+> **Latest release · [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0).** Install it with
+> [one command](#get-started), which verifies the signed, notarized release for you. You can also
+> download the DMG from the [Releases page](https://github.com/ParthJadhav/SpaceO/releases).
 >
 > **1.0.0 scope: native apps and Chromium browsers.** Managed Electron apps such as
 > Cursor and VS Code are refused before launch because they can take desktop focus.
@@ -100,42 +100,50 @@ reported as a confirmed result.
 
 ## Get started
 
-You need Apple Silicon, macOS 14 or later, and a recent Xcode toolchain with Swift 6.2 or later.
-CI selects Xcode 26.3. Runtime support depends on your macOS build; start with the read-only check.
+You need a Mac with Apple Silicon and macOS 14 or later. Run one command:
 
-Virtual-display creation uses runtime capability checks on macOS 14 and later, with bounded
-lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md).
+```bash
+curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash
+```
+
+The installer:
+
+1. downloads the latest signed release and checks its publisher signature, checksum, and
+   notarization before running anything from it;
+2. installs `spaceo` to `~/.local/bin` and SpaceO Viewer to `~/Applications`, without `sudo`;
+3. connects SpaceO to Claude Code, Codex, Cursor, and Claude Desktop if they are installed;
+4. walks you through the Accessibility and Screen Recording permissions and runs a short
+   self-test.
+
+Restart your agent, then ask it something like *"Open TextEdit in SpaceO, write a short note, and
+show me a screenshot"*. It creates its own session and cleans it up when it finishes.
+
+Run the command again to upgrade. Add `| bash -s -- --uninstall` to remove SpaceO, or `--help`
+for options. To do each step yourself, follow [INSTALL.md](docs/INSTALL.md). Runtime support
+depends on your macOS build; `spaceo doctor` checks your Mac without changing anything. A passing
+self-test does not cover every input or isolation behavior. The [setup guide](docs/SETUP.md)
+covers permissions, compatibility, and your first session.
+
+**Connect another agent later**
+
+```bash
+spaceo setup --client claude-code     # or codex, cursor, claude-desktop
+```
+
+For other MCP clients, use the absolute path to `spaceo` with the argument `mcp`
+([client configurations](docs/REFERENCE.md#mcp-configuration)).
+
+**Or build from source** (needs Xcode with Swift 6.2 or later; CI selects Xcode 26.3)
 
 ```bash
 git clone https://github.com/ParthJadhav/SpaceO.git
 cd SpaceO
-make install
-export PATH="$HOME/.local/bin:$PATH"
-spaceo doctor
+make install                 # installs ~/.local/bin/spaceo
+~/.local/bin/spaceo setup    # permissions, self-test, and MCP configuration
 ```
 
-When your desktop is idle, run guided setup. It requests Accessibility and Screen Recording,
-starts the daemon, and creates a temporary display to check session creation and capture.
-
-```bash
-spaceo setup
-```
-
-A passing setup check does not qualify all input or isolation behavior. Follow the
-[setup guide](docs/SETUP.md) for permissions, compatibility, and your first session.
-
-**Connect an agent**
-
-```bash
-# Claude Code
-claude mcp add -s user spaceo -- "$HOME/.local/bin/spaceo" mcp
-```
-
-For other MCP clients, use the absolute path to `spaceo` with the argument `mcp`.
-[Client configurations](docs/REFERENCE.md#mcp-configuration) cover Codex, Cursor, and Claude Desktop.
-
-Then ask your agent something like *"Open TextEdit in SpaceO, write a short note, and show me a
-screenshot"*. It creates its own session and cleans it up when it finishes.
+Virtual-display creation uses runtime capability checks on macOS 14 and later, with bounded
+lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md).
 
 **Or drive an app yourself from the CLI**
 

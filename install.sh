@@ -1,0 +1,573 @@
+#!/usr/bin/env bash
+# SpaceO installer: downloads the latest signed release, verifies it, installs it, and connects
+# the MCP clients it finds.
+#
+#   curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash
+#
+# Every download is authenticated before anything from it runs: the checksum's detached Developer
+# ID signature must come from SpaceO's Team ID, the disk image must match that checksum and pass
+# Gatekeeper, and both payloads must carry SpaceO's exact designated requirement. This is the
+# procedure in docs/INSTALL.md, automated. Nothing needs administrator rights.
+set -euo pipefail
+
+# The whole script is one function called on the last line, so a truncated download runs nothing.
+main() {
+    local repository="ParthJadhav/SpaceO"
+    local team_id="75LRT8TRQY"
+    local bin_dir="${SPACEO_BIN_DIR:-$HOME/.local/bin}"
+    local app_dir="${SPACEO_APP_DIR:-$HOME/Applications}"
+    local version="" assume_yes=0 run_setup=1 connect_clients=1 install_viewer=1 modify_path=1
+    local uninstall=0
+    # Relative paths would land somewhere different for every later shell, PATH lookup, and
+    # uninstall, depending on the directory each runs from.
+    [[ "$bin_dir" == /* && "$app_dir" == /* ]] \
+        || die "SPACEO_BIN_DIR and SPACEO_APP_DIR must be absolute paths"
+    # Developer ID only: an Apple Development or other same-team certificate is not a release.
+    local developer_id='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --yes|-y) assume_yes=1 ;;
+            --no-setup) run_setup=0 ;;
+            --no-clients) connect_clients=0 ;;
+            --no-viewer) install_viewer=0 ;;
+            --no-modify-path) modify_path=0 ;;
+            --version)
+                [[ $# -ge 2 ]] || die "--version needs a value, e.g. --version 1.0.0"
+                version="${2#v}"; shift ;;
+            --version=*) version="${1#--version=}"; version="${version#v}" ;;
+            --uninstall) uninstall=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) die "unknown option: $1 (see --help)" ;;
+        esac
+        shift
+    done
+
+    # `curl | bash` gives this script the pipe as stdin; questions go to the terminal instead.
+    # Whether a person can answer depends on the terminal, not on where stdout goes: a run logged
+    # to a file still asks. Agents and CI have no terminal and take the defaults.
+    local interactive=0
+    if (exec </dev/tty) 2>/dev/null; then interactive=1; fi
+
+    if [[ "$uninstall" == 1 ]]; then
+        uninstall_spaceo "$bin_dir" "$app_dir" "$assume_yes" "$interactive"
+        return
+    fi
+
+    header "Installing SpaceO"
+    check_host
+    local tool
+    for tool in curl codesign shasum spctl hdiutil ditto; do
+        command -v "$tool" >/dev/null 2>&1 || die "required command not found: $tool"
+    done
+
+    if [[ -z "$version" ]]; then
+        version="$(latest_version "$repository")"
+    fi
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a release version: $version"
+
+    SPACEO_INSTALL_WORK="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-install.XXXXXX")"
+    trap cleanup_work EXIT
+    local work="$SPACEO_INSTALL_WORK" mount="$SPACEO_INSTALL_WORK/mount"
+
+    local name="SpaceO-$version-macOS-arm64"
+    local base="https://github.com/$repository/releases/download/v$version"
+    step "Downloading SpaceO $version"
+    # Bounded before anything is verified, so a bad response cannot fill the disk. The disk
+    # image is about 13 MB; the sidecars are under 16 KB. A transfer that stalls below 1 KB/s
+    # for 30 seconds fails, so --retry gets a chance instead of the installer hanging.
+    local file limit
+    for file in "$name.dmg" "$name.sha256" "$name.sha256.sig"; do
+        limit=65536; [[ "$file" != *.dmg ]] || limit=268435456
+        curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --max-filesize "$limit" \
+            --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
+            -o "$work/$file" "$base/$file" \
+            || die "could not download $base/$file"
+    done
+
+    step "Verifying publisher signature, checksum, and notarization"
+    codesign --verify --detached "$work/$name.sha256.sig" --strict \
+        -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.release-checksum\"" \
+        "$work/$name.sha256" >/dev/null 2>&1 \
+        || die "the checksum is not signed by SpaceO's publisher ($team_id); not installing"
+    # Captured first: with pipefail, `grep -q` closing the pipe early would fail codesign.
+    local signature_details
+    signature_details="$(codesign --display --detached "$work/$name.sha256.sig" --verbose=4 \
+        "$work/$name.sha256" 2>&1 || true)"
+    [[ "$signature_details" == *$'\nTimestamp='* ]] \
+        || die "the checksum signature has no secure timestamp; not installing"
+    # Like the release verifier: the signed sidecar must be exactly one digest naming this image,
+    # or `shasum -c` could pass without ever hashing it.
+    local recorded_digest="" recorded_name="" unexpected="" actual_digest
+    [[ "$(awk 'END { print NR }' "$work/$name.sha256")" == 1 ]] \
+        || die "the signed checksum must contain exactly one entry; not installing"
+    read -r recorded_digest recorded_name unexpected < "$work/$name.sha256" || true
+    [[ "$recorded_digest" =~ ^[0-9a-f]{64}$ && "$recorded_name" == "$name.dmg" && -z "$unexpected" ]] \
+        || die "the signed checksum does not name $name.dmg; not installing"
+    actual_digest="$(shasum -a 256 "$work/$name.dmg" | awk '{ print $1 }')"
+    [[ "$actual_digest" == "$recorded_digest" ]] \
+        || die "the disk image does not match its signed checksum; not installing"
+    spctl --assess --type open --context context:primary-signature "$work/$name.dmg" >/dev/null 2>&1 \
+        || die "Gatekeeper rejected the disk image; not installing"
+
+    mkdir -p "$mount"
+    hdiutil attach "$work/$name.dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount" -quiet \
+        || die "could not mount the disk image"
+    codesign --verify --strict \
+        -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.cli\"" \
+        "$mount/spaceo" >/dev/null 2>&1 \
+        || die "the spaceo CLI is not signed by SpaceO's publisher; not installing"
+    if [[ "$install_viewer" == 1 ]]; then
+        codesign --verify --deep --strict \
+            -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.viewer\"" \
+            "$mount/SpaceO Viewer.app" >/dev/null 2>&1 \
+            || die "SpaceO Viewer is not signed by SpaceO's publisher; not installing"
+        spctl --assess --type execute "$mount/SpaceO Viewer.app" >/dev/null 2>&1 \
+            || die "Gatekeeper rejected SpaceO Viewer; not installing"
+    fi
+    ok "signed by $team_id, notarized, checksum matches"
+
+    # Provenance is not identity: a correctly signed image could still hold another build. Like
+    # the release verifier, require the embedded versions to be the release being installed.
+    local embedded=""
+    if run_bounded 15 "$mount/spaceo" version --json </dev/null >"$work/version.json" 2>/dev/null; then
+        embedded="$(plutil -extract version raw -o - "$work/version.json" 2>/dev/null || true)"
+    fi
+    [[ "$embedded" == "$version" ]] \
+        || die "the release for $version contains spaceo ${embedded:-of unknown version}; not installing"
+    if [[ "$install_viewer" == 1 ]]; then
+        local plist="$mount/SpaceO Viewer.app/Contents/Info.plist" short build
+        short="$(plutil -extract CFBundleShortVersionString raw -o - "$plist" 2>/dev/null || true)"
+        build="$(plutil -extract CFBundleVersion raw -o - "$plist" 2>/dev/null || true)"
+        [[ "$short" == "$version" && "$build" == "$version" ]] \
+            || die "the release for $version contains SpaceO Viewer ${short:-of unknown version}; not installing"
+    fi
+
+    step "Installing"
+    # Whatever is already at this path is replaced, never run: it is unverified and could be
+    # anything a custom SPACEO_BIN_DIR happens to hold.
+    local cli="$bin_dir/spaceo" replaced=""
+    if [[ -e "$cli" ]]; then replaced=" (replaced the previous copy)"; fi
+    mkdir -p "$bin_dir"
+    # Copy then rename: a running daemon keeps its old inode instead of having its code rewritten.
+    # mv onto a directory would move the CLI inside it and still succeed.
+    [[ ! -d "$cli" || -L "$cli" ]] || die "$cli is a directory; move it away or set SPACEO_BIN_DIR, then re-run"
+    install -m 755 "$mount/spaceo" "$bin_dir/.spaceo.new"
+    mv -f "$bin_dir/.spaceo.new" "$cli"
+    ok "spaceo $version → $cli$replaced"
+
+    if [[ "$install_viewer" == 1 && -z "${SPACEO_APP_DIR:-}" && -d "/Applications/SpaceO Viewer.app" ]]; then
+        # A Viewer installed for all users is updated in place: a second copy in ~/Applications
+        # would sit behind it, since doctor and Launch Services find /Applications first.
+        if [[ -w "/Applications" && -w "/Applications/SpaceO Viewer.app" ]]; then
+            app_dir="/Applications"
+        else
+            warn "SpaceO Viewer in /Applications belongs to an administrator; not updating it."
+            note "    To update it, open $base/$name.dmg and drag the Viewer to Applications."
+            install_viewer=0
+        fi
+    fi
+    if [[ "$install_viewer" == 1 ]]; then
+        install_viewer_bundle "$mount/SpaceO Viewer.app" "$app_dir"
+    fi
+    hdiutil detach "$mount" -quiet >/dev/null 2>&1 || true
+
+    if [[ "$modify_path" == 1 ]]; then add_to_path "$bin_dir"; fi
+    report_stale_daemon "$cli" "$version"
+
+    if [[ "$connect_clients" == 1 ]]; then
+        connect_mcp_clients "$cli" "$assume_yes" "$interactive" "$work/client.log"
+    fi
+
+    if [[ "$run_setup" == 1 && "$interactive" == 1 ]] \
+        && ask "Grant permissions and run a quick self-test now?" Y "$assume_yes" "$interactive"; then
+        header "Guided setup"
+        note "SpaceO needs Accessibility and Screen Recording. Setup opens the right Settings"
+        note "pane and waits for you to switch them on, then briefly creates a virtual display."
+        echo
+        "$cli" setup </dev/tty || warn "setup did not finish; run \`spaceo setup\` again when ready"
+    else
+        run_setup=0
+    fi
+
+    header "SpaceO $version is installed"
+    if [[ "$run_setup" == 0 ]]; then
+        note "Next: run \`spaceo setup\` to grant permissions and self-test."
+    fi
+    note "Then ask your agent: \"Open TextEdit in SpaceO, write a short note, and show me a screenshot.\""
+    if [[ ":$PATH:" != *":$bin_dir:"* ]]; then
+        note "Open a new terminal (or run: export PATH=\"$bin_dir:\$PATH\") to use \`spaceo\`."
+    fi
+    note "Docs: https://github.com/$repository#get-started · Uninstall: re-run with --uninstall"
+}
+
+# run_bounded SECONDS COMMAND... runs COMMAND with a deadline (macOS has no `timeout`). On expiry
+# it is terminated, then killed, and the status is 124.
+run_bounded() {
+    local seconds="$1" pid tick
+    shift
+    "$@" &
+    pid=$!
+    for (( tick = 0; tick < seconds * 10; tick++ )); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            wait "$pid"
+            return
+        fi
+        sleep 0.1
+    done
+    # Children first: `setup --client claude-code` runs `claude`, which would otherwise outlive
+    # the deadline and could still change the registration afterwards.
+    pkill -TERM -P "$pid" 2>/dev/null || true
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 124
+}
+
+# Detach before deleting: removing a mounted image's directory would fail and leak the mount.
+# The path is read from a variable, never spliced into trap source, so any TMPDIR is safe.
+SPACEO_INSTALL_WORK=""
+cleanup_work() {
+    [[ -n "$SPACEO_INSTALL_WORK" ]] || return 0
+    hdiutil detach "$SPACEO_INSTALL_WORK/mount" -quiet >/dev/null 2>&1 || true
+    rm -rf "$SPACEO_INSTALL_WORK"
+}
+
+# MARK: - host and release
+
+check_host() {
+    [[ "$(uname -s)" == Darwin ]] || die "SpaceO runs on macOS only"
+    # `uname -m` reports x86_64 under Rosetta; the hardware flag does not.
+    [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == 1 ]] || die "SpaceO requires Apple Silicon"
+    local release major
+    release="$(sw_vers -productVersion)"
+    major="${release%%.*}"
+    [[ "$major" =~ ^[0-9]+$ && "$major" -ge 14 ]] || die "SpaceO requires macOS 14 or later (found $release)"
+}
+
+# The /releases/latest page redirects to /releases/tag/vX.Y.Z; no API token or rate limit needed.
+latest_version() {
+    local url tag
+    url="$(curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -o /dev/null \
+        -w '%{url_effective}' "https://github.com/$1/releases/latest")" \
+        || die "could not reach GitHub to find the latest release"
+    tag="${url##*/}"
+    [[ "$tag" == v* ]] || die "could not determine the latest release (got $url)"
+    printf '%s\n' "${tag#v}"
+}
+
+# MARK: - Viewer
+
+# Stage the new bundle, set the old one aside, then move the new one into place. If the move fails,
+# the old Viewer is put back. If the installer is killed between the two moves, the next run
+# restores the set-aside copy before it starts.
+install_viewer_bundle() {
+    local source="$1" dir="$2"
+    local viewer="$dir/SpaceO Viewer.app"
+    local staged="$dir/.SpaceO Viewer.app.new" previous="$dir/.SpaceO Viewer.app.old"
+    mkdir -p "$dir"
+    if [[ -d "$previous" && ! -e "$viewer" ]]; then mv "$previous" "$viewer"; fi
+    rm -rf "$staged" "$previous"
+    ditto "$source" "$staged" || { rm -rf "$staged"; die "could not copy SpaceO Viewer to $dir"; }
+    if [[ -e "$viewer" ]]; then
+        mv "$viewer" "$previous" || { rm -rf "$staged"; die "could not replace $viewer"; }
+    fi
+    if ! mv "$staged" "$viewer"; then
+        if [[ -d "$previous" ]]; then mv "$previous" "$viewer" || true; fi
+        rm -rf "$staged"
+        die "could not install $viewer; the previous Viewer was kept"
+    fi
+    rm -rf "$previous"
+    ok "SpaceO Viewer → $viewer"
+}
+
+# MARK: - PATH
+
+add_to_path() {
+    local dir="$1" profile line
+    [[ ":$PATH:" != *":$dir:"* ]] || return 0
+    # The line is shell code that runs at every login; a path that needs escaping is not written.
+    if [[ "$dir" == *[\"\$\`\\]* || "$dir" == *$'\n'* ]]; then
+        warn "add $dir to your PATH yourself; it contains characters the installer will not write to a profile"
+        return 0
+    fi
+    case "$(basename "${SHELL:-/bin/zsh}")" in
+        zsh)  profile="${ZDOTDIR:-$HOME}/.zshrc"; line="export PATH=\"$dir:\$PATH\"" ;;
+        bash)
+            # A login shell reads only the first of these that exists; creating .bash_profile
+            # next to an existing .bash_login or .profile would silently stop that one loading.
+            local candidate
+            profile="$HOME/.bash_profile"
+            for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+                if [[ -e "$candidate" ]]; then profile="$candidate"; break; fi
+            done
+            line="export PATH=\"$dir:\$PATH\"" ;;
+        fish) profile="$HOME/.config/fish/config.fish"; line="fish_add_path \"$dir\"" ;;
+        *) warn "add $dir to your PATH to run \`spaceo\` by name"; return 0 ;;
+    esac
+    # Only an ordinary, reasonably sized file: appending to a FIFO would block forever.
+    local size
+    if [[ -e "$profile" || -L "$profile" ]]; then
+        size="$(stat -f %z "$profile" 2>/dev/null || echo x)"
+        if [[ ! -f "$profile" || -p "$profile" || ! "$size" =~ ^[0-9]+$ || "$size" -gt 1048576 ]]; then
+            warn "add $dir to your PATH yourself; $profile is not a regular file under 1 MB"
+            return 0
+        fi
+        if run_bounded 5 grep -Fqx "$line" "$profile" </dev/null; then return 0; fi
+    fi
+    mkdir -p "$(dirname "$profile")"
+    printf '\n# Added by the SpaceO installer\n%s\n' "$line" >> "$profile"
+    ok "added $dir to PATH in $profile"
+}
+
+# MARK: - daemon
+
+# Mirrors `make install`: say when a running daemon is a different build, never restart it, since
+# other agents' sessions may be live on it.
+report_stale_daemon() {
+    local cli="$1" version="$2" json running
+    json="$("$cli" daemon wait --timeout 1 --json 2>/dev/null)" || return 0
+    running="$(printf '%s' "$json" | sed -n 's/.*"daemon":{[^}]*"version":"\([^"]*\)".*/\1/p')"
+    if [[ -n "$running" && "$running" != "$version" ]]; then
+        warn "a SpaceO $running daemon is still running; restart it when its sessions finish:"
+        note "    spaceo daemon restart --operator"
+    fi
+}
+
+# A daemon process started from this CLI path, whether or not its socket answers: a hung or
+# still-starting daemon does not reply to a ping, but its sessions are just as alive.
+daemon_process_exists() {
+    local pattern
+    pattern="$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+    # `spaceo daemon &` through PATH records the bare name; count that too. It may belong to
+    # another copy, but refusing to delete this one then is the safe direction.
+    pgrep -f "^($pattern|spaceo) daemon" >/dev/null 2>&1
+}
+
+daemon_alive() {
+    "$1" daemon wait --timeout 1 </dev/null >/dev/null 2>&1 || daemon_process_exists "$1"
+}
+
+# MARK: - MCP clients
+
+# Prints `id|display name` for each MCP client that looks installed.
+detect_clients() {
+    if command -v claude >/dev/null 2>&1 || [[ -e "$HOME/.claude.json" || -x "$HOME/.claude/local/claude" ]]; then
+        echo "claude-code|Claude Code"
+    fi
+    if command -v codex >/dev/null 2>&1 || [[ -d "$HOME/.codex" ]]; then
+        echo "codex|Codex"
+    fi
+    if [[ -d "$HOME/.cursor" || -d "/Applications/Cursor.app" || -d "$HOME/Applications/Cursor.app" ]]; then
+        echo "cursor|Cursor"
+    fi
+    if [[ -d "$HOME/Library/Application Support/Claude" || -d "/Applications/Claude.app" \
+          || -d "$HOME/Applications/Claude.app" ]]; then
+        echo "claude-desktop|Claude Desktop"
+    fi
+}
+
+# Whether Claude Code's user-scope `spaceo` server is exactly `CLI mcp`. plutil reads JSON.
+# The file grows with project history, so it gets doctor's 16 MB bound and a deadline per read;
+# anything unreadable in time counts as "not registered", which only means setup runs.
+claude_code_registered() {
+    local config="$HOME/.claude.json" key="mcpServers.spaceo" size
+    [[ -f "$config" && ! -p "$config" ]] || return 1
+    size="$(stat -f %z "$config" 2>/dev/null)" || return 1
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le 16777216 ]] || return 1
+    [[ "$(run_bounded 5 plutil -extract "$key.command" raw -o - "$config" 2>/dev/null)" == "$1" ]] \
+        && [[ "$(run_bounded 5 plutil -extract "$key.args" raw -o - "$config" 2>/dev/null)" == 1 ]] \
+        && [[ "$(run_bounded 5 plutil -extract "$key.args.0" raw -o - "$config" 2>/dev/null)" == mcp ]]
+}
+
+# The config file `setup --client` rewrites, for clients that have one.
+client_config_file() {
+    case "$1" in
+        codex) echo "$HOME/.codex/config.toml" ;;
+        cursor) echo "$HOME/.cursor/mcp.json" ;;
+        claude-desktop) echo "$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;;
+    esac
+}
+
+# A regular file under setup's 1 MB rewrite limit that decodes as UTF-8, checked under a
+# deadline so a FIFO or a stalled filesystem cannot hang the installer.
+config_is_readable_text() {
+    local size
+    [[ -f "$1" && ! -p "$1" ]] || return 1
+    size="$(stat -f %z "$1" 2>/dev/null)" || return 1
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le 1048576 ]] || return 1
+    run_bounded 5 iconv -f UTF-8 -t UTF-8 "$1" </dev/null >/dev/null 2>&1
+}
+
+connect_mcp_clients() {
+    local cli="$1" assume_yes="$2" interactive="$3" log="$4" found entry id label config
+    found="$(detect_clients)"
+    if [[ -z "$found" ]]; then
+        note "No MCP clients found. Connect one later: spaceo setup --client claude-code|codex|cursor|claude-desktop"
+        return 0
+    fi
+    header "Connecting your agents"
+    while IFS= read -r entry; do
+        id="${entry%%|*}"; label="${entry#*|}"
+        if ! ask "Connect SpaceO to $label?" Y "$assume_yes" "$interactive"; then
+            note "  skipped; later: spaceo setup --client $id"
+            continue
+        fi
+        # Re-registering Claude Code is remove-then-add; when the entry already names this CLI,
+        # an upgrade has nothing to change and must not risk losing the entry.
+        if [[ "$id" == claude-code ]] && claude_code_registered "$cli"; then
+            ok "$label already connected"
+            continue
+        fi
+        # SpaceO 1.0.0 treats a config it cannot decode as missing and would replace it whole.
+        config="$(client_config_file "$id")"
+        if [[ -n "$config" && -e "$config" ]] && ! config_is_readable_text "$config"; then
+            warn "not connecting $label: $config is not a readable UTF-8 file under 1 MB, and rewriting it could lose settings"
+            continue
+        fi
+        # setup edits only the `spaceo` entry and keeps every other server. Its own prompt cannot
+        # read the piped stdin, so the answer given here is passed on as --yes. A client CLI that
+        # stalls (claude waiting on a lock or prompt) must not hang the installer.
+        if run_bounded "${SPACEO_CLIENT_TIMEOUT:-60}" "$cli" setup --client "$id" --yes \
+            </dev/null >/dev/null 2>"$log"; then
+            ok "$label connected (restart it to load SpaceO)"
+        elif [[ $? == 124 ]]; then
+            warn "connecting $label timed out"
+            note "  retry with: spaceo setup --client $id"
+        else
+            warn "could not connect $label: $(tail -n 3 "$log" | tr '\n' ' ')"
+            note "  retry with: spaceo setup --client $id"
+        fi
+    done <<< "$found"
+}
+
+# MARK: - uninstall
+
+# The CLI is removed only after its daemon is confirmed gone: deleting it first would leave a
+# running daemon (or a LaunchAgent that restarts one) with no command left to stop it.
+uninstall_spaceo() {
+    local bin_dir="$1" app_dir="$2" assume_yes="$3" interactive="$4" cli="$1/spaceo" removed=0 dir
+    header "Uninstalling SpaceO"
+    local agent_plist="$HOME/Library/LaunchAgents/com.spaceo.daemon.plist"
+    if [[ ! -x "$cli" ]]; then
+        # Without the CLI nothing here can stop a surviving service, so say what is left.
+        if [[ -e "$agent_plist" ]]; then
+            die "the SpaceO LaunchAgent is still installed but $cli is missing; run:
+    launchctl bootout gui/$(id -u)/com.spaceo.daemon; rm \"$agent_plist\"
+then re-run the uninstall"
+        fi
+        if daemon_process_exists "$cli"; then
+            die "a SpaceO daemon from $cli is still running but the file is missing; quit it with:
+    pkill -f \"^$cli daemon\"
+then re-run the uninstall"
+        fi
+        # Nothing runs from it, so a damaged leftover (no execute bit, broken link) just goes.
+        if [[ -e "$cli" || -L "$cli" ]]; then
+            [[ ! -d "$cli" || -L "$cli" ]] || die "$cli is a directory, not SpaceO; not removing it"
+            rm -f "$cli"; ok "removed $cli"; removed=1
+        fi
+    else
+        local agent_installed=0 running=0 attempt
+        # The plist on disk counts even if this CLI cannot run `daemon status`.
+        local agent_status
+        agent_status="$("$cli" daemon status --json </dev/null 2>/dev/null || true)"
+        if [[ -e "$agent_plist" || "$agent_status" =~ \"installed\"\ *:\ *true ]]; then
+            agent_installed=1
+        fi
+        if daemon_alive "$cli"; then running=1; fi
+        # Removing the LaunchAgent or stopping the daemon ends every agent's session, so consent
+        # comes before either. Without a terminal, only --yes proceeds.
+        if [[ "$running" == 1 ]]; then
+            ask "A SpaceO daemon is running. Stop it and end any agent sessions on it?" N \
+                "$assume_yes" "$interactive" \
+                || die "the daemon is still running; stop it with \`$cli daemon stop --operator\`, or re-run with --yes"
+        fi
+        # The LaunchAgent goes first, or launchd restarts the daemon after it stops.
+        if [[ "$agent_installed" == 1 ]]; then
+            "$cli" daemon uninstall --yes </dev/null >/dev/null 2>&1 \
+                || die "could not remove the SpaceO LaunchAgent; run \`$cli daemon uninstall\`, then re-run"
+            ok "removed the SpaceO LaunchAgent"
+        fi
+        if [[ "$running" == 1 ]]; then
+            if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then
+                "$cli" daemon stop --operator </dev/null >/dev/null 2>&1 || true
+            fi
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                daemon_alive "$cli" || break
+                [[ "$attempt" != 10 ]] || die "the daemon did not stop; try \`$cli daemon stop --operator\`,
+or quit it with: pkill -f \"^$cli daemon\"; then re-run the uninstall"
+                sleep 1
+            done
+            ok "stopped the SpaceO daemon"
+        fi
+        rm -f "$cli"; ok "removed $cli"; removed=1
+    fi
+    # Like install, only look in /Applications when no location was chosen.
+    local -a dirs=("$app_dir")
+    [[ -n "${SPACEO_APP_DIR:-}" ]] || dirs+=("/Applications")
+    for dir in "${dirs[@]}"; do
+        [[ -d "$dir/SpaceO Viewer.app" ]] || continue
+        if rm -rf "$dir/SpaceO Viewer.app" 2>/dev/null; then
+            ok "removed $dir/SpaceO Viewer.app"; removed=1
+        else
+            warn "could not remove $dir/SpaceO Viewer.app; move it to the Trash"
+        fi
+    done
+    [[ "$removed" == 1 ]] || note "SpaceO was not found in $bin_dir or $app_dir."
+    note "MCP client entries named \`spaceo\` were left in place; remove them in each client"
+    note "(Claude Code: claude mcp remove -s user spaceo)."
+}
+
+# MARK: - output
+
+usage() {
+    cat <<'USAGE'
+Install SpaceO:
+  curl -fsSL https://raw.githubusercontent.com/ParthJadhav/SpaceO/main/install.sh | bash
+Pass options with `| bash -s -- [options]`:
+
+  --yes             accept every prompt (connect all detected clients, run guided setup)
+  --no-setup        install and connect clients, but do not run `spaceo setup`
+  --no-clients      do not register SpaceO with any MCP client
+  --no-viewer       install only the CLI
+  --no-modify-path  do not add the install directory to your shell profile
+  --version X.Y.Z   install that release instead of the latest
+  --uninstall       stop the daemon and remove the CLI and Viewer
+
+Environment: SPACEO_BIN_DIR (default ~/.local/bin), SPACEO_APP_DIR (default ~/Applications)
+USAGE
+}
+
+if [[ -t 1 ]]; then
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'; RESET=$'\033[0m'
+else
+    BOLD=""; DIM=""; GREEN=""; YELLOW=""; RED=""; RESET=""
+fi
+
+header() { printf '\n%s%s%s\n' "$BOLD" "$*" "$RESET"; }
+step()   { printf '%s→%s %s\n' "$DIM" "$RESET" "$*"; }
+ok()     { printf '  %s✓%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn()   { printf '  %s!%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
+note()   { printf '%s\n' "$*"; }
+die()    { printf '%serror:%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+
+# ask QUESTION DEFAULT(Y|N) ASSUME_YES INTERACTIVE → status 0 for yes. Without a terminal the
+# default applies.
+ask() {
+    local question="$1" default="$2" assume_yes="$3" interactive="$4" reply="" hint="[Y/n]"
+    [[ "$assume_yes" != 1 ]] || return 0
+    if [[ "$interactive" != 1 ]]; then [[ "$default" == Y ]]; return; fi
+    [[ "$default" == Y ]] || hint="[y/N]"
+    printf '%s %s ' "$question" "$hint" >/dev/tty
+    # End of input (Ctrl-D, a closed terminal) is not consent.
+    IFS= read -r reply </dev/tty || { printf '\n' >/dev/tty; return 1; }
+    case "$reply" in
+        [Yy]*) return 0 ;;
+        [Nn]*) return 1 ;;
+        *) [[ "$default" == Y ]] ;;
+    esac
+}
+
+main "$@"
