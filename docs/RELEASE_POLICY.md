@@ -17,7 +17,7 @@ release must contain:
 The DMG must itself carry a Developer ID Application signature. The CLI and Viewer must use hardened-runtime Developer ID Application signatures with secure
 timestamps. The Viewer and DMG must be notarized and stapled, and the mounted payload must pass
 the repository's exact publisher requirements and Gatekeeper assessments. The expected publisher
-Team ID is `75LRT8TRQY`.
+is pinned in the installer and [verification instructions](INSTALL.md).
 
 SpaceO is not distributed through or supported by the Mac App Store. Its private-API use,
 background CLI/daemon model, and Accessibility and Screen Recording requirements are incompatible

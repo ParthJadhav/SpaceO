@@ -284,7 +284,7 @@ git push origin refs/tags/v1.0.0
 ```
 
 The tag push starts the **Signed release candidate and publication** workflow. The candidate job
-must sign with the SpaceO Developer ID Application identity (Team `75LRT8TRQY`), notarize and
+must sign with the SpaceO Developer ID Application identity listed in [INSTALL.md](INSTALL.md), notarize and
 staple the Viewer and DMG, verify the fresh-mounted distribution, sign the checksum and candidate
 record, and upload one immutable candidate artifact. Do not approve the waiting publication job.
 

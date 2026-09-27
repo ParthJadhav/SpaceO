@@ -15,6 +15,7 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
+| RA-056 | Medium | Prevention implemented; historical identity removal requires a separate provenance migration | Release examples and routine output repeated signing identity; live CI could publish raw host diagnostics and reports |
 | RA-055 | Critical | Containment implemented; latest live qualification blocked by TextEdit AX failure; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
 | RA-002 | High | Fixed | Release daemon can ignore SIGTERM and remain orphaned |

@@ -19,7 +19,7 @@ partial macOS isolation audit proves every input route.
   build UUID `C93F202D-7B58-3246-ACC6-8C74B150BB4A`. The signed Viewer executable SHA-256 is
   `78442d185bbf7ebba30167277aac78c131e35676218892db10e029fee1a421bb`, with build UUID
   `2572E96A-C799-3A3F-B947-9CB1A7D233AD`.
-- Viewer signature: Developer ID Application, team `75LRT8TRQY`, hardened runtime, bundle id
+- Viewer signature: Developer ID Application, the [expected publisher](../INSTALL.md), hardened runtime, bundle id
   `dev.spaceo.viewer`. Deep/strict code-sign validation and the designated requirement passed.
 - Final `spaceo doctor --json`: healthy, daemon matches the CLI build UUID, daemon Accessibility
   and Screen Recording are both granted, the pool has zero sessions and zero SpaceO displays,

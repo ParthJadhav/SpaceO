@@ -99,8 +99,17 @@ two jobs:
   works before anything depends on it, then resolves the live runner. If no live host is
   configured it **fails** rather than skipping — a live suite that silently does not run is the
   defect this workflow exists to prevent.
-- `live` runs `scripts/test.sh live --require-full` on the self-hosted runner and uploads the run
-  log as an artifact regardless of outcome.
+- `live` runs `scripts/test.sh live --require-full` and the computer-use matrix on the dedicated
+  runner. Raw command output, host diagnostics, and action reports remain in the runner's
+  private `~/Library/Logs/SpaceO/qualification/RUN_ID-ATTEMPT/` directory with owner-only
+  permissions, copied before the runner cleans its temporary directory. Only fixed pass/fail
+  messages reach Actions; no raw logs or reports are uploaded as public artifacts. Retrieve
+  required evidence privately and remove it after its retention period. Review and redact any
+  summary before sharing it publicly; private retention does not replace qualification.
+
+Use a dedicated, non-personal runner account and machine name: GitHub's runner and checkout steps
+can themselves print account paths and runner names before repository scripts execute. Never
+register a personal desktop or reuse its application sessions for this workflow.
 
 It remains an on-demand recorded run, with no commit-bound qualification record or
 `scripts/release.sh` dependency. RA-055 reinstates display-safety admission and explicit live

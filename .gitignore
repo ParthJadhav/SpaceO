@@ -22,3 +22,14 @@
 *.pem
 *.keychain-db
 *.dmg
+
+# Private keys, provisioning profiles, local logs, and signing exports.
+*.pfx
+*.key
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.log
+
+# Python verification helpers.
+__pycache__/

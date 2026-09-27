@@ -187,7 +187,7 @@ Runtime discovery is not a compatibility guarantee. See the [support policy](../
 
 The supported public distribution model is a versioned Developer ID DMG—not the Mac App Store—
 containing both the `spaceo` CLI and `SpaceO Viewer.app`, plus a SHA-256 sidecar and its detached
-SpaceO publisher signature. Authenticate Team ID `75LRT8TRQY` before trusting the checksum or
+SpaceO publisher signature. Authenticate the [expected publisher](INSTALL.md) before trusting the checksum or
 executing the payload; then verify the stapled ticket and Gatekeeper assessment.
 
 The current release is [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0). Do not treat a local build or ad-hoc-signed

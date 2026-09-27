@@ -201,7 +201,7 @@ A public package requires an explicitly selected `Developer ID Application` iden
 deliberate notarization credentials. Choose either an existing notarytool keychain profile:
 
 ```bash
-SPACEO_CODESIGN_IDENTITY='Developer ID Application: Parth Jadhav (75LRT8TRQY)' \
+SPACEO_CODESIGN_IDENTITY='Developer ID Application: YOUR SIGNING NAME (TEAM_ID)' \
 SPACEO_NOTARY_PROFILE='your-existing-profile' \
 make release-preflight
 ```
@@ -209,7 +209,7 @@ make release-preflight
 or an App Store Connect API key:
 
 ```bash
-SPACEO_CODESIGN_IDENTITY='Developer ID Application: Parth Jadhav (75LRT8TRQY)' \
+SPACEO_CODESIGN_IDENTITY='Developer ID Application: YOUR SIGNING NAME (TEAM_ID)' \
 SPACEO_NOTARY_KEY='/secure/path/AuthKey_KEYID.p8' \
 SPACEO_NOTARY_KEY_ID='KEYID' \
 SPACEO_NOTARY_ISSUER='ISSUER-UUID' \

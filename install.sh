@@ -89,7 +89,7 @@ main() {
     codesign --verify --detached "$work/$name.sha256.sig" --strict \
         -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.release-checksum\"" \
         "$work/$name.sha256" >/dev/null 2>&1 \
-        || die "the checksum is not signed by SpaceO's publisher ($team_id); not installing"
+        || die "the checksum is not signed by SpaceO's publisher; not installing"
     # Captured first: with pipefail, `grep -q` closing the pipe early would fail codesign.
     local signature_details
     signature_details="$(codesign --display --detached "$work/$name.sha256.sig" --verbose=4 \
@@ -125,7 +125,7 @@ main() {
         spctl --assess --type execute "$mount/SpaceO Viewer.app" >/dev/null 2>&1 \
             || die "Gatekeeper rejected SpaceO Viewer; not installing"
     fi
-    ok "signed by $team_id, notarized, checksum matches"
+    ok "SpaceO publisher verified, notarized, checksum matches"
 
     # Provenance is not identity: a correctly signed image could still hold another build. Like
     # the release verifier, require the embedded versions to be the release being installed.

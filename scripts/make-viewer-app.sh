@@ -107,4 +107,4 @@ fi
 codesign "${SIGN_ARGS[@]}" "$APP/Contents/Helpers/spaceo"
 codesign "${SIGN_ARGS[@]}" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
-echo "built $APP version $VERSION (signed with $SIGNING_IDENTITY)"
+echo "built $APP version $VERSION (signature verified)"

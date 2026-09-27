@@ -13,11 +13,6 @@ name: Live WindowServer tests
 # from one that passes; --require-full is what closes that, and it applies only to this job.
 on:
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Why this qualification run is being made (recorded in the run log)"
-        required: false
-        type: string
 
 permissions:
   contents: read
@@ -94,18 +89,16 @@ jobs:
           persist-credentials: false
 
       - name: Record host capabilities
-        env:
-          RUN_REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
-          printf 'reason: %s\n' "$RUN_REASON"
+          umask 077
           test "$(uname -s)" = Darwin
           test "$(uname -m)" = arm64
           sw_vers
           swift --version
           # Not a gate: `--require-full` already fails the run if the grants are missing. This is
-          # here so the artifact explains *which* grant was missing when that happens.
-          swift run spaceo doctor || true
+          # retained privately so the operator can determine which grant was missing.
+          swift run spaceo doctor > "$RUNNER_TEMP/spaceo-host-diagnostics.log" 2>&1 || true
 
       - name: Run the live WindowServer suite
         # `runner.temp` resolves only in a step context; a job-level `env` referencing it makes
@@ -113,27 +106,45 @@ jobs:
         env:
           SPACEO_LIVE_TESTS: "1"
           SPACEO_LIVE_LOG: ${{ runner.temp }}/spaceo-live-tests.log
-        run: bash scripts/test.sh live --require-full
+        run: |
+          set -euo pipefail
+          umask 077
+          if bash scripts/test.sh live --require-full > "$RUNNER_TEMP/spaceo-live-command.log" 2>&1; then
+            echo "Full live suite passed. Evidence retained privately on the dedicated runner."
+          else
+            echo "::error::Live suite failed. Review private runner evidence before retrying."
+            exit 1
+          fi
 
       - name: Run the full computer-use conformance matrix
         env:
           SPACEO_LIVE_TESTS: "1"
           SPACEO_TEST_REPORT: ${{ runner.temp }}/spaceo-computer-use-conformance.json
           SPACEO_RUN_ID: github-${{ github.run_id }}-${{ github.run_attempt }}
-        run: make computer-use-check-full
+        run: |
+          set -euo pipefail
+          umask 077
+          if make computer-use-check-full > "$RUNNER_TEMP/spaceo-computer-use-command.log" 2>&1; then
+            echo "Full computer-use matrix passed. Evidence retained privately on the dedicated runner."
+          else
+            echo "::error::Computer-use matrix failed. Review private runner evidence before retrying."
+            exit 1
+          fi
 
-      - name: Retain the live run log
+      # Raw diagnostics, screenshots, AX content, logs, and reports stay on the dedicated host.
+      # Public Actions artifacts are downloadable by repository readers, so do not upload them.
+      - name: Preserve qualification evidence privately
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: spaceo-live-tests-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/spaceo-live-tests.log
-          if-no-files-found: error
-
-      - name: Retain the computer-use conformance report
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: spaceo-computer-use-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/spaceo-computer-use-conformance.json
-          if-no-files-found: error
+        run: |
+          set -euo pipefail
+          umask 077
+          evidence_dir="$HOME/Library/Logs/SpaceO/qualification/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$evidence_dir"
+          chmod 700 "$evidence_dir"
+          for name in spaceo-host-diagnostics.log spaceo-live-command.log spaceo-live-tests.log \
+              spaceo-computer-use-command.log spaceo-computer-use-conformance.json; do
+            if [[ -f "$RUNNER_TEMP/$name" ]]; then
+              install -m 600 "$RUNNER_TEMP/$name" "$evidence_dir/$name"
+            fi
+          done
+          echo "Available qualification evidence preserved privately on the dedicated runner."

@@ -191,6 +191,8 @@ jobs:
             -k "$keychain_password" \
             "$keychain_path" >/dev/null
 
+          # Imported material no longer needs to be inherited by build/test subprocesses.
+          unset CERTIFICATE_BASE64 CERTIFICATE_PASSWORD NOTARY_KEY_BASE64
           SPACEO_NOTARY_KEY="$notary_key_path" bash scripts/release.sh candidate
 
           version="$(tr -d '\r\n' < VERSION)"

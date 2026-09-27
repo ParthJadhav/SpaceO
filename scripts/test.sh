@@ -16,6 +16,9 @@ run_safe() {
     require_command "$NODE"
     require_command python3
     cd "$REPOSITORY_ROOT"
+    python3 "$REPOSITORY_ROOT/Tests/PublicPrivacyTests.py"
+    python3 "$REPOSITORY_ROOT/Tests/WorkflowPrivacyTests.py"
+    python3 "$REPOSITORY_ROOT/scripts/check-public-privacy.py"
     "$SWIFT" test --skip "$LIVE_TEST_CLASS" "$@"
     bash "$REPOSITORY_ROOT/Tests/ViewerInstallTests.sh"
     bash "$REPOSITORY_ROOT/Tests/InstallScriptTests.sh"

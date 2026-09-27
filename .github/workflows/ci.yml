@@ -17,6 +17,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Check public files for personal data
+        run: |
+          python3 Tests/PublicPrivacyTests.py
+          python3 Tests/WorkflowPrivacyTests.py
+          python3 scripts/check-public-privacy.py
       - name: Scan history for credentials
         run: |
           set -euo pipefail
