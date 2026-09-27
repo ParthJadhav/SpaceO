@@ -9,6 +9,28 @@ final class MCPClientConfigTests: XCTestCase {
     private let exe = "/opt/spaceo/bin/spaceo"
     private let home = URL(fileURLWithPath: "/Users/test", isDirectory: true)
 
+    // MARK: - Reading the existing file
+
+    func testReadExistingDistinguishesMissingFromUnreadable() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spaceo-client-config-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        XCTAssertNil(try MCPClientConfig.readExisting(at: directory.appendingPathComponent("absent.json")))
+
+        let text = directory.appendingPathComponent("mcp.json")
+        try Data("{\"mcpServers\":{}}".utf8).write(to: text)
+        XCTAssertEqual(try MCPClientConfig.readExisting(at: text), "{\"mcpServers\":{}}")
+
+        // Not UTF-8: reading it as "no file" would let setup replace the user's whole config.
+        let binary = directory.appendingPathComponent("binary.json")
+        try Data([0xFF, 0xFE, 0x00, 0x7B]).write(to: binary)
+        XCTAssertThrowsError(try MCPClientConfig.readExisting(at: binary)) { error in
+            XCTAssertEqual(error as? MCPClientConfigError, .unreadable(binary.path))
+        }
+    }
+
     // MARK: - Locations and commands
 
     func testConfigFileLocationsPerClient() {
