@@ -68,6 +68,15 @@ addresses from previous commit objects, old pull-request diffs, cached content, 
 History removal needs a coordinated rewrite and, for a released commit, a replacement provenance
 plan. Never publish a mailmap containing the email being removed as a privacy fix.
 
+GitHub-generated squash commits can use an account email even when every local commit uses
+noreply metadata. Enable **Keep my email addresses private** and **Block command line pushes
+that expose my email** in [GitHub email settings](https://github.com/settings/emails).
+For CLI merges, use `gh pr merge NUMBER --squash --author-email GITHUB_NOREPLY_ADDRESS`, choosing
+the intended author's GitHub noreply address, and inspect the resulting remote author and
+committer metadata without printing personal values. Do not infer web/API merge privacy from
+`git config user.email`. Repository metadata restrictions require an eligible GitHub Enterprise
+organization; ordinary branch protection and content scans do not enforce this setting.
+
 `python3 scripts/check-public-privacy.py` checks tracked text and private file types without
 printing matched values. CI also scans history with Gitleaks. These checks do not prove that all
 personal data is absent: visually review media and inspect public logs, artifacts, discussions,

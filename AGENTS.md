@@ -51,6 +51,10 @@ currently `arm64` only; CI and release workflows pin their own Xcode and Swift v
 
 ## Conventions
 
+- Use GitHub noreply email addresses for public commits and tags. For GitHub CLI merges, pass
+  `--author-email` with the intended author's GitHub noreply address explicitly; local Git
+  configuration does not control GitHub's generated merge metadata. Check the resulting remote
+  author and committer metadata without printing personal values.
 - Prefer Accessibility actions over coordinate input. Treat unconfirmed delivery as unconfirmed;
   never turn an attempted action into a success claim without evidence.
 - Keep CLI, daemon protocol, MCP schemas, limits, lease handling, and help text aligned when adding
