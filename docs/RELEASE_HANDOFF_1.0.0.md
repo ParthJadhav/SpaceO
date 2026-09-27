@@ -4,8 +4,10 @@
 > [open-source readiness](OPEN_SOURCE_READINESS.md) and [release policy](RELEASE_POLICY.md).
 > As of September 24, 2026, required reviewers, no admin bypass, and tag-only restrictions
 > are configured on both release environments. The missing-protection statements below
-> describe earlier observations, not current blockers. The NO-GO below was resolved:
-> SpaceO 1.0.0 was published on 2026-09-27 by owner direction; see the release policy.
+> describe earlier observations, not current blockers. The NO-GO below is superseded: on
+> 2026-09-27 the release owner gave GO for 1.0.0 on the source qualified by
+> [the September 26 live record](validation/2026-09-26-release-1.1.1-live.md). The protected
+> candidate job signs, notarizes, and verifies the exact artifact before publication.
 
 Prepared: 2026-08-29  
 Last updated: 2026-09-16
