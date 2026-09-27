@@ -18,6 +18,12 @@ main() {
     local app_dir="${SPACEO_APP_DIR:-$HOME/Applications}"
     local version="" assume_yes=0 run_setup=1 connect_clients=1 install_viewer=1 modify_path=1
     local uninstall=0
+    # Relative paths would land somewhere different for every later shell, PATH lookup, and
+    # uninstall, depending on the directory each runs from.
+    [[ "$bin_dir" == /* && "$app_dir" == /* ]] \
+        || die "SPACEO_BIN_DIR and SPACEO_APP_DIR must be absolute paths"
+    # Developer ID only: an Apple Development or other same-team certificate is not a release.
+    local developer_id='anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists'
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -81,9 +87,15 @@ main() {
 
     step "Verifying publisher signature, checksum, and notarization"
     codesign --verify --detached "$work/$name.sha256.sig" --strict \
-        -R "=anchor apple generic and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.release-checksum\"" \
+        -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.release-checksum\"" \
         "$work/$name.sha256" >/dev/null 2>&1 \
         || die "the checksum is not signed by SpaceO's publisher ($team_id); not installing"
+    # Captured first: with pipefail, `grep -q` closing the pipe early would fail codesign.
+    local signature_details
+    signature_details="$(codesign --display --detached "$work/$name.sha256.sig" --verbose=4 \
+        "$work/$name.sha256" 2>&1 || true)"
+    [[ "$signature_details" == *$'\nTimestamp='* ]] \
+        || die "the checksum signature has no secure timestamp; not installing"
     # Like the release verifier: the signed sidecar must be exactly one digest naming this image,
     # or `shasum -c` could pass without ever hashing it.
     local recorded_digest="" recorded_name="" unexpected="" actual_digest
@@ -102,12 +114,12 @@ main() {
     hdiutil attach "$work/$name.dmg" -readonly -nobrowse -noautoopen -mountpoint "$mount" -quiet \
         || die "could not mount the disk image"
     codesign --verify --strict \
-        -R "=anchor apple generic and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.cli\"" \
+        -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.cli\"" \
         "$mount/spaceo" >/dev/null 2>&1 \
         || die "the spaceo CLI is not signed by SpaceO's publisher; not installing"
     if [[ "$install_viewer" == 1 ]]; then
         codesign --verify --deep --strict \
-            -R "=anchor apple generic and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.viewer\"" \
+            -R "=$developer_id and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.viewer\"" \
             "$mount/SpaceO Viewer.app" >/dev/null 2>&1 \
             || die "SpaceO Viewer is not signed by SpaceO's publisher; not installing"
         spctl --assess --type execute "$mount/SpaceO Viewer.app" >/dev/null 2>&1 \
@@ -283,11 +295,28 @@ add_to_path() {
     fi
     case "$(basename "${SHELL:-/bin/zsh}")" in
         zsh)  profile="${ZDOTDIR:-$HOME}/.zshrc"; line="export PATH=\"$dir:\$PATH\"" ;;
-        bash) profile="$HOME/.bash_profile";      line="export PATH=\"$dir:\$PATH\"" ;;
+        bash)
+            # A login shell reads only the first of these that exists; creating .bash_profile
+            # next to an existing .bash_login or .profile would silently stop that one loading.
+            local candidate
+            profile="$HOME/.bash_profile"
+            for candidate in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+                if [[ -e "$candidate" ]]; then profile="$candidate"; break; fi
+            done
+            line="export PATH=\"$dir:\$PATH\"" ;;
         fish) profile="$HOME/.config/fish/config.fish"; line="fish_add_path \"$dir\"" ;;
         *) warn "add $dir to your PATH to run \`spaceo\` by name"; return 0 ;;
     esac
-    if [[ -f "$profile" ]] && grep -Fqx "$line" "$profile"; then return 0; fi
+    # Only an ordinary, reasonably sized file: appending to a FIFO would block forever.
+    local size
+    if [[ -e "$profile" || -L "$profile" ]]; then
+        size="$(stat -f %z "$profile" 2>/dev/null || echo x)"
+        if [[ ! -f "$profile" || -p "$profile" || ! "$size" =~ ^[0-9]+$ || "$size" -gt 1048576 ]]; then
+            warn "add $dir to your PATH yourself; $profile is not a regular file under 1 MB"
+            return 0
+        fi
+        if run_bounded 5 grep -Fqx "$line" "$profile" </dev/null; then return 0; fi
+    fi
     mkdir -p "$(dirname "$profile")"
     printf '\n# Added by the SpaceO installer\n%s\n' "$line" >> "$profile"
     ok "added $dir to PATH in $profile"
@@ -341,12 +370,16 @@ detect_clients() {
 }
 
 # Whether Claude Code's user-scope `spaceo` server is exactly `CLI mcp`. plutil reads JSON.
+# The file grows with project history, so it gets doctor's 16 MB bound and a deadline per read;
+# anything unreadable in time counts as "not registered", which only means setup runs.
 claude_code_registered() {
-    local config="$HOME/.claude.json" key="mcpServers.spaceo"
-    [[ -f "$config" ]] || return 1
-    [[ "$(plutil -extract "$key.command" raw -o - "$config" 2>/dev/null)" == "$1" ]] \
-        && [[ "$(plutil -extract "$key.args" raw -o - "$config" 2>/dev/null)" == 1 ]] \
-        && [[ "$(plutil -extract "$key.args.0" raw -o - "$config" 2>/dev/null)" == mcp ]]
+    local config="$HOME/.claude.json" key="mcpServers.spaceo" size
+    [[ -f "$config" && ! -p "$config" ]] || return 1
+    size="$(stat -f %z "$config" 2>/dev/null)" || return 1
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le 16777216 ]] || return 1
+    [[ "$(run_bounded 5 plutil -extract "$key.command" raw -o - "$config" 2>/dev/null)" == "$1" ]] \
+        && [[ "$(run_bounded 5 plutil -extract "$key.args" raw -o - "$config" 2>/dev/null)" == 1 ]] \
+        && [[ "$(run_bounded 5 plutil -extract "$key.args.0" raw -o - "$config" 2>/dev/null)" == mcp ]]
 }
 
 # The config file `setup --client` rewrites, for clients that have one.
@@ -430,11 +463,17 @@ then re-run the uninstall"
     pkill -f \"^$cli daemon\"
 then re-run the uninstall"
         fi
+        # Nothing runs from it, so a damaged leftover (no execute bit, broken link) just goes.
+        if [[ -e "$cli" || -L "$cli" ]]; then
+            [[ ! -d "$cli" || -L "$cli" ]] || die "$cli is a directory, not SpaceO; not removing it"
+            rm -f "$cli"; ok "removed $cli"; removed=1
+        fi
     else
         local agent_installed=0 running=0 attempt
         # The plist on disk counts even if this CLI cannot run `daemon status`.
-        if [[ -e "$agent_plist" ]] \
-            || "$cli" daemon status --json </dev/null 2>/dev/null | grep -q '"installed" *: *true'; then
+        local agent_status
+        agent_status="$("$cli" daemon status --json </dev/null 2>/dev/null || true)"
+        if [[ -e "$agent_plist" || "$agent_status" =~ \"installed\"\ *:\ *true ]]; then
             agent_installed=1
         fi
         if daemon_alive "$cli"; then running=1; fi

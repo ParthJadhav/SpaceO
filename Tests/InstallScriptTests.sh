@@ -75,8 +75,20 @@ cp "$SPACEO_TEST_RELEASE/${url##*/}" "$out"'
 mock codesign '
 for argument in "$@"; do
     [[ "$argument" == --detached && -n "${SPACEO_TEST_BAD_SIGNATURE:-}" ]] && exit 1
+    if [[ "$argument" == --display ]]; then
+        # Real --display output is many lines with the timestamp in the middle; a reader that
+        # stops early must not turn this into a failure (pipefail + SIGPIPE).
+        echo "Executable=/tmp/fixture"
+        [[ -n "${SPACEO_TEST_NO_TIMESTAMP:-}" ]] || echo "Timestamp=27 Sep 2026"
+        for (( line = 0; line < 20000; line++ )); do echo "Authority=filler $line"; done
+        exit 0
+    fi
 done
 exit 0'
+# Real pgrep, but only fixture daemons (socket names starting spaceo-test-) count, so a daemon
+# the developer happens to be running cannot change the outcome.
+mock pgrep '
+/usr/bin/pgrep -lf "${!#}" | grep -q -- "--socket spaceo-test-"'
 mock hdiutil '
 case "$1" in
     attach) while [[ $# -gt 0 ]]; do [[ "$1" == -mountpoint ]] && mount="$2"; shift; done
@@ -89,12 +101,13 @@ run_installer() {
     mkdir -p "$home"
     # setsid detaches from any controlling terminal, so a developer running this from a shell
     # gets the no-terminal behavior (defaults, no prompts) instead of a blocked prompt.
-    env -i PATH="$MOCK_BIN:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$home" SHELL=/bin/zsh \
+    env -i PATH="$MOCK_BIN:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$home" SHELL="${SPACEO_TEST_SHELL:-/bin/zsh}" \
         TMPDIR="$TEST_ROOT" SPACEO_TEST_LOG="$SPACEO_TEST_LOG" SPACEO_TEST_RELEASE="$RELEASE" \
         SPACEO_TEST_PAYLOAD="$PAYLOAD" SPACEO_TEST_BAD_SIGNATURE="${SPACEO_TEST_BAD_SIGNATURE:-}" \
         SPACEO_TEST_DAEMON="$SPACEO_TEST_DAEMON" SPACEO_TEST_AGENT="$SPACEO_TEST_AGENT" \
         ${SPACEO_TEST_BIN_DIR:+SPACEO_BIN_DIR="$SPACEO_TEST_BIN_DIR"} \
         SPACEO_TEST_EMBEDDED="${SPACEO_TEST_EMBEDDED:-}" SPACEO_TEST_STALL_CLIENT="${SPACEO_TEST_STALL_CLIENT:-}" \
+        SPACEO_TEST_NO_TIMESTAMP="${SPACEO_TEST_NO_TIMESTAMP:-}" \
         ${SPACEO_CLIENT_TIMEOUT:+SPACEO_CLIENT_TIMEOUT="$SPACEO_CLIENT_TIMEOUT"} \
         SPACEO_TEST_MACOS="${SPACEO_TEST_MACOS:-}" SPACEO_APP_DIR="$home/Applications" \
         perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!\n"; exec @ARGV' \
@@ -215,7 +228,7 @@ output="$(SPACEO_TEST_BIN_DIR="$HOME_G/bin\$(touch pwned)" run_installer "$HOME_
 #     renames itself so its command line reads like the daemon's, which is what uninstall matches.
 HOME_H="$TEST_ROOT/home-h"
 run_installer "$HOME_H" --no-clients >/dev/null 2>&1 || fail "install for the hung-daemon case failed"
-perl -e '$0 = shift; sleep 60' "$HOME_H/.local/bin/spaceo daemon --socket hung" &
+perl -e '$0 = shift; sleep 60' "$HOME_H/.local/bin/spaceo daemon --socket spaceo-test-hung" &
 hung_daemon=$!
 sleep 0.5
 if output="$(run_installer "$HOME_H" --uninstall --yes 2>&1)"; then
@@ -291,7 +304,7 @@ grep -Fqx 'daemon uninstall --yes' "$SPACEO_TEST_LOG" || fail "plist on disk did
 # 22. A daemon started as bare `spaceo daemon` through PATH still blocks removing the CLI.
 HOME_P="$TEST_ROOT/home-p"
 run_installer "$HOME_P" --no-clients >/dev/null 2>&1 || fail "install for the PATH-daemon case failed"
-perl -e '$0 = shift; sleep 60' "spaceo daemon --socket via-path" &
+perl -e '$0 = shift; sleep 60' "spaceo daemon --socket spaceo-test-via-path" &
 path_daemon=$!
 sleep 0.5
 if output="$(run_installer "$HOME_P" --uninstall --yes 2>&1)"; then
@@ -310,6 +323,44 @@ started=$SECONDS
 output="$(run_installer "$HOME_Q" 2>&1)" || fail "install with a FIFO config failed: $output"
 (( SECONDS - started < 20 )) || fail "a FIFO config blocked the installer"
 grep -Fq 'setup --client codex' "$SPACEO_TEST_LOG" && fail "handed a FIFO config to setup"
+
+# 24. A checksum signature without a secure timestamp is refused.
+HOME_R="$TEST_ROOT/home-r"
+if output="$(SPACEO_TEST_NO_TIMESTAMP=1 run_installer "$HOME_R" --no-clients 2>&1)"; then
+    fail "accepted an untimestamped checksum signature"
+fi
+[[ "$output" == *"no secure timestamp"* ]] || fail "wrong refusal: $output"
+
+# 25. Relative install directories are refused before anything happens.
+if output="$(SPACEO_TEST_BIN_DIR="relative/bin" run_installer "$HOME_R" --no-clients 2>&1)"; then
+    fail "accepted a relative SPACEO_BIN_DIR"
+fi
+[[ "$output" == *"must be absolute paths"* ]] || fail "wrong refusal: $output"
+
+# 26. Bash: PATH goes into the login file bash already reads (.profile here), not a new
+#     .bash_profile that would shadow it.
+HOME_S="$TEST_ROOT/home-s"
+mkdir -p "$HOME_S"
+printf 'export EDITOR=vi\n' > "$HOME_S/.profile"
+output="$(SPACEO_TEST_SHELL=/bin/bash run_installer "$HOME_S" --no-clients 2>&1)" || fail "bash install failed: $output"
+[[ ! -e "$HOME_S/.bash_profile" ]] || fail "created a .bash_profile that shadows .profile"
+grep -Fq '.local/bin:$PATH' "$HOME_S/.profile" || fail "PATH not added to the existing .profile"
+
+# 27. A profile that is a FIFO is not appended to (that would block forever).
+HOME_T="$TEST_ROOT/home-t"
+mkdir -p "$HOME_T"
+mkfifo "$HOME_T/.zshrc"
+started=$SECONDS
+output="$(run_installer "$HOME_T" --no-clients 2>&1)" || fail "install with a FIFO profile failed: $output"
+(( SECONDS - started < 20 )) || fail "a FIFO profile blocked the installer"
+[[ "$output" == *"is not a regular file"* ]] || fail "no PATH guidance for a FIFO profile: $output"
+
+# 28. Uninstall removes a damaged CLI (no execute bit) when no service is left behind.
+HOME_U="$TEST_ROOT/home-u"
+run_installer "$HOME_U" --no-clients >/dev/null 2>&1 || fail "install for the damaged-CLI case failed"
+chmod 644 "$HOME_U/.local/bin/spaceo"
+run_installer "$HOME_U" --uninstall >/dev/null 2>&1 || fail "uninstall of a damaged CLI failed"
+[[ ! -e "$HOME_U/.local/bin/spaceo" ]] || fail "uninstall left a damaged CLI behind"
 
 # No mount point or work directory may outlive a run.
 leftovers="$(find "$TEST_ROOT" -maxdepth 1 -name 'spaceo-install.*')"
