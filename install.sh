@@ -38,8 +38,10 @@ main() {
     done
 
     # `curl | bash` gives this script the pipe as stdin; questions go to the terminal instead.
+    # Whether a person can answer depends on the terminal, not on where stdout goes: a run logged
+    # to a file still asks. Agents and CI have no terminal and take the defaults.
     local interactive=0
-    if [[ -t 1 ]] && (exec </dev/tty) 2>/dev/null; then interactive=1; fi
+    if (exec </dev/tty) 2>/dev/null; then interactive=1; fi
 
     if [[ "$uninstall" == 1 ]]; then
         uninstall_spaceo "$bin_dir" "$app_dir" "$assume_yes" "$interactive"
@@ -82,7 +84,16 @@ main() {
         -R "=anchor apple generic and certificate leaf[subject.OU] = \"$team_id\" and identifier \"dev.spaceo.release-checksum\"" \
         "$work/$name.sha256" >/dev/null 2>&1 \
         || die "the checksum is not signed by SpaceO's publisher ($team_id); not installing"
-    (cd "$work" && shasum -a 256 -c "$name.sha256" >/dev/null 2>&1) \
+    # Like the release verifier: the signed sidecar must be exactly one digest naming this image,
+    # or `shasum -c` could pass without ever hashing it.
+    local recorded_digest="" recorded_name="" unexpected="" actual_digest
+    [[ "$(awk 'END { print NR }' "$work/$name.sha256")" == 1 ]] \
+        || die "the signed checksum must contain exactly one entry; not installing"
+    read -r recorded_digest recorded_name unexpected < "$work/$name.sha256" || true
+    [[ "$recorded_digest" =~ ^[0-9a-f]{64}$ && "$recorded_name" == "$name.dmg" && -z "$unexpected" ]] \
+        || die "the signed checksum does not name $name.dmg; not installing"
+    actual_digest="$(shasum -a 256 "$work/$name.dmg" | awk '{ print $1 }')"
+    [[ "$actual_digest" == "$recorded_digest" ]] \
         || die "the disk image does not match its signed checksum; not installing"
     spctl --assess --type open --context context:primary-signature "$work/$name.dmg" >/dev/null 2>&1 \
         || die "Gatekeeper rejected the disk image; not installing"
@@ -127,6 +138,8 @@ main() {
     if [[ -e "$cli" ]]; then replaced=" (replaced the previous copy)"; fi
     mkdir -p "$bin_dir"
     # Copy then rename: a running daemon keeps its old inode instead of having its code rewritten.
+    # mv onto a directory would move the CLI inside it and still succeed.
+    [[ ! -d "$cli" || -L "$cli" ]] || die "$cli is a directory; move it away or set SPACEO_BIN_DIR, then re-run"
     install -m 755 "$mount/spaceo" "$bin_dir/.spaceo.new"
     mv -f "$bin_dir/.spaceo.new" "$cli"
     ok "spaceo $version → $cli$replaced"
@@ -190,8 +203,12 @@ run_bounded() {
         fi
         sleep 0.1
     done
+    # Children first: `setup --client claude-code` runs `claude`, which would otherwise outlive
+    # the deadline and could still change the registration afterwards.
+    pkill -TERM -P "$pid" 2>/dev/null || true
     kill "$pid" 2>/dev/null || true
     sleep 1
+    pkill -KILL -P "$pid" 2>/dev/null || true
     kill -9 "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     return 124
@@ -295,7 +312,9 @@ report_stale_daemon() {
 daemon_process_exists() {
     local pattern
     pattern="$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
-    pgrep -f "^$pattern daemon" >/dev/null 2>&1
+    # `spaceo daemon &` through PATH records the bare name; count that too. It may belong to
+    # another copy, but refusing to delete this one then is the safe direction.
+    pgrep -f "^($pattern|spaceo) daemon" >/dev/null 2>&1
 }
 
 daemon_alive() {
@@ -339,6 +358,16 @@ client_config_file() {
     esac
 }
 
+# A regular file under setup's 1 MB rewrite limit that decodes as UTF-8, checked under a
+# deadline so a FIFO or a stalled filesystem cannot hang the installer.
+config_is_readable_text() {
+    local size
+    [[ -f "$1" && ! -p "$1" ]] || return 1
+    size="$(stat -f %z "$1" 2>/dev/null)" || return 1
+    [[ "$size" =~ ^[0-9]+$ && "$size" -le 1048576 ]] || return 1
+    run_bounded 5 iconv -f UTF-8 -t UTF-8 "$1" </dev/null >/dev/null 2>&1
+}
+
 connect_mcp_clients() {
     local cli="$1" assume_yes="$2" interactive="$3" log="$4" found entry id label config
     found="$(detect_clients)"
@@ -361,8 +390,8 @@ connect_mcp_clients() {
         fi
         # SpaceO 1.0.0 treats a config it cannot decode as missing and would replace it whole.
         config="$(client_config_file "$id")"
-        if [[ -n "$config" && -e "$config" ]] && ! iconv -f UTF-8 -t UTF-8 "$config" >/dev/null 2>&1; then
-            warn "not connecting $label: $config is not UTF-8 text, and rewriting it could lose settings"
+        if [[ -n "$config" && -e "$config" ]] && ! config_is_readable_text "$config"; then
+            warn "not connecting $label: $config is not a readable UTF-8 file under 1 MB, and rewriting it could lose settings"
             continue
         fi
         # setup edits only the `spaceo` entry and keeps every other server. Its own prompt cannot
@@ -403,7 +432,9 @@ then re-run the uninstall"
         fi
     else
         local agent_installed=0 running=0 attempt
-        if "$cli" daemon status --json </dev/null 2>/dev/null | grep -q '"installed" *: *true'; then
+        # The plist on disk counts even if this CLI cannot run `daemon status`.
+        if [[ -e "$agent_plist" ]] \
+            || "$cli" daemon status --json </dev/null 2>/dev/null | grep -q '"installed" *: *true'; then
             agent_installed=1
         fi
         if daemon_alive "$cli"; then running=1; fi

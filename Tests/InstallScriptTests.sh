@@ -87,6 +87,8 @@ esac'
 run_installer() {
     local home="$1"; shift
     mkdir -p "$home"
+    # setsid detaches from any controlling terminal, so a developer running this from a shell
+    # gets the no-terminal behavior (defaults, no prompts) instead of a blocked prompt.
     env -i PATH="$MOCK_BIN:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$home" SHELL=/bin/zsh \
         TMPDIR="$TEST_ROOT" SPACEO_TEST_LOG="$SPACEO_TEST_LOG" SPACEO_TEST_RELEASE="$RELEASE" \
         SPACEO_TEST_PAYLOAD="$PAYLOAD" SPACEO_TEST_BAD_SIGNATURE="${SPACEO_TEST_BAD_SIGNATURE:-}" \
@@ -95,6 +97,7 @@ run_installer() {
         SPACEO_TEST_EMBEDDED="${SPACEO_TEST_EMBEDDED:-}" SPACEO_TEST_STALL_CLIENT="${SPACEO_TEST_STALL_CLIENT:-}" \
         ${SPACEO_CLIENT_TIMEOUT:+SPACEO_CLIENT_TIMEOUT="$SPACEO_CLIENT_TIMEOUT"} \
         SPACEO_TEST_MACOS="${SPACEO_TEST_MACOS:-}" SPACEO_APP_DIR="$home/Applications" \
+        perl -MPOSIX -e 'POSIX::setsid() or die "setsid: $!\n"; exec @ARGV' \
         bash "$INSTALL_SCRIPT" "$@" < /dev/null
 }
 
@@ -245,7 +248,7 @@ printf '\xff\xfe[mcp_servers]\n' > "$HOME_K/.codex/config.toml"
 : > "$SPACEO_TEST_LOG"
 output="$(run_installer "$HOME_K" 2>&1)" || fail "install with an undecodable config failed: $output"
 grep -Fq 'setup --client codex' "$SPACEO_TEST_LOG" && fail "handed an undecodable Codex config to setup"
-[[ "$output" == *"is not UTF-8 text"* ]] || fail "no warning for the undecodable config: $output"
+[[ "$output" == *"is not a readable UTF-8 file"* ]] || fail "no warning for the undecodable config: $output"
 
 # 18. A client registration that stalls times out instead of hanging the installer.
 HOME_L="$TEST_ROOT/home-l"
@@ -255,6 +258,58 @@ output="$(SPACEO_TEST_STALL_CLIENT=codex SPACEO_CLIENT_TIMEOUT=1 run_installer "
     || fail "install with a stalled client failed: $output"
 (( SECONDS - started < 20 )) || fail "a stalled client registration was not bounded"
 [[ "$output" == *"connecting Codex timed out"* ]] || fail "no timeout warning: $output"
+
+# 19. The signed checksum must be one entry naming this image; a second line or another name
+#     could let `shasum -c` pass without hashing the download.
+HOME_M="$TEST_ROOT/home-m"
+cp "$RELEASE/$NAME.sha256" "$TEST_ROOT/good.sha256"
+{ cat "$TEST_ROOT/good.sha256"; printf '%s  /etc/hosts\n' "$(shasum -a 256 /etc/hosts | awk '{print $1}')"; } \
+    > "$RELEASE/$NAME.sha256"
+if output="$(run_installer "$HOME_M" --no-clients 2>&1)"; then fail "accepted a two-entry checksum"; fi
+[[ "$output" == *"exactly one entry"* ]] || fail "wrong refusal: $output"
+printf '%s  other.dmg\n' "$(awk '{print $1}' "$TEST_ROOT/good.sha256")" > "$RELEASE/$NAME.sha256"
+if output="$(run_installer "$HOME_M" --no-clients 2>&1)"; then fail "accepted a checksum for another file"; fi
+[[ "$output" == *"does not name $NAME.dmg"* ]] || fail "wrong refusal: $output"
+cp "$TEST_ROOT/good.sha256" "$RELEASE/$NAME.sha256"
+[[ ! -e "$HOME_M/.local/bin/spaceo" ]] || fail "installed despite a bad checksum sidecar"
+
+# 20. A directory where the CLI goes is refused instead of receiving the CLI inside it.
+HOME_N="$TEST_ROOT/home-n"
+mkdir -p "$HOME_N/.local/bin/spaceo"
+if output="$(run_installer "$HOME_N" --no-clients 2>&1)"; then fail "installed into a directory"; fi
+[[ "$output" == *"is a directory"* ]] || fail "wrong refusal: $output"
+
+# 21. A LaunchAgent plist on disk is removed even when `daemon status` cannot report it.
+HOME_O="$TEST_ROOT/home-o"
+run_installer "$HOME_O" --no-clients >/dev/null 2>&1 || fail "install for the plist case failed"
+mkdir -p "$HOME_O/Library/LaunchAgents"
+touch "$HOME_O/Library/LaunchAgents/com.spaceo.daemon.plist"
+: > "$SPACEO_TEST_LOG"
+run_installer "$HOME_O" --uninstall --yes >/dev/null 2>&1 || fail "uninstall with a plist failed"
+grep -Fqx 'daemon uninstall --yes' "$SPACEO_TEST_LOG" || fail "plist on disk did not trigger LaunchAgent removal"
+
+# 22. A daemon started as bare `spaceo daemon` through PATH still blocks removing the CLI.
+HOME_P="$TEST_ROOT/home-p"
+run_installer "$HOME_P" --no-clients >/dev/null 2>&1 || fail "install for the PATH-daemon case failed"
+perl -e '$0 = shift; sleep 60' "spaceo daemon --socket via-path" &
+path_daemon=$!
+sleep 0.5
+if output="$(run_installer "$HOME_P" --uninstall --yes 2>&1)"; then
+    kill "$path_daemon"; wait "$path_daemon" 2>/dev/null || true
+    fail "uninstall removed the CLI under a PATH-launched daemon"
+fi
+kill "$path_daemon"; wait "$path_daemon" 2>/dev/null || true
+[[ -x "$HOME_P/.local/bin/spaceo" ]] || fail "CLI removed while a PATH-launched daemon lived"
+
+# 23. A client config that is a FIFO is skipped without blocking on it.
+HOME_Q="$TEST_ROOT/home-q"
+mkdir -p "$HOME_Q/.codex"
+mkfifo "$HOME_Q/.codex/config.toml"
+: > "$SPACEO_TEST_LOG"
+started=$SECONDS
+output="$(run_installer "$HOME_Q" 2>&1)" || fail "install with a FIFO config failed: $output"
+(( SECONDS - started < 20 )) || fail "a FIFO config blocked the installer"
+grep -Fq 'setup --client codex' "$SPACEO_TEST_LOG" && fail "handed a FIFO config to setup"
 
 # No mount point or work directory may outlive a run.
 leftovers="$(find "$TEST_ROOT" -maxdepth 1 -name 'spaceo-install.*')"
