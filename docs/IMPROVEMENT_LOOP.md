@@ -15,7 +15,7 @@ spaceo logging status
 spaceo logging disable           # back to failures-only; existing files age out
 ```
 
-Changes apply within five seconds to a running daemon and to running MCP servers from 1.1.1 on.
+Changes apply within five seconds to a running daemon and to running MCP servers from 1.0.0 on.
 Older MCP servers need their client restarted. For a single run you can override the settings
 file with environment variables: `SPACEO_JOURNAL=off|metadata|full` and `SPACEO_LOG_METRICS=1`.
 `SPACEO_RUN_ID=<name>` tags daemon records so you can compare runs.

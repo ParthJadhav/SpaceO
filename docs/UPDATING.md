@@ -26,7 +26,7 @@ for:
 | Host `SpaceO display ids` | `none` when idle | leftover displays; see [Troubleshooting](TROUBLESHOOTING.md#displays) |
 
 Any CLI command also warns once on stderr when the daemon that answered is a different version
-(`warning: the running daemon is 1.0.0 (pid N); this CLI is 1.1.1 — run spaceo daemon restart
+(`warning: the running daemon is 1.0.0 (pid N); this CLI is 1.0.1 — run spaceo daemon restart
 --operator`), and a command the old daemon does not know fails with `daemon_outdated` (exit 3)
 instead of a bare `unknown command`.
 

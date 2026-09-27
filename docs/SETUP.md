@@ -1,6 +1,6 @@
 # Setup guide
 
-SpaceO is a preview; the current release is [1.1.2](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.1.2).
+The current release is [SpaceO 1.0.0](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.0), the first public release.
 This guide takes you from a source build to a session self-test and MCP configuration. If a step
 fails, see [Troubleshooting](TROUBLESHOOTING.md).
 
@@ -39,7 +39,7 @@ spaceo version
 Set `PREFIX` to install somewhere else: `make install PREFIX=/opt/spaceo`.
 
 `make install` prints the version it installed and, when a daemon is already running a different
-version, says so (`installed 1.1.1 over 1.0.0; the running daemon is still 1.0.0 → spaceo daemon
+version, says so (`installed 1.0.1 over 1.0.0; the running daemon is still 1.0.0 → spaceo daemon
 restart --operator`). It never restarts the daemon for you.
 
 Shell completion is generated from the command table:

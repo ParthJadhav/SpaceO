@@ -133,10 +133,10 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-The source version is `1.1.2`. Its live suite (16/16, no skips) and MCP matrix (36/36) passed
-on 2026-09-26; see [the live record](validation/2026-09-26-release-1.1.1-live.md). The release
-owner directed publication of `v1.1.2` as a native-app and Chromium prerelease through the
-protected candidate and publication jobs. The `v1.1.1` tag exists but was never published: its
-candidate job stopped on a packaging-script version check, fixed in 1.1.2. The historical source-only `v1.1.0` prerelease was
-removed during open-source history cleanup. Follow [docs/INSTALL.md](INSTALL.md) for artifact
+The source version is `1.0.0`, the first public release. The live suite (16/16, no skips) and
+MCP matrix (36/36) passed on 2026-09-26; see [the live record](validation/2026-09-26-release-1.1.1-live.md).
+Display, input, and session code is unchanged since that run. On 2026-09-27 the release owner
+withdrew the earlier `v1.1.0`–`v1.1.2` preview tags and their prerelease, and directed
+publication of `v1.0.0` as the first release through the protected candidate and publication
+jobs. Follow [docs/INSTALL.md](INSTALL.md) for artifact
 verification and maintainer commands.
