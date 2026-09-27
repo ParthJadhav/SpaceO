@@ -40,17 +40,21 @@ def main() -> int:
                 or Path(name).name.startswith(".env.") or name.startswith((".artifacts/", ".release/"))):
             print(f"{name}: private file must not be tracked")
             rejected = True
-        # Deleted working-tree files are harmless; never follow a tracked symlink into user data.
-        if not path.exists() or path.is_symlink():
-            continue
-        if path.stat().st_size > 16 * 1024 * 1024:
-            print(f"{name}: exceeds automatic privacy-review size limit")
-            rejected = True
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue  # Binary assets require visual/metadata review; random bytes are not text.
+        # Git publishes the link target itself. Inspect it even for dangling links, but never
+        # follow the link into user data.
+        if path.is_symlink():
+            text = str(path.readlink())
+        else:
+            if not path.exists():
+                continue
+            if path.stat().st_size > 16 * 1024 * 1024:
+                print(f"{name}: exceeds automatic privacy-review size limit")
+                rejected = True
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue  # Binary assets require visual/metadata review.
         for line, kind in findings(name, text):
             print(f"{name}:{line}: {kind} (value withheld)")
             rejected = True
