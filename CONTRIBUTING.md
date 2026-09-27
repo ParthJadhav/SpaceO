@@ -3,6 +3,12 @@
 Start with [AGENTS.md](AGENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Small, focused pull
 requests are easiest to review. Explain the concrete problem, behavior change, and validation.
 
+Use your GitHub noreply address for public commits. Enable **Keep my email addresses private**
+and **Block command line pushes that expose my email** in [GitHub email settings](https://github.com/settings/emails).
+Local Git configuration alone does not govern GitHub-generated squash commits. Maintainers must
+select the intended author's noreply address explicitly when merging and check the resulting
+metadata; see [the privacy guidance](SECURITY.md#public-identity-and-private-credentials).
+
 Run `make verify-release` and `git diff --check` before opening a pull request. Changes to
 release automation also require `bash Tests/ReleaseSecurityTests.sh`,
 `bash Tests/LiveTestGateTests.sh`, and a warnings-as-errors release build.
