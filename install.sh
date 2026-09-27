@@ -316,7 +316,8 @@ ask() {
     if [[ "$interactive" != 1 ]]; then [[ "$default" == Y ]]; return; fi
     [[ "$default" == Y ]] || hint="[y/N]"
     printf '%s %s ' "$question" "$hint" >/dev/tty
-    IFS= read -r reply </dev/tty || reply=""
+    # End of input (Ctrl-D, a closed terminal) is not consent.
+    IFS= read -r reply </dev/tty || { printf '\n' >/dev/tty; return 1; }
     case "$reply" in
         [Yy]*) return 0 ;;
         [Nn]*) return 1 ;;
