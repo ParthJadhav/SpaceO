@@ -69,11 +69,13 @@ main() {
     local base="https://github.com/$repository/releases/download/v$version"
     step "Downloading SpaceO $version"
     # Bounded before anything is verified, so a bad response cannot fill the disk. The disk
-    # image is about 13 MB; the sidecars are under 16 KB.
+    # image is about 13 MB; the sidecars are under 16 KB. A transfer that stalls below 1 KB/s
+    # for 30 seconds fails, so --retry gets a chance instead of the installer hanging.
     local file limit
     for file in "$name.dmg" "$name.sha256" "$name.sha256.sig"; do
         limit=65536; [[ "$file" != *.dmg ]] || limit=268435456
         curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --max-filesize "$limit" \
+            --connect-timeout 15 --speed-limit 1024 --speed-time 30 \
             -o "$work/$file" "$base/$file" \
             || die "could not download $base/$file"
     done
@@ -174,8 +176,9 @@ check_host() {
 # The /releases/latest page redirects to /releases/tag/vX.Y.Z; no API token or rate limit needed.
 latest_version() {
     local url tag
-    url="$(curl -fsSL --proto '=https' --tlsv1.2 -o /dev/null -w '%{url_effective}' \
-        "https://github.com/$1/releases/latest")" || die "could not reach GitHub to find the latest release"
+    url="$(curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 15 --max-time 60 -o /dev/null \
+        -w '%{url_effective}' "https://github.com/$1/releases/latest")" \
+        || die "could not reach GitHub to find the latest release"
     tag="${url##*/}"
     [[ "$tag" == v* ]] || die "could not determine the latest release (got $url)"
     printf '%s\n' "${tag#v}"
@@ -211,6 +214,11 @@ install_viewer_bundle() {
 add_to_path() {
     local dir="$1" profile line
     [[ ":$PATH:" != *":$dir:"* ]] || return 0
+    # The line is shell code that runs at every login; a path that needs escaping is not written.
+    if [[ "$dir" == *[\"\$\`\\]* || "$dir" == *$'\n'* ]]; then
+        warn "add $dir to your PATH yourself; it contains characters the installer will not write to a profile"
+        return 0
+    fi
     case "$(basename "${SHELL:-/bin/zsh}")" in
         zsh)  profile="${ZDOTDIR:-$HOME}/.zshrc"; line="export PATH=\"$dir:\$PATH\"" ;;
         bash) profile="$HOME/.bash_profile";      line="export PATH=\"$dir:\$PATH\"" ;;
@@ -256,6 +264,12 @@ detect_clients() {
     fi
 }
 
+# The command of Claude Code's user-scope `spaceo` server, or nothing. plutil reads JSON.
+claude_code_command() {
+    [[ -f "$HOME/.claude.json" ]] || return 0
+    plutil -extract mcpServers.spaceo.command raw -o - "$HOME/.claude.json" 2>/dev/null || true
+}
+
 connect_mcp_clients() {
     local cli="$1" assume_yes="$2" interactive="$3" log="$4" found entry id label
     found="$(detect_clients)"
@@ -268,6 +282,12 @@ connect_mcp_clients() {
         id="${entry%%|*}"; label="${entry#*|}"
         if ! ask "Connect SpaceO to $label?" Y "$assume_yes" "$interactive"; then
             note "  skipped; later: spaceo setup --client $id"
+            continue
+        fi
+        # Re-registering Claude Code is remove-then-add; when the entry already names this CLI,
+        # an upgrade has nothing to change and must not risk losing the entry.
+        if [[ "$id" == claude-code && "$(claude_code_command)" == "$cli" ]]; then
+            ok "$label already connected"
             continue
         fi
         # setup edits only the `spaceo` entry and keeps every other server. Its own prompt cannot
@@ -288,21 +308,42 @@ connect_mcp_clients() {
 uninstall_spaceo() {
     local bin_dir="$1" app_dir="$2" assume_yes="$3" interactive="$4" cli="$1/spaceo" removed=0 dir
     header "Uninstalling SpaceO"
-    if [[ -x "$cli" ]]; then
-        # Remove the LaunchAgent first, or launchd restarts the daemon after it stops.
-        if "$cli" daemon status --json 2>/dev/null | grep -q '"installed" *: *true'; then
+    local agent_plist="$HOME/Library/LaunchAgents/com.spaceo.daemon.plist"
+    if [[ ! -x "$cli" ]]; then
+        # Without the CLI nothing here can stop a surviving service, so say what is left.
+        if [[ -e "$agent_plist" ]]; then
+            die "the SpaceO LaunchAgent is still installed but $cli is missing; run:
+    launchctl bootout gui/$(id -u)/com.spaceo.daemon; rm \"$agent_plist\"
+then re-run the uninstall"
+        fi
+        if pgrep -f "^$cli daemon" >/dev/null 2>&1; then
+            die "a SpaceO daemon from $cli is still running but the file is missing; quit it with:
+    pkill -f \"^$cli daemon\"
+then re-run the uninstall"
+        fi
+    else
+        local agent_installed=0 running=0 attempt
+        if "$cli" daemon status --json </dev/null 2>/dev/null | grep -q '"installed" *: *true'; then
+            agent_installed=1
+        fi
+        if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then running=1; fi
+        # Removing the LaunchAgent or stopping the daemon ends every agent's session, so consent
+        # comes before either. Without a terminal, only --yes proceeds.
+        if [[ "$running" == 1 ]]; then
+            ask "A SpaceO daemon is running. Stop it and end any agent sessions on it?" N \
+                "$assume_yes" "$interactive" \
+                || die "the daemon is still running; stop it with \`$cli daemon stop --operator\`, or re-run with --yes"
+        fi
+        # The LaunchAgent goes first, or launchd restarts the daemon after it stops.
+        if [[ "$agent_installed" == 1 ]]; then
             "$cli" daemon uninstall --yes </dev/null >/dev/null 2>&1 \
                 || die "could not remove the SpaceO LaunchAgent; run \`$cli daemon uninstall\`, then re-run"
             ok "removed the SpaceO LaunchAgent"
         fi
-        if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then
-            # Stopping needs operator scope and ends every agent's session, so ask for it
-            # explicitly. Without a terminal, only --yes proceeds.
-            ask "A SpaceO daemon is running. Stop it and end any agent sessions on it?" N \
-                "$assume_yes" "$interactive" \
-                || die "the daemon is still running; stop it with \`$cli daemon stop --operator\`, or re-run with --yes"
-            "$cli" daemon stop --operator </dev/null >/dev/null 2>&1 || true
-            local attempt
+        if [[ "$running" == 1 ]]; then
+            if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then
+                "$cli" daemon stop --operator </dev/null >/dev/null 2>&1 || true
+            fi
             for attempt in 1 2 3 4 5; do
                 "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1 || break
                 [[ "$attempt" != 5 ]] || die "the daemon did not stop; see \`$cli daemon stop --operator\`"

@@ -33,7 +33,11 @@ case "$1 ${2:-}" in
     "daemon wait") [[ -e "$SPACEO_TEST_DAEMON" ]] ;;
     "daemon status")
         if [[ -e "$SPACEO_TEST_AGENT" ]]; then echo '{"installed":true}'; else echo '{"installed":false}'; fi ;;
-    "daemon uninstall") [[ "$*" == *--yes* ]] || exit 2; rm -f "$SPACEO_TEST_AGENT" ;;
+    # Like `launchctl bootout`, removing the LaunchAgent also stops the daemon it supervises.
+    "daemon uninstall")
+        [[ "$*" == *--yes* ]] || exit 2
+        [[ -e "$SPACEO_TEST_AGENT" ]] && rm -f "$SPACEO_TEST_DAEMON"
+        rm -f "$SPACEO_TEST_AGENT" ;;
     "daemon stop")
         [[ "$*" == *--operator* ]] || exit 4
         [[ -e "$SPACEO_TEST_AGENT" ]] || rm -f "$SPACEO_TEST_DAEMON" ;;
@@ -82,6 +86,7 @@ run_installer() {
         TMPDIR="$TEST_ROOT" SPACEO_TEST_LOG="$SPACEO_TEST_LOG" SPACEO_TEST_RELEASE="$RELEASE" \
         SPACEO_TEST_PAYLOAD="$PAYLOAD" SPACEO_TEST_BAD_SIGNATURE="${SPACEO_TEST_BAD_SIGNATURE:-}" \
         SPACEO_TEST_DAEMON="$SPACEO_TEST_DAEMON" SPACEO_TEST_AGENT="$SPACEO_TEST_AGENT" \
+        ${SPACEO_TEST_BIN_DIR:+SPACEO_BIN_DIR="$SPACEO_TEST_BIN_DIR"} \
         SPACEO_TEST_MACOS="${SPACEO_TEST_MACOS:-}" SPACEO_APP_DIR="$home/Applications" \
         bash "$INSTALL_SCRIPT" "$@" < /dev/null
 }
@@ -146,13 +151,20 @@ if output="$(run_installer "$HOME_A" --uninstall 2>&1)"; then fail "uninstall en
 [[ "$output" == *"daemon is still running"* ]] || fail "wrong refusal: $output"
 [[ -x "$HOME_A/.local/bin/spaceo" ]] || fail "CLI removed while its daemon still runs"
 [[ -e "$SPACEO_TEST_DAEMON" ]] || fail "daemon stopped without consent"
+[[ -e "$SPACEO_TEST_AGENT" ]] || fail "LaunchAgent booted out (stopping the daemon) without consent"
 
 # 9. With --yes: the LaunchAgent goes first, the stop is operator-scoped, and only then the CLI.
-: > "$SPACEO_TEST_LOG"
 run_installer "$HOME_A" --uninstall --yes >/dev/null 2>&1 || fail "uninstall --yes failed"
 [[ ! -e "$SPACEO_TEST_AGENT" && ! -e "$SPACEO_TEST_DAEMON" ]] || fail "LaunchAgent or daemon survived"
-grep -Fqx 'daemon stop --operator' "$SPACEO_TEST_LOG" || fail "stop was not operator-scoped"
 [[ ! -e "$HOME_A/.local/bin/spaceo" ]] || fail "uninstall --yes left the CLI"
+
+#    An unsupervised daemon needs an operator-scoped stop; an unscoped one is always refused.
+run_installer "$HOME_A" --no-clients >/dev/null 2>&1 || fail "reinstall failed"
+touch "$SPACEO_TEST_DAEMON"
+: > "$SPACEO_TEST_LOG"
+run_installer "$HOME_A" --uninstall --yes >/dev/null 2>&1 || fail "uninstall of a plain daemon failed"
+grep -Fqx 'daemon stop --operator' "$SPACEO_TEST_LOG" || fail "stop was not operator-scoped"
+[[ ! -e "$SPACEO_TEST_DAEMON" && ! -e "$HOME_A/.local/bin/spaceo" ]] || fail "daemon or CLI survived"
 
 # 10. A Viewer set aside by an interrupted upgrade is restored, then replaced.
 HOME_D="$TEST_ROOT/home-d"
@@ -160,6 +172,31 @@ mkdir -p "$HOME_D/Applications/.SpaceO Viewer.app.old/Contents"
 run_installer "$HOME_D" --no-clients >/dev/null 2>&1 || fail "install over an interrupted upgrade failed"
 [[ -f "$HOME_D/Applications/SpaceO Viewer.app/Contents/marker" ]] || fail "Viewer not installed"
 [[ ! -e "$HOME_D/Applications/.SpaceO Viewer.app.old" ]] || fail "set-aside Viewer left behind"
+
+# 11. A Claude Code entry that already names this CLI is not removed and re-added.
+HOME_E="$TEST_ROOT/home-e"
+mkdir -p "$HOME_E"
+printf '{"mcpServers":{"spaceo":{"type":"stdio","command":"%s","args":["mcp"]}}}\n' \
+    "$HOME_E/.local/bin/spaceo" > "$HOME_E/.claude.json"
+: > "$SPACEO_TEST_LOG"
+output="$(run_installer "$HOME_E" 2>&1)" || fail "install with Claude Code configured failed: $output"
+grep -Fq 'setup --client claude-code' "$SPACEO_TEST_LOG" && fail "re-registered an up-to-date Claude Code entry"
+[[ "$output" == *"Claude Code already connected"* ]] || fail "no already-connected note: $output"
+
+# 12. Uninstall with the CLI gone but its LaunchAgent left fails with recovery steps.
+HOME_F="$TEST_ROOT/home-f"
+mkdir -p "$HOME_F/Library/LaunchAgents"
+touch "$HOME_F/Library/LaunchAgents/com.spaceo.daemon.plist"
+if output="$(run_installer "$HOME_F" --uninstall --yes 2>&1)"; then fail "uninstall ignored an orphaned LaunchAgent"; fi
+[[ "$output" == *"launchctl bootout"* ]] || fail "no recovery guidance: $output"
+
+# 13. An install directory that would need shell escaping is never written to a profile.
+HOME_G="$TEST_ROOT/home-g"
+mkdir -p "$HOME_G"
+output="$(SPACEO_TEST_BIN_DIR="$HOME_G/bin\$(touch pwned)" run_installer "$HOME_G" --no-clients 2>&1)" \
+    || fail "install to an unusual path failed: $output"
+[[ ! -e "$HOME_G/.zshrc" ]] || fail "wrote an unescaped path into .zshrc"
+[[ "$output" == *"add $HOME_G/bin\$(touch pwned) to your PATH yourself"* ]] || fail "no PATH guidance: $output"
 
 # No mount point or work directory may outlive a run.
 leftovers="$(find "$TEST_ROOT" -maxdepth 1 -name 'spaceo-install.*')"

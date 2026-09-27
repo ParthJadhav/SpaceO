@@ -36,10 +36,10 @@ through `spaceo setup --client` and, in a terminal, offers to run `spaceo setup`
 A daemon that is already running is never restarted. The installer says when it is a different
 version. Options, passed as `| bash -s -- OPTIONS`: `--yes`, `--no-setup`, `--no-clients`,
 `--no-viewer`, `--no-modify-path`, `--version X.Y.Z`, `--uninstall`. `SPACEO_BIN_DIR` and
-`SPACEO_APP_DIR` change the install locations. `--uninstall` removes the LaunchAgent. It asks
-before stopping a running daemon, because stopping it ends every agent's sessions. Without a
-terminal, it needs `--yes` to stop the daemon. It removes the CLI only after it has confirmed the
-daemon stopped. If the Viewer in `/Applications` belongs to an administrator, the installer does
+`SPACEO_APP_DIR` change the install locations. When a daemon is running, `--uninstall` asks
+before it removes the LaunchAgent or stops the daemon, because either one ends every agent's
+sessions. Without a terminal, it needs `--yes` to do either. It removes the CLI only after it has
+confirmed the daemon stopped. If the Viewer in `/Applications` belongs to an administrator, the installer does
 not update it and tells you how.
 
 To do each step yourself, continue below.
