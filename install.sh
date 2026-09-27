@@ -58,12 +58,9 @@ main() {
     fi
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a release version: $version"
 
-    local work
-    work="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-install.XXXXXX")"
-    local mount="$work/mount"
-    # Detach before deleting: removing a mounted image's directory would fail and leak the mount.
-    # shellcheck disable=SC2064 # expand now; these locals are gone when the trap runs
-    trap "hdiutil detach '$mount' -quiet >/dev/null 2>&1 || true; rm -rf '$work'" EXIT
+    SPACEO_INSTALL_WORK="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-install.XXXXXX")"
+    trap cleanup_work EXIT
+    local work="$SPACEO_INSTALL_WORK" mount="$SPACEO_INSTALL_WORK/mount"
 
     local name="SpaceO-$version-macOS-arm64"
     local base="https://github.com/$repository/releases/download/v$version"
@@ -108,13 +105,15 @@ main() {
     ok "signed by $team_id, notarized, checksum matches"
 
     step "Installing"
-    local cli="$bin_dir/spaceo" previous=""
-    if [[ -x "$cli" ]]; then previous="$("$cli" version 2>/dev/null | awk '{print $2}')" || true; fi
+    # Whatever is already at this path is replaced, never run: it is unverified and could be
+    # anything a custom SPACEO_BIN_DIR happens to hold.
+    local cli="$bin_dir/spaceo" replaced=""
+    if [[ -e "$cli" ]]; then replaced=" (replaced the previous copy)"; fi
     mkdir -p "$bin_dir"
     # Copy then rename: a running daemon keeps its old inode instead of having its code rewritten.
     install -m 755 "$mount/spaceo" "$bin_dir/.spaceo.new"
     mv -f "$bin_dir/.spaceo.new" "$cli"
-    ok "spaceo $version → $cli${previous:+ (was $previous)}"
+    ok "spaceo $version → $cli$replaced"
 
     if [[ "$install_viewer" == 1 && -z "${SPACEO_APP_DIR:-}" && -d "/Applications/SpaceO Viewer.app" ]]; then
         # A Viewer installed for all users is updated in place: a second copy in ~/Applications
@@ -159,6 +158,15 @@ main() {
         note "Open a new terminal (or run: export PATH=\"$bin_dir:\$PATH\") to use \`spaceo\`."
     fi
     note "Docs: https://github.com/$repository#get-started · Uninstall: re-run with --uninstall"
+}
+
+# Detach before deleting: removing a mounted image's directory would fail and leak the mount.
+# The path is read from a variable, never spliced into trap source, so any TMPDIR is safe.
+SPACEO_INSTALL_WORK=""
+cleanup_work() {
+    [[ -n "$SPACEO_INSTALL_WORK" ]] || return 0
+    hdiutil detach "$SPACEO_INSTALL_WORK/mount" -quiet >/dev/null 2>&1 || true
+    rm -rf "$SPACEO_INSTALL_WORK"
 }
 
 # MARK: - host and release
@@ -245,6 +253,18 @@ report_stale_daemon() {
     fi
 }
 
+# A daemon process started from this CLI path, whether or not its socket answers: a hung or
+# still-starting daemon does not reply to a ping, but its sessions are just as alive.
+daemon_process_exists() {
+    local pattern
+    pattern="$(printf '%s' "$1" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+    pgrep -f "^$pattern daemon" >/dev/null 2>&1
+}
+
+daemon_alive() {
+    "$1" daemon wait --timeout 1 </dev/null >/dev/null 2>&1 || daemon_process_exists "$1"
+}
+
 # MARK: - MCP clients
 
 # Prints `id|display name` for each MCP client that looks installed.
@@ -316,7 +336,7 @@ uninstall_spaceo() {
     launchctl bootout gui/$(id -u)/com.spaceo.daemon; rm \"$agent_plist\"
 then re-run the uninstall"
         fi
-        if pgrep -f "^$cli daemon" >/dev/null 2>&1; then
+        if daemon_process_exists "$cli"; then
             die "a SpaceO daemon from $cli is still running but the file is missing; quit it with:
     pkill -f \"^$cli daemon\"
 then re-run the uninstall"
@@ -326,7 +346,7 @@ then re-run the uninstall"
         if "$cli" daemon status --json </dev/null 2>/dev/null | grep -q '"installed" *: *true'; then
             agent_installed=1
         fi
-        if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then running=1; fi
+        if daemon_alive "$cli"; then running=1; fi
         # Removing the LaunchAgent or stopping the daemon ends every agent's session, so consent
         # comes before either. Without a terminal, only --yes proceeds.
         if [[ "$running" == 1 ]]; then
@@ -344,9 +364,10 @@ then re-run the uninstall"
             if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then
                 "$cli" daemon stop --operator </dev/null >/dev/null 2>&1 || true
             fi
-            for attempt in 1 2 3 4 5; do
-                "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1 || break
-                [[ "$attempt" != 5 ]] || die "the daemon did not stop; see \`$cli daemon stop --operator\`"
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                daemon_alive "$cli" || break
+                [[ "$attempt" != 10 ]] || die "the daemon did not stop; try \`$cli daemon stop --operator\`,
+or quit it with: pkill -f \"^$cli daemon\"; then re-run the uninstall"
                 sleep 1
             done
             ok "stopped the SpaceO daemon"

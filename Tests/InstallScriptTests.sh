@@ -104,10 +104,13 @@ grep -Fqx 'setup --client codex --yes' "$SPACEO_TEST_LOG" || fail "Codex was not
 grep -Fqx 'setup' "$SPACEO_TEST_LOG" && fail "guided setup ran without a terminal"
 [[ "$output" == *"Next: run \`spaceo setup\`"* ]] || fail "missing next step: $output"
 
-# 2. Re-running is an upgrade: the PATH line is not duplicated and the old version is reported.
+# 2. Re-running is an upgrade: the PATH line is not duplicated, and the unverified copy already
+#    in place is replaced without being executed.
+printf '#!/usr/bin/env bash\ntouch "%s/old-copy-ran"\n' "$TEST_ROOT" > "$HOME_A/.local/bin/spaceo"
 output="$(run_installer "$HOME_A" 2>&1)" || fail "re-run failed: $output"
 [[ "$(grep -c 'Added by the SpaceO installer' "$HOME_A/.zshrc")" == 1 ]] || fail "PATH line duplicated"
-[[ "$output" == *"(was 9.9.9)"* ]] || fail "previous version not reported: $output"
+[[ "$output" == *"(replaced the previous copy)"* ]] || fail "replacement not reported: $output"
+[[ ! -e "$TEST_ROOT/old-copy-ran" ]] || fail "installer executed the unverified existing binary"
 
 # 3. Opt-outs are honored.
 HOME_B="$TEST_ROOT/home-b"
@@ -197,6 +200,20 @@ output="$(SPACEO_TEST_BIN_DIR="$HOME_G/bin\$(touch pwned)" run_installer "$HOME_
     || fail "install to an unusual path failed: $output"
 [[ ! -e "$HOME_G/.zshrc" ]] || fail "wrote an unescaped path into .zshrc"
 [[ "$output" == *"add $HOME_G/bin\$(touch pwned) to your PATH yourself"* ]] || fail "no PATH guidance: $output"
+
+# 14. A daemon that is alive but not answering its socket still blocks removing the CLI. perl
+#     renames itself so its command line reads like the daemon's, which is what uninstall matches.
+HOME_H="$TEST_ROOT/home-h"
+run_installer "$HOME_H" --no-clients >/dev/null 2>&1 || fail "install for the hung-daemon case failed"
+perl -e '$0 = shift; sleep 60' "$HOME_H/.local/bin/spaceo daemon --socket hung" &
+hung_daemon=$!
+sleep 0.5
+if output="$(run_installer "$HOME_H" --uninstall --yes 2>&1)"; then
+    kill "$hung_daemon"; fail "uninstall removed the CLI under a live daemon"
+fi
+kill "$hung_daemon"; wait "$hung_daemon" 2>/dev/null || true
+[[ -x "$HOME_H/.local/bin/spaceo" ]] || fail "CLI removed while its daemon process lived"
+[[ "$output" == *"did not stop"* ]] || fail "wrong refusal: $output"
 
 # No mount point or work directory may outlive a run.
 leftovers="$(find "$TEST_ROOT" -maxdepth 1 -name 'spaceo-install.*')"
