@@ -140,10 +140,13 @@ work; successful candidate qualification is still required before publication. T
 signed download remains available until its replacement is verified. The former release tag,
 artifacts, and provenance will then be retired as part of the authorized privacy migration.
 
-Display, input, and session implementation is unchanged from the September 26 live qualification;
-only the embedded version changes in runtime source. The new candidate must receive exact-artifact
-verification and reserved-host qualification. Results will be retained under
-`docs/validation/2026-09-28-privacy-release.md`; until those results exist, publication is pending.
+Display, input, and session implementation is unchanged from the September 26 live qualification.
+Relative to pre-migration main, only the embedded version changes in runtime source; relative to
+1.0.0, the candidate also includes the existing unreadable-MCP-configuration fix. Exact-artifact
+verification, the full live suite, and the full computer-use matrix passed. Interactive Viewer
+qualification remains pending because an external lock controller prevented confirmation of the
+unlocked input and escape path. Results are retained under
+`docs/validation/2026-09-28-privacy-release.md`; publication remains gated.
 
 Publisher name and Team ID remain public code-signing metadata. GitHub retains read-only PR refs
 and cached historical views independently of branch rewrites; source cleanup cannot promise
