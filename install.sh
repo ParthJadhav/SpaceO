@@ -42,7 +42,7 @@ main() {
     if [[ -t 1 ]] && (exec </dev/tty) 2>/dev/null; then interactive=1; fi
 
     if [[ "$uninstall" == 1 ]]; then
-        uninstall_spaceo "$bin_dir" "$app_dir"
+        uninstall_spaceo "$bin_dir" "$app_dir" "$assume_yes" "$interactive"
         return
     fi
 
@@ -68,9 +68,13 @@ main() {
     local name="SpaceO-$version-macOS-arm64"
     local base="https://github.com/$repository/releases/download/v$version"
     step "Downloading SpaceO $version"
-    local file
+    # Bounded before anything is verified, so a bad response cannot fill the disk. The disk
+    # image is about 13 MB; the sidecars are under 16 KB.
+    local file limit
     for file in "$name.dmg" "$name.sha256" "$name.sha256.sig"; do
-        curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$work/$file" "$base/$file" \
+        limit=65536; [[ "$file" != *.dmg ]] || limit=268435456
+        curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --max-filesize "$limit" \
+            -o "$work/$file" "$base/$file" \
             || die "could not download $base/$file"
     done
 
@@ -110,18 +114,19 @@ main() {
     mv -f "$bin_dir/.spaceo.new" "$cli"
     ok "spaceo $version → $cli${previous:+ (was $previous)}"
 
-    if [[ "$install_viewer" == 1 ]]; then
-        # Update a Viewer already installed for all users in place instead of adding a second copy.
-        if [[ -z "${SPACEO_APP_DIR:-}" && -d "/Applications/SpaceO Viewer.app" && -w "/Applications" ]]; then
+    if [[ "$install_viewer" == 1 && -z "${SPACEO_APP_DIR:-}" && -d "/Applications/SpaceO Viewer.app" ]]; then
+        # A Viewer installed for all users is updated in place: a second copy in ~/Applications
+        # would sit behind it, since doctor and Launch Services find /Applications first.
+        if [[ -w "/Applications" && -w "/Applications/SpaceO Viewer.app" ]]; then
             app_dir="/Applications"
+        else
+            warn "SpaceO Viewer in /Applications belongs to an administrator; not updating it."
+            note "    To update it, open $base/$name.dmg and drag the Viewer to Applications."
+            install_viewer=0
         fi
-        mkdir -p "$app_dir"
-        local viewer="$app_dir/SpaceO Viewer.app" staged="$app_dir/.SpaceO Viewer.app.new"
-        rm -rf "$staged"
-        ditto "$mount/SpaceO Viewer.app" "$staged"
-        rm -rf "$viewer"
-        mv "$staged" "$viewer"
-        ok "SpaceO Viewer → $viewer"
+    fi
+    if [[ "$install_viewer" == 1 ]]; then
+        install_viewer_bundle "$mount/SpaceO Viewer.app" "$app_dir"
     fi
     hdiutil detach "$mount" -quiet >/dev/null 2>&1 || true
 
@@ -174,6 +179,31 @@ latest_version() {
     tag="${url##*/}"
     [[ "$tag" == v* ]] || die "could not determine the latest release (got $url)"
     printf '%s\n' "${tag#v}"
+}
+
+# MARK: - Viewer
+
+# Stage the new bundle, set the old one aside, then move the new one into place. If the move fails,
+# the old Viewer is put back. If the installer is killed between the two moves, the next run
+# restores the set-aside copy before it starts.
+install_viewer_bundle() {
+    local source="$1" dir="$2"
+    local viewer="$dir/SpaceO Viewer.app"
+    local staged="$dir/.SpaceO Viewer.app.new" previous="$dir/.SpaceO Viewer.app.old"
+    mkdir -p "$dir"
+    if [[ -d "$previous" && ! -e "$viewer" ]]; then mv "$previous" "$viewer"; fi
+    rm -rf "$staged" "$previous"
+    ditto "$source" "$staged" || { rm -rf "$staged"; die "could not copy SpaceO Viewer to $dir"; }
+    if [[ -e "$viewer" ]]; then
+        mv "$viewer" "$previous" || { rm -rf "$staged"; die "could not replace $viewer"; }
+    fi
+    if ! mv "$staged" "$viewer"; then
+        if [[ -d "$previous" ]]; then mv "$previous" "$viewer" || true; fi
+        rm -rf "$staged"
+        die "could not install $viewer; the previous Viewer was kept"
+    fi
+    rm -rf "$previous"
+    ok "SpaceO Viewer → $viewer"
 }
 
 # MARK: - PATH
@@ -253,13 +283,33 @@ connect_mcp_clients() {
 
 # MARK: - uninstall
 
+# The CLI is removed only after its daemon is confirmed gone: deleting it first would leave a
+# running daemon (or a LaunchAgent that restarts one) with no command left to stop it.
 uninstall_spaceo() {
-    local bin_dir="$1" app_dir="$2" cli="$1/spaceo" removed=0 dir
+    local bin_dir="$1" app_dir="$2" assume_yes="$3" interactive="$4" cli="$1/spaceo" removed=0 dir
     header "Uninstalling SpaceO"
     if [[ -x "$cli" ]]; then
-        # A LaunchAgent would restart the daemon; remove it before stopping.
-        "$cli" daemon uninstall >/dev/null 2>&1 || true
-        "$cli" daemon stop >/dev/null 2>&1 || true
+        # Remove the LaunchAgent first, or launchd restarts the daemon after it stops.
+        if "$cli" daemon status --json 2>/dev/null | grep -q '"installed" *: *true'; then
+            "$cli" daemon uninstall --yes </dev/null >/dev/null 2>&1 \
+                || die "could not remove the SpaceO LaunchAgent; run \`$cli daemon uninstall\`, then re-run"
+            ok "removed the SpaceO LaunchAgent"
+        fi
+        if "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1; then
+            # Stopping needs operator scope and ends every agent's session, so ask for it
+            # explicitly. Without a terminal, only --yes proceeds.
+            ask "A SpaceO daemon is running. Stop it and end any agent sessions on it?" N \
+                "$assume_yes" "$interactive" \
+                || die "the daemon is still running; stop it with \`$cli daemon stop --operator\`, or re-run with --yes"
+            "$cli" daemon stop --operator </dev/null >/dev/null 2>&1 || true
+            local attempt
+            for attempt in 1 2 3 4 5; do
+                "$cli" daemon wait --timeout 1 </dev/null >/dev/null 2>&1 || break
+                [[ "$attempt" != 5 ]] || die "the daemon did not stop; see \`$cli daemon stop --operator\`"
+                sleep 1
+            done
+            ok "stopped the SpaceO daemon"
+        fi
         rm -f "$cli"; ok "removed $cli"; removed=1
     fi
     # Like install, only look in /Applications when no location was chosen.

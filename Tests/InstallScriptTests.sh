@@ -21,14 +21,23 @@ mkdir -p "$MOCK_BIN" "$RELEASE" "$PAYLOAD/SpaceO Viewer.app/Contents"
 export SPACEO_TEST_LOG="$TEST_ROOT/spaceo-calls.log"
 export SPACEO_TEST_RELEASE="$RELEASE" SPACEO_TEST_PAYLOAD="$PAYLOAD"
 
-# The payload the fake disk image "contains". The CLI records every invocation.
+# The payload the fake disk image "contains". The CLI records every invocation. A running daemon
+# and an installed LaunchAgent are marker files; only an operator-scoped stop ends the daemon,
+# like the real one, and a LaunchAgent keeps restarting it.
+export SPACEO_TEST_DAEMON="$TEST_ROOT/daemon-running" SPACEO_TEST_AGENT="$TEST_ROOT/agent-installed"
 cat > "$PAYLOAD/spaceo" <<'MOCK'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$SPACEO_TEST_LOG"
-case "$1" in
-    version) echo "spaceo 9.9.9" ;;
-    daemon) [[ "$2" == wait ]] && exit 1; exit 0 ;;
-    setup) exit 0 ;;
+case "$1 ${2:-}" in
+    "version "*) echo "spaceo 9.9.9" ;;
+    "daemon wait") [[ -e "$SPACEO_TEST_DAEMON" ]] ;;
+    "daemon status")
+        if [[ -e "$SPACEO_TEST_AGENT" ]]; then echo '{"installed":true}'; else echo '{"installed":false}'; fi ;;
+    "daemon uninstall") [[ "$*" == *--yes* ]] || exit 2; rm -f "$SPACEO_TEST_AGENT" ;;
+    "daemon stop")
+        [[ "$*" == *--operator* ]] || exit 4
+        [[ -e "$SPACEO_TEST_AGENT" ]] || rm -f "$SPACEO_TEST_DAEMON" ;;
+    "setup "*) exit 0 ;;
 esac
 MOCK
 chmod 755 "$PAYLOAD/spaceo"
@@ -72,6 +81,7 @@ run_installer() {
     env -i PATH="$MOCK_BIN:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$home" SHELL=/bin/zsh \
         TMPDIR="$TEST_ROOT" SPACEO_TEST_LOG="$SPACEO_TEST_LOG" SPACEO_TEST_RELEASE="$RELEASE" \
         SPACEO_TEST_PAYLOAD="$PAYLOAD" SPACEO_TEST_BAD_SIGNATURE="${SPACEO_TEST_BAD_SIGNATURE:-}" \
+        SPACEO_TEST_DAEMON="$SPACEO_TEST_DAEMON" SPACEO_TEST_AGENT="$SPACEO_TEST_AGENT" \
         SPACEO_TEST_MACOS="${SPACEO_TEST_MACOS:-}" SPACEO_APP_DIR="$home/Applications" \
         bash "$INSTALL_SCRIPT" "$@" < /dev/null
 }
@@ -125,9 +135,31 @@ if output="$(SPACEO_TEST_MACOS=13.6 run_installer "$HOME_C" 2>&1)"; then fail "a
 # 7. Uninstall stops the daemon before removing the CLI and Viewer.
 : > "$SPACEO_TEST_LOG"
 run_installer "$HOME_A" --uninstall >/dev/null 2>&1 || fail "uninstall failed"
-grep -Fqx 'daemon stop' "$SPACEO_TEST_LOG" || fail "uninstall did not stop the daemon"
+grep -Fq 'daemon stop' "$SPACEO_TEST_LOG" && fail "uninstall stopped a daemon that was not running"
 [[ ! -e "$HOME_A/.local/bin/spaceo" ]] || fail "uninstall left the CLI"
 [[ ! -e "$HOME_A/Applications/SpaceO Viewer.app" ]] || fail "uninstall left the Viewer"
+
+# 8. With a daemon running, uninstall without --yes and without a terminal keeps everything.
+run_installer "$HOME_A" --no-clients >/dev/null 2>&1 || fail "reinstall failed"
+touch "$SPACEO_TEST_DAEMON" "$SPACEO_TEST_AGENT"
+if output="$(run_installer "$HOME_A" --uninstall 2>&1)"; then fail "uninstall ended live sessions without consent"; fi
+[[ "$output" == *"daemon is still running"* ]] || fail "wrong refusal: $output"
+[[ -x "$HOME_A/.local/bin/spaceo" ]] || fail "CLI removed while its daemon still runs"
+[[ -e "$SPACEO_TEST_DAEMON" ]] || fail "daemon stopped without consent"
+
+# 9. With --yes: the LaunchAgent goes first, the stop is operator-scoped, and only then the CLI.
+: > "$SPACEO_TEST_LOG"
+run_installer "$HOME_A" --uninstall --yes >/dev/null 2>&1 || fail "uninstall --yes failed"
+[[ ! -e "$SPACEO_TEST_AGENT" && ! -e "$SPACEO_TEST_DAEMON" ]] || fail "LaunchAgent or daemon survived"
+grep -Fqx 'daemon stop --operator' "$SPACEO_TEST_LOG" || fail "stop was not operator-scoped"
+[[ ! -e "$HOME_A/.local/bin/spaceo" ]] || fail "uninstall --yes left the CLI"
+
+# 10. A Viewer set aside by an interrupted upgrade is restored, then replaced.
+HOME_D="$TEST_ROOT/home-d"
+mkdir -p "$HOME_D/Applications/.SpaceO Viewer.app.old/Contents"
+run_installer "$HOME_D" --no-clients >/dev/null 2>&1 || fail "install over an interrupted upgrade failed"
+[[ -f "$HOME_D/Applications/SpaceO Viewer.app/Contents/marker" ]] || fail "Viewer not installed"
+[[ ! -e "$HOME_D/Applications/.SpaceO Viewer.app.old" ]] || fail "set-aside Viewer left behind"
 
 # No mount point or work directory may outlive a run.
 leftovers="$(find "$TEST_ROOT" -maxdepth 1 -name 'spaceo-install.*')"
