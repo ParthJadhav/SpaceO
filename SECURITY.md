@@ -54,3 +54,22 @@ Examples of issues that should be reported privately include:
 - unsafe process termination or recovery-ledger manipulation;
 - disclosure of screenshots, Accessibility data, clipboard data, credentials, or local paths;
 - a signing, notarization, update, or artifact-verification bypass.
+
+## Public identity and private credentials
+
+Developer ID signatures contain the certificate holder's identity and Apple Team ID. These are
+public publisher metadata, not authentication secrets; the installer pins the expected publisher
+to reject another developer's signed software. Removing the check would weaken verification and
+would not conceal identity already present in downloaded signatures. Signing private keys,
+certificate-export passwords, notarization keys, and GitHub tokens must remain private.
+
+Use a GitHub-provided noreply address for Git commits. Source edits do not remove personal email
+addresses from previous commit objects, old pull-request diffs, cached content, or existing clones.
+History removal needs a coordinated rewrite and, for a released commit, a replacement provenance
+plan. Never publish a mailmap containing the email being removed as a privacy fix.
+
+`python3 scripts/check-public-privacy.py` checks tracked text and private file types without
+printing matched values. CI also scans history with Gitleaks. These checks do not prove that all
+personal data is absent: visually review media and inspect public logs, artifacts, discussions,
+and release metadata. Live qualification retains raw evidence privately on the dedicated runner;
+only reviewed, redacted summaries may be made public.

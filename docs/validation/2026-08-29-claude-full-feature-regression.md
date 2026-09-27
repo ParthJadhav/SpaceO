@@ -48,7 +48,7 @@ binding because one isolated cache-enumeration hardening change landed after tha
 | `Tests/ReleaseSecurityTests.sh` | **PASS** (not invoked by any Makefile target; run by hand) |
 | `Tests/LiveTestGateTests.sh` | **PASS** (same) |
 | `make computer-use-check-full` | **PASS** on UUID `16923e02-…` — **30/30 exercised steps**, exit 0, native + Chromium + Electron, no skips; the later isolated partial-enumeration hardening is covered by the final 554-test suite and 8 focused blackout tests |
-| `make viewer` | **PASS** — bundle built and signed with Developer ID Application (Team `75LRT8TRQY`), satisfies its Designated Requirement |
+| `make viewer` | **PASS** — bundle built and signed with Developer ID Application from the [expected publisher](../INSTALL.md), satisfies its Designated Requirement |
 | `make release-check` | **PASS** — release configuration consistent for 1.0.0 |
 | `make release-dry-run` | **PASS** — plan printed, signing identity and notarization input reported `MISSING (publication will fail closed)`, nothing mutated |
 | `make release-preflight` | **fails closed** as designed without `SPACEO_CODESIGN_IDENTITY` — correct behaviour, not a defect |

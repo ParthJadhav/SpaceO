@@ -16,6 +16,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ### Fixed
 
+- Remove personal signing names from release examples and routine build output. Keep raw
+  live-qualification diagnostics and reports private, and check public source files for common
+  personal-data disclosures in CI. Publisher signature verification remains pinned.
 - `spaceo setup --client codex|cursor|claude-desktop` now refuses to write when the existing
   config file cannot be read as UTF-8. Before, it treated that file as missing and replaced it,
   losing every other setting in it.

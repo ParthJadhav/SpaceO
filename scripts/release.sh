@@ -128,7 +128,7 @@ configure_signing() {
     [[ "$SIGNING_IDENTITY" == "Developer ID Application:"* ]] \
         || fail "SPACEO_CODESIGN_IDENTITY must be a Developer ID Application identity"
     [[ "$SIGNING_IDENTITY" =~ \("$PUBLISHER_TEAM_ID"\)$ ]] \
-        || fail "SPACEO_CODESIGN_IDENTITY must belong to SpaceO publisher team $PUBLISHER_TEAM_ID"
+        || fail "SPACEO_CODESIGN_IDENTITY must belong to the expected SpaceO publisher"
     security find-identity -v -p codesigning 2>/dev/null \
         | grep -F "\"$SIGNING_IDENTITY\"" >/dev/null \
         || fail "the requested Developer ID Application identity is not installed"
@@ -176,7 +176,7 @@ run_preflight() {
     configure_notary
     xcrun notarytool history "${NOTARY_ARGS[@]}" >/dev/null
     echo "release preflight passed for SpaceO $VERSION"
-    echo "signing identity   : $SIGNING_IDENTITY"
+    echo "signing identity   : configured publisher verified"
     echo "notarization input : $NOTARY_MODE"
 }
 
@@ -245,7 +245,7 @@ assert_publisher_signature() {
     grep -F "Timestamp=" <<<"$details" >/dev/null \
         || fail "artifact signature has no secure timestamp: $executable"
     grep -F "TeamIdentifier=$PUBLISHER_TEAM_ID" <<<"$details" >/dev/null \
-        || fail "artifact is not signed by SpaceO publisher team $PUBLISHER_TEAM_ID: $executable"
+        || fail "artifact is not signed by the expected SpaceO publisher: $executable"
     grep -E '^CodeDirectory .*flags=.*\(runtime\)' <<<"$details" >/dev/null \
         || fail "artifact signature does not enable the hardened runtime: $executable"
 }
@@ -269,7 +269,7 @@ assert_checksum_signature() {
     grep -F "Timestamp=" <<<"$details" >/dev/null \
         || fail "checksum signature has no secure timestamp"
     grep -F "TeamIdentifier=$PUBLISHER_TEAM_ID" <<<"$details" >/dev/null \
-        || fail "checksum is not signed by SpaceO publisher team $PUBLISHER_TEAM_ID"
+        || fail "checksum is not signed by the expected SpaceO publisher"
 }
 
 assert_candidate_signature() {
@@ -292,7 +292,7 @@ assert_candidate_signature() {
     grep -F "Timestamp=" <<<"$details" >/dev/null \
         || fail "candidate record signature has no secure timestamp"
     grep -F "TeamIdentifier=$PUBLISHER_TEAM_ID" <<<"$details" >/dev/null \
-        || fail "candidate record is not signed by SpaceO publisher team $PUBLISHER_TEAM_ID"
+        || fail "candidate record is not signed by the expected SpaceO publisher"
 }
 
 file_sha256() {
@@ -349,7 +349,7 @@ verify_distribution() {
     verify_checksum_contents "$artifact" "$checksum"
     xcrun stapler validate "$artifact"
     codesign --verify --strict -R "$(publisher_requirement dev.spaceo.dmg)" "$artifact"
-    spctl --assess --type open --context context:primary-signature --verbose=4 "$artifact"
+    spctl --assess --type open --context context:primary-signature "$artifact"
 
     mount_point="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-verify.XXXXXX")"
     ACTIVE_MOUNT="$mount_point"
@@ -366,7 +366,7 @@ verify_distribution() {
     # Gatekeeper's execute assessment accepts only app bundles; it rejects every bare CLI tool,
     # notarized or not. The CLI is pinned by its designated requirement above and ships inside
     # the notarized, stapled DMG.
-    spctl --assess --type execute --verbose=4 "$app"
+    spctl --assess --type execute "$app"
     assert_embedded_versions "$cli" "$app"
 
     hdiutil detach "$mount_point" -quiet
@@ -439,7 +439,7 @@ package_distribution() {
     notarize "$app_zip" "Viewer"
     xcrun stapler staple "$app"
     xcrun stapler validate "$app"
-    spctl --assess --type execute --verbose=4 "$app"
+    spctl --assess --type execute "$app"
 
     cp "$REPOSITORY_ROOT/README.md" "$stage/README.md"
     cp "$REPOSITORY_ROOT/docs/INSTALL.md" "$stage/INSTALL.md"
@@ -483,7 +483,7 @@ package_distribution() {
         shasum -a 256 -c "$(basename "$checksum")"
     )
     xcrun stapler validate "$artifact"
-    spctl --assess --type open --context context:primary-signature --verbose=4 "$artifact"
+    spctl --assess --type open --context context:primary-signature "$artifact"
 
     echo "release artifact : $artifact"
     echo "checksum         : $checksum"
@@ -692,7 +692,6 @@ case "$command" in
         echo "SpaceO release dry run (no build, signing, upload, or publication performed)"
         echo "version            : $VERSION"
         echo "artifact           : $RELEASE_ROOT/$VERSION/SpaceO-$VERSION-macOS-$architecture.dmg"
-        echo "publisher team     : $PUBLISHER_TEAM_ID"
         if [[ -n "$SIGNING_IDENTITY" ]]; then
             echo "signing identity   : explicit input supplied"
         else

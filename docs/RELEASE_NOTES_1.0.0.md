@@ -44,7 +44,7 @@ Authenticate the checksum and the DMG as described in
 [INSTALL.md](INSTALL.md) before running anything, then follow the
 [setup guide](SETUP.md). You can also build from source with `make install`.
 
-The DMG is Developer ID-signed (Team ID `75LRT8TRQY`), notarized, and stapled by the release
+The DMG is Developer ID-signed by the [expected publisher](INSTALL.md), notarized, and stapled by the release
 workflow. It ships with a signed checksum and a signed candidate record that binds the artifacts
 to the exact commit, tag, and workflow run.
 
