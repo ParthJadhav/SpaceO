@@ -2,7 +2,8 @@
 
 SpaceO 1.0.0 is the first public release. It gives AI agents their own headless macOS displays,
 so they can work in real applications while you keep using your Mac. Agent apps render off
-screen, input goes to their windows, and your pointer and frontmost app stay yours.
+screen and input goes to their windows without moving your pointer. SpaceO never deliberately
+activates an agent's app; if an app activates itself, SpaceO reports it as an isolation breach.
 
 This release covers native macOS apps and Chromium browsers on Apple Silicon.
 
