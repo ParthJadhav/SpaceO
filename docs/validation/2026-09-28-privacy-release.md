@@ -1,6 +1,6 @@
 # Privacy maintenance release qualification
 
-Version: `1.0.1`. Status: **qualification passed; protected publication pending**.
+Version: `1.0.1`. Status: **checks passed for physical-display Viewer use; owner scope approval pending**.
 
 The owner authorized history rewriting and a replacement release, and reserved this Mac for
 live qualification on September 28, 2026. This is implementer qualification on the owner's
@@ -56,6 +56,17 @@ The live suite ran against the candidate source tree. The matrix ran against the
 candidate, not a local development build. It exercised native and Chromium placement,
 Accessibility, input, capture, isolation reporting, cleanup, and enforced Electron refusal.
 
+## Pre-mutation preflight
+
+The retained `spaceo doctor --json` result was obtained using the exact candidate CLI and its
+isolated candidate daemon **before creating the focused qualification session**. It reported
+`ok: true`, `canDrive: true`, `canCapture: true`, daemon version `1.0.1`, and
+`daemon.matchesCLI: true`. Readiness was `ready` with no blockers; lifecycle safety was `ready`.
+The display inventory contained one physical display, online and active, no mirrored user display,
+zero SpaceO displays, and zero orphan SpaceO displays. Accessibility and Screen Recording were
+granted; no grants or host configuration were changed. The default pre-existing daemon was left
+untouched. Private preflight SHA-256: `a63eb994a03f7d76f9c2275d6772cb7a2787f0d90f89e4b7023432ac42dd095f`.
+
 ## Interactive qualification and recovery
 
 The initial check was blocked by an external lock controller. It was stopped and cleaned up;
@@ -89,8 +100,9 @@ to its display before control. Results:
 - Skip resumed the agent, and subsequent agent text was confirmed in the target document.
 
 The earlier full live suite and exact-candidate matrix were not rerun. Source, scripts, workflows,
-and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is not
-part of this qualified arrangement; use Viewer on the physical display for human control.
+and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is formally excluded from the proposed 1.0.1 supported scope
+and disclosed in release notes and user guidance; no runtime fix is claimed. Publication remains
+blocked until the owner accepts that limitation. Use Viewer on the physical display for human control.
 
 Final cleanup left zero SpaceO displays, zero orphan displays, lifecycle safety ready, and the
 same physical display topology. All pre-existing regular applications and the pre-existing daemon

@@ -159,6 +159,12 @@ spaceo session destroy
 spaceo daemon stop
 ```
 
+
+For 1.0.1, use Viewer on a physical display while the controlled application runs on a SpaceO
+virtual display. Hosting Viewer itself on a SpaceO virtual display is not qualified or supported:
+that nested arrangement showed intermittent stream staleness during qualification. No runtime
+fix for nested Viewer use is included in this privacy maintenance candidate.
+
 **Open the Viewer from a source build**
 
 ```bash

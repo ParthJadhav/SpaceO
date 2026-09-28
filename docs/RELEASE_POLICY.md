@@ -43,6 +43,13 @@ slices and the combined artifact are independently verified.
 ## Required artifact qualification
 
 The release owner selected a **native-app and Chromium** scope on 2026-09-24.
+For the proposed 1.0.1 privacy maintenance release, human Viewer control is qualified only
+with Viewer on a physical display and the target application on a SpaceO virtual display.
+Running Viewer inside a SpaceO virtual display is excluded: qualification observed intermittent
+stream staleness in that nested arrangement, and no runtime fix is claimed. The owner must
+accept this disclosed scope before publication. This limitation is also recorded in the release
+notes, README, installation, and setup guidance.
+
 Managed Electron launches are outside this scope and must return
 `unsupported_target` before starting a process. The full computer-use matrix must exercise
 native and Chromium behavior and verify Electron refusal; refusal is an enforced product
@@ -134,9 +141,10 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.1` is being qualified for a privacy maintenance release. The owner authorized public
+Version `1.0.1` has passed the required checks for the physical-display Viewer scope described
+above; owner acceptance of that disclosed scope and protected publication remain pending. The owner authorized public
 history cleanup and a new release on September 28, 2026. This authorizes the migration and release
-work; successful candidate qualification is still required before publication. The existing
+work. The completed checks do not authorize silently expanding the qualified Viewer arrangement. The existing
 signed download remains available until its replacement is verified. The former release tag,
 artifacts, and provenance will then be retired as part of the authorized privacy migration.
 
@@ -147,7 +155,8 @@ verification, the full live suite, and the full computer-use matrix passed. Inte
 qualification also passed after normal owner unlock, with Viewer on the built-in display and
 the synthetic target on a virtual display. The retained record documents the inspected nested
 automation limitations and final cleanup. Results are retained under
-`docs/validation/2026-09-28-privacy-release.md`; protected publication is the next step.
+`docs/validation/2026-09-28-privacy-release.md`. The owner must accept the disclosed scope before
+protected publication proceeds.
 
 Publisher name and Team ID remain public code-signing metadata. GitHub retains read-only PR refs
 and cached historical views independently of branch rewrites; source cleanup cannot promise

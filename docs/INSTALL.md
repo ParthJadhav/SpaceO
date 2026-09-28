@@ -6,6 +6,12 @@ containing two signed executables:
 - `spaceo`, the CLI, daemon, and MCP server
 - `SpaceO Viewer.app`, the optional graphical console
 
+
+For 1.0.1, use Viewer on a physical display while the controlled application runs on a SpaceO
+virtual display. Hosting Viewer itself on a SpaceO virtual display is not qualified or supported:
+that nested arrangement showed intermittent stream staleness during qualification. No runtime
+fix for nested Viewer use is included in this privacy maintenance candidate.
+
 This is a direct Developer ID distribution, not a Mac App Store release. The disk image and Viewer
 must be notarized and stapled. Each release also includes a SHA-256
 sidecar and a detached Developer ID signature over that sidecar. Official SpaceO releases are
