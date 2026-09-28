@@ -95,7 +95,7 @@ SPAO-145, and SPAO-150, and moves SPAO-155, SPAO-158, SPAO-163, and SPAO-168 to 
   inferred key/text-route evidence, retaining `unknown`/`partial` when unavailable.
 - The MCP surface has 19 tools, including target listing/attachment. The computer-use fixture now
   covers sliders, modifier-extended multi-select, and right-click context actions, reports a parity
-  percentage, and publishes its JSON report from the live workflow.
+  percentage, and writes a structured JSON report.
 
 These deterministic results do not replace the required live, signed-candidate, artifact-qualification, or
 GitHub-hosted evidence below. The final source-gate results and commit ID must be refreshed again
@@ -114,8 +114,7 @@ This state was rechecked read-only on GitHub on 2026-09-03 and must be rechecked
 | `release` secrets | All six expected secret names exist | Reconfirm without exposing values |
 | `release` protection | No protection rules | Owner decision; credentials are otherwise usable immediately |
 | `release-publication` protection | **No protection rules** | Required authorized publication reviewer(s) configured |
-| Self-hosted runners | 1 (`spaceo-mac`, registered 2026-09-18; no TCC grants yet) | Runner process granted Accessibility and Screen Recording |
-| Repository variables | `SPACEO_LIVE_RUNNER_LABELS` = `["self-hosted","macOS","ARM64","spaceo-mac"]` | Unchanged |
+| Self-hosted runners | None; the live workflow was removed | Live qualification runs locally |
 
 The original attempt for run `33369358313` had an empty step list because an Actions budget blocked
 it. Attempt 2 passed in 2m30s after the budget was restored. Preserve its URL and result, then run
@@ -135,7 +134,7 @@ the following P0/P1 qualification items:
 - SPAO-155 — Viewer lifecycle/recovery controls need live interaction verification (P1);
 - SPAO-158 — activity and pause/resume arbitration need live interaction verification (P1);
 - SPAO-163 — granted-host proxy verification completed in the 2026-09-05 capture record; and
-- SPAO-168 — expanded matrix passed 36/36 on 2026-09-05; final-candidate CI/runner evidence remains separate.
+- SPAO-168 — expanded matrix passed 36/36 on 2026-09-05; a retained local `make computer-use-check-full` run on the final candidate remains separate.
 
 SPAO-148 described context leakage; the retained 2026-09-05 rendered-pixel proof closes its
 implementation verification. It does not qualify a future artifact automatically. SPAO-143, SPAO-145, and
@@ -185,35 +184,17 @@ make release-check
 make release-dry-run
 ```
 
-### 3. Provision and run the live qualification host
+### 3. Run live qualification locally
 
-Since 2026-09-18 the runner `spaceo-mac` is registered and `SPACEO_LIVE_RUNNER_LABELS` points at
-it; all workflows run there. What remains is the TCC provisioning of that host. Follow
-`docs/LIVE_TESTS.md`:
+No self-hosted runner or live workflow remains; qualification is a local run. Follow
+`docs/LIVE_TESTS.md` on an otherwise idle, persistent graphical login with Accessibility and
+Screen Recording granted. Admit only an Apple Silicon host on the pinned toolchain, using the
+checks in `docs/LIVE_TESTS.md`, and retain their results. Before interpreting any run, require
+`spaceo doctor` to report `can drive sessions: yes`, `can capture: yes`, and that the daemon image
+matches the CLI. Both runs below must execute every test with zero failures and
+zero skips; retain the logs privately.
 
-1. Keep the runner on the pinned toolchain (`DEVELOPER_DIR` in the workflows: Xcode 27.0 / Swift 6.4).
-2. Use an otherwise idle, persistent graphical login.
-3. Grant Accessibility and Screen Recording to the runner process that actually launches tests,
-   not merely to Terminal.
-4. Give it a distinctive label such as `spaceo-live`.
-5. Set `SPACEO_LIVE_RUNNER_LABELS`, for example:
-
-   ```json
-   ["self-hosted","macOS","ARM64","spaceo-mac"]
-   ```
-
-Before interpreting any run, require `spaceo doctor` to report `can drive sessions: yes`,
-`can capture: yes`, and that the daemon image matches the CLI. Dispatch **Live WindowServer tests**
-against the final commit. The run must execute every test with zero failures and zero skips; retain
-the uploaded log and run URL.
-
-An equivalent dedicated-login local run is:
-
-```bash
-swift run spaceo doctor
-SPACEO_LIVE_TESTS=1 make test-live-full
-SPACEO_LIVE_TESTS=1 make computer-use-check-full
-```
+Run the complete qualification block in [the live-test guide](LIVE_TESTS.md#qualification-run).
 
 The owner-authorized existing login may be used under the precautions in
 [the live-test guide](LIVE_TESTS.md). The suite creates displays, launches applications, and

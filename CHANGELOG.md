@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Remove the self-hosted `Live WindowServer tests` workflow. Live qualification runs locally
+  only; CI and release jobs stay on GitHub-hosted runners.
+
 ## [1.0.3] - 2026-09-28
 
 - Published by explicit owner direction after disclosure of incomplete Viewer pointer evidence

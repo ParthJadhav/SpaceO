@@ -440,8 +440,7 @@ suite was skipped. A suite whose host application is missing (Chrome for web)
 is reported as `SKIP`, counts toward no pass total, and keeps the run out of exit `0`: an
 unexercised capability is unknown, not working. Pass `--require-full` for release-time runs to
 turn any skip into an exit `1`. The harness reports `passed / exercised` and a computer-use parity
-percentage, writes the same percentage into its structured JSON report, and the live workflow
-publishes that report as an artifact. The [2026-09-05 expanded matrix](validation/2026-09-05-signed-matrix-clean-actions.json)
+percentage, and writes the same percentage into its structured JSON report. The [2026-09-05 expanded matrix](validation/2026-09-05-signed-matrix-clean-actions.json)
 passed 36/36 (100%) on the authorized development login, including slider, multi-select, and
 context actions, with zero failures, blocks, or skips. This is development-host evidence;
 qualification of the exact public distribution remains required.

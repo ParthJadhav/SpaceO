@@ -677,16 +677,18 @@ user's whole machine in a bad state.
 - Priority: **P1**
 - Status: Done — the expanded matrix passed 36/36 (100%) on the owner-authorized login on
   2026-09-05 with no failures/blocks/skips. README and retained structured evidence report the
-  result. The live workflow publishes reports when a runner is configured; exact-artifact release
-  qualification and runner provisioning remain separate gates.
+  result. One acceptance deviation: the self-hosted live workflow was removed, so no CI job runs
+  the matrix and "fails CI on regression" is **not met** — GitHub-hosted runners cannot drive
+  WindowServer. Regressions are caught only by the retained no-skip
+  `make computer-use-check-full` result required at release approval.
 - Evidence: `scripts/computer-use-check.mjs` now drives the release binary through its real MCP
   stdio transport against TextEdit, Google Chrome, and Cursor. It uses screenshot differences,
   page-title state, isolation audits, and explicit refusal checks rather than successful return
   values. The latest retained pre-expansion matrix passes 30/30 (100%), including a Cursor editor
   scroll confirmed both by its semantic visible-range delta and an independent screenshot
   difference. The fixture and web suite now also exercise a slider, modifier-extended multi-select,
-  and right-click context action. The harness prints and records a parity percentage, and the live
-  workflow publishes its structured report.
+  and right-click context action. The harness prints and records a parity percentage in its structured
+  report.
 - Impact: Without an end-to-end conformance harness, parity regressions land silently and "supports
   computer-use" stays an assertion rather than a measurement.
 - Acceptance:

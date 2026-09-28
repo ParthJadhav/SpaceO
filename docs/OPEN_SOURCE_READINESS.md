@@ -26,9 +26,8 @@ have been eliminated.
   checksums, publisher validation, and Gatekeeper checks. Temporary signing files are created
   with `umask 077`; the generated keychain password is masked and cleanup remains trapped.
 - Release preflight requires configured reviewers and tag-only environment restrictions. Both
-  release and live workflows are disabled in GitHub; their repository enable switches are false.
-- Optional live automation additionally requires a reviewed environment, main-only dispatch,
-  and a dedicated `spaceo-live` host. The personal `spaceo-mac` label is explicitly refused.
+  release workflows are disabled in GitHub; their repository enable switch is false.
+- The self-hosted live workflow was removed; live qualification runs locally only.
 
 ## Security and privacy review
 
