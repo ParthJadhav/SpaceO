@@ -141,8 +141,10 @@ approval, or instructing users to disable Gatekeeper or SIP.
 ## Current status
 
 Version `1.0.1` has passed the required checks for the physical-display Viewer scope described
-above. The owner accepted the disclosed scope and recorded GO on September 28, 2026;
-protected publication is authorized. The owner authorized public
+above. The owner accepted that scope and approved publication on September 28, 2026. A subsequent
+Command–Tab concern was withdrawn as unrelated, and the owner explicitly confirmed normal local
+pointer, keyboard, and app focus behavior. Host postflight is complete; protected publication is
+authorized. The owner authorized public
 history cleanup and a new release on September 28, 2026. This authorizes the migration and release
 work. The completed checks do not authorize silently expanding the qualified Viewer arrangement. The existing
 signed download remains available until its replacement is verified. The former release tag,

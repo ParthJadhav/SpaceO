@@ -1,10 +1,11 @@
 # Privacy maintenance release qualification
 
-Version: `1.0.1`. Status: **GO — owner approved the disclosed scope and publication; protected publication pending**.
+Version: `1.0.1`. Status: **GO — owner approved the disclosed scope and confirmed normal host postflight; protected publication pending**.
 
 The owner authorized history rewriting and a replacement release, and reserved this Mac for
 live qualification on September 28, 2026. This is implementer qualification on the owner's
-existing graphical login, not independent or fresh-user testing. Existing applications and the
+existing graphical login, not independent or fresh-user testing. Tester: the Codex implementer
+agent operating for GitHub account `ParthJadhav`; release owner: `ParthJadhav`. Existing applications and the
 pre-existing daemon were preserved. The owner renewed the reserved-host authorization and directed completion of the remaining
 release work after normal unlock. Publication uses the protected workflow and the exact candidate
 identified below; the tag and artifact have not changed.
@@ -58,6 +59,21 @@ Accessibility, input, capture, isolation reporting, cleanup, and enforced Electr
 
 ## Pre-mutation preflight
 
+Preflight was also retained before the earlier phases; the final focused snapshot is not used
+retroactively as their baseline:
+
+| Phase | Retained pre-mutation result |
+|---|---|
+| Direct live XCTest suite | Host readiness and lifecycle safety `ready`, drive/capture available, one physical display, no mirrored/SpaceO/orphan displays. Overall doctor `ok` was false because installed clients and the pre-existing 1.1.1 daemon did not match the 1.0.1 CLI; that daemon was not used by the direct XCTest suite. Per-case display/TCC admission and cleanup passed in the retained full live log. |
+| Exact-candidate matrix, before the initial Viewer attempt | Isolated daemon 1.0.1 matched CLI; `ok`, drive, capture all true; readiness and lifecycle safety ready; one physical display and no mirrored/SpaceO/orphan displays. |
+| Resumed nested Viewer attempt | Fresh isolated-daemon doctor before session creation reported the same clean candidate state and inventory. |
+
+Private evidence SHA-256 values:
+
+- pre-live host diagnostic: `d2f40f4727b836301c0df343182843910500b5ef9a2ad1cf289fbfb2fca1ef64`;
+- clean candidate pre-matrix diagnostic: `49d137a81487f836dbefae3867ab12b7c3fe73ee490358a92735553d17b30bbe`;
+- clean resumed-Viewer diagnostic: `3741c88d7b23a4d255db0cc9d4caa6b413f756589453c9d4778e18995ae95f67`.
+
 The retained `spaceo doctor --json` result was obtained using the exact candidate CLI and its
 isolated candidate daemon **before creating the focused qualification session**. It reported
 `ok: true`, `canDrive: true`, `canCapture: true`, daemon version `1.0.1`, and
@@ -102,7 +118,7 @@ to its display before control. Results:
 The earlier full live suite and exact-candidate matrix were not rerun. Source, scripts, workflows,
 and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is formally excluded from the owner-approved 1.0.1 supported scope
 and disclosed in release notes and user guidance; no runtime fix is claimed. Publication remains
-authorized by the owner with that disclosed limitation on September 28, 2026. Use Viewer on the physical display for human control.
+approved by the owner on September 28, 2026, with normal host postflight subsequently confirmed. Use Viewer on the physical display for human control.
 
 Final cleanup left zero SpaceO displays, zero orphan displays, lifecycle safety ready, and the
 same physical display topology. All pre-existing regular applications and the pre-existing daemon
@@ -111,6 +127,16 @@ change count matched the focused check's baseline. Physical pointer position cha
 interactive Viewer test; it is not claimed unchanged. Control was released, the capture breadcrumb
 was cleared, and the test Viewer and isolated daemon exited. The earlier full matrix separately
 verified agent-side pointer/focus isolation.
+
+When explicitly asked to confirm normal local input after testing, the owner reported that
+Command–Tab switches applications but focus or keyboard input feels wrong. This is a failed host
+postflight, regardless of the individual checks above. Read-only inspection found no remaining
+test processes, virtual/orphan displays, capture breadcrumb, or held modifier keys. A single call
+to the existing system-shortcut restoration function returned success; that return value does
+not establish recovery. The owner subsequently withdrew the concern as unrelated to this testing. Attribution to SpaceO
+is therefore not established. When explicitly asked whether the Mac’s pointer, keyboard, and app focus were behaving normally,
+the owner answered “Yes, all behaving normally.” This completes the required host postflight.
+No additional live tests, display creation, or synthetic input were performed during recovery.
 
 ## Privacy migration and retention
 
@@ -139,6 +165,23 @@ uploaded as a public artifact. Retained evidence hashes:
 
 On September 28, 2026, after reviewing the physical-display Viewer qualification and the
 unresolved nested-Viewer limitation disclosed in PR #22, the release owner explicitly directed:
-“Approve this scope and publish v1.0.1.” This records GO for the exact candidate above. The
+“Approve this scope and publish v1.0.1.” This records approval of the disclosed scope and publication of the exact candidate above,
+conditional on the release gates. After withdrawing the Command–Tab concern as unrelated, the
+owner explicitly confirmed normal pointer, keyboard, and app focus behavior. Host postflight is
+complete and the publication approval remains in force. The
 existing signed release stays available until all replacement public downloads are verified;
 retirement of the superseded release and history references follows that verification.
+
+## Public release metadata
+
+Candidate construction necessarily predates exact-artifact qualification. The immutable tag and
+signed artifact stay unchanged; the completed qualification and owner GO are linked by the exact
+post-tag documentation commit. This follows the release policy's committed-or-immutably-linked
+evidence model rather than relabeling an already-qualified binary.
+
+The protected publication job creates the release with generic notes. As part of completing this
+publication, the release body is replaced with the owner-approved scope, the explicit unsupported
+nested-Viewer warning, and immutable links to this qualification record and installation guidance.
+The replacement is not treated as verified, and the old release is not retired, until both the
+public notes and all five public asset bytes are verified. No candidate bytes or tag are changed
+by release-note finalization.
