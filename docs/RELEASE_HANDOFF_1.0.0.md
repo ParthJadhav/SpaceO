@@ -134,7 +134,7 @@ the following P0/P1 qualification items:
 - SPAO-155 — Viewer lifecycle/recovery controls need live interaction verification (P1);
 - SPAO-158 — activity and pause/resume arbitration need live interaction verification (P1);
 - SPAO-163 — granted-host proxy verification completed in the 2026-09-05 capture record; and
-- SPAO-168 — expanded matrix passed 36/36 on 2026-09-05; final-candidate CI/runner evidence remains separate.
+- SPAO-168 — expanded matrix passed 36/36 on 2026-09-05; a retained local `make computer-use-check-full` run on the final candidate remains separate.
 
 SPAO-148 described context leakage; the retained 2026-09-05 rendered-pixel proof closes its
 implementation verification. It does not qualify a future artifact automatically. SPAO-143, SPAO-145, and
