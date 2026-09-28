@@ -145,6 +145,19 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
+Version `1.0.3` is [published](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3) and all
+five public downloads are verified against the exact qualified candidate. Protected workflow
+[36424643544](https://github.com/ParthJadhav/SpaceO/actions/runs/36424643544) published the original
+signed bytes after exact-artifact qualification: 36/36 matrix checks, native Metal/Viewer lifecycle,
+interactive control/escape/handback, cleanup and private-prefix rollback. The applicable 16/16
+source live suite had no failures or skips. See the
+[1.0.3 qualification record](validation/2026-09-28-release-1.0.3.md) for immutable identities,
+retained diagnostics, automation limits and public installer verification. Native apps and
+Chromium remain the scope, with Viewer hosted on a physical display. The public 1.0.1 release
+remains available for rollback; the superseded 1.0.2 candidate was never published.
+
+### Previous 1.0.1 qualification
+
 Version `1.0.1` is [published](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.1) and its
 public downloads are verified. The owner accepted the physical-display Viewer scope and approved
 publication on September 28, 2026, then explicitly confirmed normal local pointer, keyboard, and
