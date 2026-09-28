@@ -6,6 +6,25 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-09-28
+
+- Stop Viewer capture when no console or Mini Monitor consumes frames, and resume when a
+  surface returns. Retain selection, preserve shared streams, and retire late capture starts.
+
+- Distinguish unavailable and duplicate Accessibility window identities in discovery failures
+  without accepting partial window lists.
+
+- Add opt-in bounded Viewer health telemetry, a calibrated process-resource sampler and a
+  supervised candidate performance harness with private reports and explicit rendering checks.
+
+- Add payload-free Instruments intervals for daemon requests, screenshot capture, PNG encoding,
+  frame hashing and Viewer surface submission, plus a synthetic CPU/latency/memory benchmark.
+  See `docs/PERFORMANCE.md` for GPU profiling and measurement limits.
+- Bound logging-settings reads before allocation and refuse special files, preventing oversized
+  settings from consuming arbitrary memory or blocking request processing.
+- Skip redundant layer-clear transactions when the Viewer or Mini Monitor is already empty,
+  and use a fixed shadow path for the moving virtual pointer.
+
 ## [1.0.1] - 2026-09-28
 
 - Qualify human Viewer control with Viewer on a physical display. Hosting Viewer inside a SpaceO virtual display is unsupported because intermittent stream staleness remains unresolved; the release owner accepted this limit.

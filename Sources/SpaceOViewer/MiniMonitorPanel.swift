@@ -230,6 +230,8 @@ final class MiniMonitorView: NSView {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample),
               let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         else { return }
+        let trace = PerformanceTrace.signposter.beginInterval("Viewer.SubmitSurface", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Viewer.SubmitSurface", trace) }
         lastSample = sample
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -238,6 +240,7 @@ final class MiniMonitorView: NSView {
     }
 
     func clearFrame() {
+        guard lastSample != nil else { return }
         lastSample = nil
         CATransaction.begin()
         CATransaction.setDisableActions(true)

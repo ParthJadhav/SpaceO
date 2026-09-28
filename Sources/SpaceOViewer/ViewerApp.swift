@@ -34,6 +34,7 @@ struct SpaceOViewerApp: App {
             frontWindowProvider: ViewerModel.productionFrontWindow,
             dockBadge: background ? { _ in } : ViewerModel.productionDockBadge)
         _model = State(initialValue: model)
+        ViewerPerformanceMetrics.startIfRequested(model: model)
         // Wired here, at the app level, rather than by a window: a menu-bar-only launch has no
         // window, and a notification click used to bring back the Dock icon and nothing else.
         UserNotificationBridge.shared.onAction = { [weak model] action in

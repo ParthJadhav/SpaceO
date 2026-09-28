@@ -229,6 +229,8 @@ final class AXTraversalTests: XCTestCase {
             provider.forcedWindowID = id
             XCTAssertThrowsError(try discover(provider)) {
                 XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.detail,
+                    "incomplete window discovery: window identity is " + (id == 0 ? "unavailable" : "repeated"))
             }
         }
     }

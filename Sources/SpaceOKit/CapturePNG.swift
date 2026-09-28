@@ -13,6 +13,8 @@ extension Capture {
     /// Limit bytes retained by the output consumer, rather than encoding an arbitrarily large
     /// PNG and rejecting it afterwards. ImageIO's own working storage is outside this bound.
     static func pngData(_ image: CGImage, maximumBytes: Int) throws -> Data {
+        let trace = PerformanceTrace.signposter.beginInterval("Capture.PNG", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Capture.PNG", trace) }
         guard maximumBytes > 0 else {
             throw SpaceOError.captureFailed("PNG byte limit must be positive")
         }

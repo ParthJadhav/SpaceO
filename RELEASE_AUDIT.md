@@ -15,8 +15,8 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
-| RA-056 | Medium | Prevention implemented; historical identity removal requires a separate provenance migration | Release examples and routine output repeated signing identity; live CI could publish raw host diagnostics and reports |
-| RA-055 | Critical | Containment implemented; latest live qualification blocked by TextEdit AX failure; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
+| RA-056 | Medium | Prevention and 1.0.1 provenance migration verified; third-party historical copies remain outside repository control | Release examples and routine output repeated signing identity; live CI could publish raw host diagnostics and reports |
+| RA-055 | Critical | Containment implemented; 1.0.1 physical-display scope qualified; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
 | RA-002 | High | Fixed | Release daemon can ignore SIGTERM and remain orphaned |
 | RA-003 | High | Fixed | A negative MCP `window` argument crashes the stdio server |
@@ -60,7 +60,7 @@ unrestricted display-creation and live-testing posture after the September 25 in
 | RA-041 | Critical | Fixed | Public production API still exposed the display-origin mutation proven to pin displays |
 | RA-042 | Medium | Fixed | Failed-daemon startup diagnostics were read into memory without a size bound |
 | RA-043 | Critical | Fixed; live rerun green 2026-08-03 | Teardown and orphan guards ignored attached SpaceO displays once they became inactive |
-| RA-044 | Release | Automation complete; credentialed qualification pending | No signed, notarized, independently qualified public artifact is recorded |
+| RA-044 | Release | 1.0.1 signed candidate and public downloads verified through implementer qualification | No signed, notarized, qualified public artifact was recorded |
 | RA-045 | High | Fixed | Concurrent DevTools commands interleaved on one WebSocket and could drop each other's replies |
 | RA-046 | Medium | Fixed | Every Chromium launch leaked an uninvalidated `URLSession` for the daemon's lifetime |
 | RA-047 | High | Fixed | Window-watcher AX callbacks held an unretained watcher pointer and could use freed memory |
@@ -73,6 +73,13 @@ unrestricted display-creation and live-testing posture after the September 25 in
 | RA-054 | Low | Fixed | Socket line reads issued one syscall per byte; the cursor fence queried the display list twice per event |
 
 ### RA-055 — September 25 ColorSync/WindowServer stall and display-driver panic
+
+Current qualification update: the [September 28 1.0.1 record](docs/validation/2026-09-28-privacy-release.md)
+supersedes the earlier blocked-run status below. Its full 16-case source suite and 36-check
+exact-candidate matrix passed, with physical-display Viewer control, cleanup and public artifact
+verification. This is owner-authorized implementer qualification, not independent testing.
+It neither resolves Apple's internal driver defect nor qualifies a future artifact. The 1.0.2
+release has its own [qualification record](docs/validation/2026-09-28-release-1.0.2.md).
 
 The local investigation strongly links SpaceO display churn to the initial service stall, with
 75 WindowServer workers waiting synchronously for ColorSync. Cleanup was sampled inside

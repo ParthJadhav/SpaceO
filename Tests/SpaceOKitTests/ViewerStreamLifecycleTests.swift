@@ -7,6 +7,62 @@ import XCTest
 @MainActor
 final class ViewerStreamLifecycleTests: XCTestCase {
 
+    func testCaptureFollowsFirstAndLastFrameConsumer() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7)
+        let model = makeModel(engine: engine, displays: [display], hasSurface: false)
+        model.selectedID = display.id
+        XCTAssertEqual(model.streamState, .idle)
+        let initialStarts = await engine.pendingCount
+        XCTAssertEqual(initialStarts, 0)
+
+        model.addFrameSink("console") { _ in }
+        try await waitForPendingStarts(engine, count: 1)
+        let first = try await engine.completeFirstStart()
+        try await waitForState(model, .live)
+        let generation = model.streamGeneration
+        model.addFrameSink("console") { _ in }
+        model.addFrameSink("mini") { _ in }
+        model.removeFrameSink("console")
+        XCTAssertEqual(model.streamGeneration, generation)
+        XCTAssertEqual(first.stopCount, 0, "Mini Monitor still needs the capture")
+
+        model.removeFrameSink("mini")
+        model.addFrameSink("replacement") { _ in }
+        for _ in 0..<5 { await Task.yield() }
+        XCTAssertEqual(first.stopCount, 0, "a same-update surface replacement keeps its stream")
+        XCTAssertEqual(model.streamGeneration, generation)
+        model.removeFrameSink("replacement")
+        try await waitUntil { first.stopCount == 1 }
+        XCTAssertEqual(model.streamState, .idle)
+        XCTAssertEqual(model.selectedID, display.id)
+        model.addFrameSink("reopened") { _ in }
+        try await waitForPendingStarts(engine, count: 1)
+        _ = try await engine.completeFirstStart()
+        try await waitForState(model, .live)
+    }
+
+    func testConsumerRemovalDuringStartRetiresLateStream() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7)
+        let model = makeModel(engine: engine, displays: [display], hasSurface: false)
+        model.selectedID = display.id
+        model.addFrameSink("console") { _ in }
+        try await waitForPendingStarts(engine, count: 1)
+        model.removeFrameSink("console")
+        let late = try await engine.completeFirstStart()
+        try await waitUntil { late.stopCount == 1 }
+        XCTAssertEqual(model.streamState, .idle)
+        XCTAssertNil(model.lastSampleAt)
+        model.onFrame = { _ in }
+        try await waitForPendingStarts(engine, count: 1)
+        let current = try await engine.completeFirstStart()
+        try await waitForState(model, .live)
+        model.onFrame = nil
+        try await waitUntil { current.stopCount == 1 }
+        XCTAssertEqual(model.streamState, .idle)
+    }
+
     func testPermissionDenialThenGrantAutomaticallyRetriesSelectedDisplay() async throws {
         let engine = FakeViewerStreamEngine()
         let display = makeDisplay(id: 7)
@@ -109,6 +165,8 @@ final class ViewerStreamLifecycleTests: XCTestCase {
             discoveryProvider: { snapshot },
             accessibilityAnnouncement: { _ in }
         )
+
+        model.addFrameSink("fixture") { _ in }
 
         model.selectedID = display.id
         try await waitForPendingStarts(engine, count: 1)
@@ -625,12 +683,13 @@ final class ViewerStreamLifecycleTests: XCTestCase {
         engine: FakeViewerStreamEngine,
         displays: [DisplayEntry],
         sessions: [SessionInfo] = [],
+        hasSurface: Bool = true,
         permissions: PermissionState = PermissionState(
             screenRecording: true,
             accessibility: true
         )
     ) -> ViewerModel {
-        ViewerModel(
+        let model = ViewerModel(
             automaticRefresh: false,
             initialDisplays: displays,
             initialPermissions: permissions,
@@ -638,6 +697,8 @@ final class ViewerStreamLifecycleTests: XCTestCase {
             streamEngine: engine,
             accessibilityAnnouncement: { _ in }
         )
+        if hasSurface { model.addFrameSink("fixture") { _ in } }
+        return model
     }
 
     private func makeDisplay(id: CGDirectDisplayID,

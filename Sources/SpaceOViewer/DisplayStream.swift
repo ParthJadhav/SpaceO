@@ -243,7 +243,10 @@ private final class ScreenCaptureSession: NSObject, @unchecked Sendable,
             return stream
         }
         guard let running else { return }
-        try? await running.stopCapture()
+        let trace = PerformanceTrace.signposter.beginInterval("Viewer.StopCapture", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Viewer.StopCapture", trace) }
+        do { try await running.stopCapture() }
+        catch { PerformanceTrace.signposter.emitEvent("Viewer.StopCaptureFailed") }
     }
 
     func stream(_ stream: SCStream,
@@ -257,11 +260,13 @@ private final class ScreenCaptureSession: NSObject, @unchecked Sendable,
         // An idle sample has no new picture, but it is the only evidence that a capture of an
         // unchanged screen is still running. Forward it as a heartbeat; never as a frame.
         if statusValue == SCFrameStatus.idle.rawValue {
+            PerformanceTrace.signposter.emitEvent("Viewer.Idle")
             onIdle()
             return
         }
         guard statusValue == SCFrameStatus.complete.rawValue,
               CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
+        PerformanceTrace.signposter.emitEvent("Viewer.Frame")
         onFrame(sampleBuffer)
     }
 

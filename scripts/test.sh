@@ -18,6 +18,8 @@ run_safe() {
     cd "$REPOSITORY_ROOT"
     python3 "$REPOSITORY_ROOT/Tests/PublicPrivacyTests.py"
     python3 "$REPOSITORY_ROOT/Tests/WorkflowPrivacyTests.py"
+    python3 "$REPOSITORY_ROOT/Tests/PerformanceFixtureTests.py"
+    python3 "$REPOSITORY_ROOT/Tests/PerformanceReportTests.py"
     python3 "$REPOSITORY_ROOT/scripts/check-public-privacy.py"
     "$SWIFT" test --skip "$LIVE_TEST_CLASS" "$@"
     bash "$REPOSITORY_ROOT/Tests/ViewerInstallTests.sh"

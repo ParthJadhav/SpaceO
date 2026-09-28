@@ -149,8 +149,11 @@ enum AXWindowDiscovery {
                 let id = try AXTraversal.boundedCall(element, provider: provider, budget: budget) {
                     provider.windowID(element)
                 }
-                guard id != 0, seen.insert(id).inserted else {
-                    throw incomplete("window identity is unavailable or repeated")
+                guard id != 0 else {
+                    throw incomplete("window identity is unavailable")
+                }
+                guard seen.insert(id).inserted else {
+                    throw incomplete("window identity is repeated")
                 }
                 var frame = liveBounds(id)
                 try budget.check()
