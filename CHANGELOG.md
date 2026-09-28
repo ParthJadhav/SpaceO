@@ -6,8 +6,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
-## [1.0.3] - Draft; public release withdrawn 2026-09-28
+## [1.0.3] - 2026-09-28
 
+- Published by explicit owner direction after disclosure of incomplete Viewer pointer evidence
+  and the unresolved Chromium soak diagnostic; neither issue is claimed fixed.
 - Include the performance improvements below with version-checked installation instructions.
   The unpublished 1.0.2 candidate was superseded; its immutable tag was not moved.
 
