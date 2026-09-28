@@ -90,77 +90,13 @@ if any published app window lies outside its SpaceO tile. The preview's Electron
 pre-launch refusal and absence of published windows, not renderer support. The daemon log and action report are
 created owner-only (`0600`).
 
-## The CI job
+## No CI job
 
-`.github/workflows/live-tests.yml` (`Live WindowServer tests`) is `workflow_dispatch` only. It has
-two jobs:
+Live runs are local only. No workflow runs this suite, and no self-hosted runner is registered
+with the repository: CI and signing use disposable GitHub-hosted runners, which have no
+graphical login, TCC grants, or private virtual-display support. Never register a personal
+workstation for public repository jobs.
 
-- `preflight` runs on a disposable GitHub-hosted Ubuntu runner. It runs `Tests/LiveTestGateTests.sh` to prove the skip gate
-  works before anything depends on it, then resolves the live runner. If no live host is
-  configured it **fails** rather than skipping — a live suite that silently does not run is the
-  defect this workflow exists to prevent.
-- `live` runs `scripts/test.sh live --require-full` and the computer-use matrix on the dedicated
-  runner. Raw command output, host diagnostics, and action reports remain in the runner's
-  private `~/Library/Logs/SpaceO/qualification/RUN_ID-ATTEMPT/` directory with owner-only
-  permissions, copied before the runner cleans its temporary directory. Only fixed pass/fail
-  messages reach Actions; no raw logs or reports are uploaded as public artifacts. Retrieve
-  required evidence privately and remove it after its retention period. Review and redact any
-  summary before sharing it publicly; private retention does not replace qualification.
-
-Use a dedicated, non-personal runner account and machine name: GitHub's runner and checkout steps
-can themselves print account paths and runner names before repository scripts execute. Never
-register a personal desktop or reuse its application sessions for this workflow.
-
-It remains an on-demand recorded run, with no commit-bound qualification record or
-`scripts/release.sh` dependency. RA-055 reinstates display-safety admission and explicit live
-opt-in; the historical Round 9 removal is superseded for those protections.
-That said, a successful no-skip run (from this workflow or a retained local `make test-live` log)
-is required *approval evidence* under `docs/RELEASE_POLICY.md` — the release owner reviews it at
-go/no-go rather than automation enforcing it. "Not a gate" means no machinery blocks packaging;
-it does not mean a release can ship without a green live run.
-
-## Provisioning the runner
-
-This part is infrastructure, not code, and is not done yet. It needs:
-
-1. **A dedicated Apple Silicon Mac** on the pinned toolchain (Xcode 26.3 / Swift 6.2), with a
-   graphical login that stays logged in and never sleeps the display. A VM is acceptable only if
-   the private virtual-display API works in it — verify with `spaceo doctor` before relying on it.
-2. **A dedicated login account** used by nothing else. The suite synthesises input into it.
-3. **TCC grants for the runner's shell**, granted to the process that actually launches the tests
-   (System Settings → Privacy & Security):
-   - Accessibility
-   - Screen Recording
-   Grant them to the runner agent's binary, not to Terminal, or the runner will skip while an
-   interactive shell passes — a confusing failure.
-4. **Register the runner** with a distinctive label, e.g. `spaceo-live`.
-5. **Set the repository variable** `SPACEO_LIVE_RUNNER_LABELS` to that runner's JSON label array:
-
-   ```json
-   ["self-hosted","macOS","ARM64","spaceo-live"]
-   ```
-
-   CI and signing use GitHub-hosted runners. Never register a personal workstation for
-   public repository jobs. Keep the live workflow disabled until a dedicated disposable host
-   and a reviewed `live-qualification` environment restricted to `main` are configured.
-   Set `SPACEO_LIVE_ENABLED=true` only after that review; dispatch only from `main`.
-
-   It is a variable, not a secret: it names a runner, it does not authorise one.
-
-The workflow is disabled during open-source preparation. Its opt-in switch skips the whole
-workflow while disabled; that is not qualification evidence. Once enabled, missing runner labels
-fail the preflight. Local qualification remains available under the safety procedure above.
-
-### Adding a nightly run
-
-Once the runner exists and the suite is green on it, add to `live-tests.yml`:
-
-```yaml
-on:
-  schedule:
-    - cron: "0 9 * * *"
-  workflow_dispatch:
-```
-
-Do this only after the runner is registered. A cron against an unconfigured host is red every
-night, and a gate people learn to ignore is worth less than no gate.
+A successful no-skip local run (`make test-live-full` and `make computer-use-check-full`, retained
+privately) is still required *approval evidence* under `docs/RELEASE_POLICY.md` — the release
+owner reviews it at go/no-go rather than automation enforcing it.

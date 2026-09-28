@@ -185,29 +185,15 @@ make release-check
 make release-dry-run
 ```
 
-### 3. Provision and run the live qualification host
+### 3. Run live qualification locally
 
-Since 2026-09-18 the runner `spaceo-mac` is registered and `SPACEO_LIVE_RUNNER_LABELS` points at
-it; all workflows run there. What remains is the TCC provisioning of that host. Follow
-`docs/LIVE_TESTS.md`:
+No self-hosted runner or live workflow remains; qualification is a local run. Follow
+`docs/LIVE_TESTS.md` on an otherwise idle, persistent graphical login with Accessibility and
+Screen Recording granted. Before interpreting any run, require `spaceo doctor` to report
+`can drive sessions: yes`, `can capture: yes`, and that the daemon image matches the CLI. The run
+must execute every test with zero failures and zero skips; retain the log privately.
 
-1. Keep the runner on the pinned toolchain (`DEVELOPER_DIR` in the workflows: Xcode 27.0 / Swift 6.4).
-2. Use an otherwise idle, persistent graphical login.
-3. Grant Accessibility and Screen Recording to the runner process that actually launches tests,
-   not merely to Terminal.
-4. Give it a distinctive label such as `spaceo-live`.
-5. Set `SPACEO_LIVE_RUNNER_LABELS`, for example:
-
-   ```json
-   ["self-hosted","macOS","ARM64","spaceo-mac"]
-   ```
-
-Before interpreting any run, require `spaceo doctor` to report `can drive sessions: yes`,
-`can capture: yes`, and that the daemon image matches the CLI. Dispatch **Live WindowServer tests**
-against the final commit. The run must execute every test with zero failures and zero skips; retain
-the uploaded log and run URL.
-
-An equivalent dedicated-login local run is:
+The dedicated-login local run is:
 
 ```bash
 swift run spaceo doctor

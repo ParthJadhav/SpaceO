@@ -98,7 +98,7 @@ The live WindowServer suite is deliberately **not** an automated gate: commit `4
 host-attestation opt-ins by owner decision, and neither CI nor `scripts/release.sh` runs or
 verifies a live suite. What remains is an evidence requirement at approval time, checked by the
 release owner rather than by automation: a successful, fully-run (no-skip) execution of the live
-suite — a `Live WindowServer tests` workflow run, or an equivalent retained `make test-live` log —
+suite — a retained `make test-live-full` log —
 against the release commit or a commit whose display/input behavior is unchanged since that run.
 The release owner reviews that evidence at go/no-go; a missing, skipped, or failing live run
 blocks approval exactly like any other unmet gate below.
