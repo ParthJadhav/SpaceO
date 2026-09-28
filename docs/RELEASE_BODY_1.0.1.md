@@ -8,8 +8,8 @@ Privacy maintenance release for native macOS apps and Chromium browsers on Apple
 
 The exact signed and notarized candidate passed 1,625 deterministic Swift tests, 16 full live tests, 36 computer-use checks, focused Viewer typing/escape/hand-back checks, and staged rollback. [Qualification and owner GO](https://github.com/ParthJadhav/SpaceO/blob/QUALIFICATION_COMMIT/docs/validation/2026-09-28-privacy-release.md).
 
-Source: `7f80fc756a664daadd7ed8d8fb422fe28e65cb01`  
-Immutable tag object: `7970665e11bafa44170a0e40947392c25d0564a7`  
+Source: `7f80fc756a664daadd7ed8d8fb422fe28e65cb01`
+Immutable tag object: `7970665e11bafa44170a0e40947392c25d0564a7`
 DMG SHA-256: `7e595ef101bcd1bc9e35efc5624322a78593cda2d6e757463178dd63b9044bee`
 
 Use the DMG, signed checksum, and signed candidate record below. [Installation and signature verification](https://github.com/ParthJadhav/SpaceO/blob/QUALIFICATION_COMMIT/docs/INSTALL.md). Apple publisher name and Team ID remain public certificate metadata needed to authenticate signed downloads.
