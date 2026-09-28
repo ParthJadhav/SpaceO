@@ -97,16 +97,42 @@ with the repository: CI and signing use disposable GitHub-hosted runners, which 
 graphical login, TCC grants, or private virtual-display support. Never register a personal
 workstation for public repository jobs.
 
-Admit only an Apple Silicon host on the pinned toolchain, and retain both checks with the run.
-Run them in the same shell as the qualification commands so the exported toolchain stays active
-for every build and test:
+### Qualification run
+
+Admit only an Apple Silicon host on the pinned toolchain. The block below runs in a subshell that
+stops at the first failure, so a failed admission check or live suite never reaches the next step.
+Each attempt writes to a new owner-only directory named for the commit and a UTC timestamp;
+`mkdir` without `-p` refuses to reuse one, so a retry never overwrites an interrupted attempt's
+evidence. A dirty checkout is refused so the evidence name matches the code that ran, and `SWIFT`
+is cleared so `make` uses the admitted compiler.
 
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
-export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
-test "$(uname -m)" = arm64
-bash scripts/check-swift-toolchain.sh
+(
+  set -euo pipefail
+  umask 077
+  test -z "$(git status --porcelain)" || { echo "refusing a dirty checkout" >&2; exit 1; }
+  unset SWIFT
+  export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+  export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
+  export SPACEO_LIVE_TESTS=1
+  evidence="$HOME/Library/Logs/SpaceO/qualification/$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$(dirname "$evidence")"
+  mkdir "$evidence"
+  uname -m | tee "$evidence/admission.log"
+  test "$(uname -m)" = arm64
+  bash scripts/check-swift-toolchain.sh 2>&1 | tee -a "$evidence/admission.log"
+  make release
+  .build/release/spaceo doctor 2>&1 | tee "$evidence/doctor.log"
+  SPACEO_LIVE_LOG="$evidence/live-tests.log" make test-live-full \
+    2>&1 | tee "$evidence/live-command.log"
+  SPACEO_TEST_REPORT="$evidence/computer-use.json" make computer-use-check-full \
+    2>&1 | tee "$evidence/computer-use-command.log"
+)
 ```
+
+`doctor` runs against the release binary the matrix launches. Review `doctor.log` for
+`can drive sessions: yes`, `can capture: yes`, and a matching daemon before accepting the run. The
+evidence directory, including `admission.log`, is the retained approval evidence; keep it private.
 
 A successful no-skip local run on that host (`make test-live-full` and
 `make computer-use-check-full`, retained privately) is still required *approval evidence* under

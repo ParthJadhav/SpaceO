@@ -80,5 +80,6 @@ organization; ordinary branch protection and content scans do not enforce this s
 `python3 scripts/check-public-privacy.py` checks tracked text and private file types without
 printing matched values. CI also scans history with Gitleaks. These checks do not prove that all
 personal data is absent: visually review media and inspect public logs, artifacts, discussions,
-and release metadata. Live qualification retains raw evidence privately on the dedicated runner;
-only reviewed, redacted summaries may be made public.
+and release metadata. Live qualification runs locally and retains raw evidence in an owner-only
+`~/Library/Logs/SpaceO/qualification/` directory; only reviewed, redacted summaries may be made
+public.
