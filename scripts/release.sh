@@ -77,9 +77,12 @@ require_command() {
 
 assert_install_version() {
     local install_version
-    install_version="$(awk -F'"' '/^SPACEO_VERSION=/ { print $2; exit }' "$1")"
+    install_version="$(awk -F'"' '/SPACEO_VERSION[[:space:]]*=/ { count++; value=$2 } END { if (count == 1) print value }' "$1")"
     [[ "$install_version" == "$VERSION" ]] \
         || fail "INSTALL.md example version must match VERSION"
+    if grep -Eq 'SpaceO-[0-9]+\.[0-9]+\.[0-9]+-macOS-' "$1"; then
+        fail "INSTALL.md artifact names must derive from SPACEO_VERSION"
+    fi
 }
 
 load_version() {

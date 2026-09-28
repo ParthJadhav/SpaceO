@@ -134,6 +134,17 @@ fi
 assert_contains "$TEST_ROOT/guide-check.log" 'INSTALL.md example version must match VERSION'
 cp "$REPOSITORY_ROOT/docs/INSTALL.md" "$guide_fixture/docs/INSTALL.md"
 bash "$guide_fixture/scripts/release.sh" check >/dev/null
+printf '\nSPACEO_VERSION="0.0.0"\n' >> "$guide_fixture/docs/INSTALL.md"
+if bash "$guide_fixture/scripts/release.sh" check > "$TEST_ROOT/duplicate-guide.log" 2>&1; then
+    fail "release check accepted duplicate installation version assignments"
+fi
+assert_contains "$TEST_ROOT/duplicate-guide.log" 'INSTALL.md example version must match VERSION'
+cp "$REPOSITORY_ROOT/docs/INSTALL.md" "$guide_fixture/docs/INSTALL.md"
+printf '\nhdiutil attach SpaceO-1.0.1-macOS-arm64.dmg\n' >> "$guide_fixture/docs/INSTALL.md"
+if bash "$guide_fixture/scripts/release.sh" check > "$TEST_ROOT/literal-guide.log" 2>&1; then
+    fail "release check accepted a hard-coded artifact version"
+fi
+assert_contains "$TEST_ROOT/literal-guide.log" 'INSTALL.md artifact names must derive from SPACEO_VERSION'
 
 cat > "$MOCK_BIN/codesign" <<'MOCK'
 #!/usr/bin/env bash
