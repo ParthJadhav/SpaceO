@@ -37,8 +37,8 @@ Status definitions:
   exact signed artifact passed all 36 matrix checks, including Chromium isolation and cleanup.
   See [1.0.2 qualification](docs/validation/2026-09-28-release-1.0.2.md). The unpublished 1.0.2
   candidate was subsequently superseded by 1.0.3 for installation-documentation corrections.
-  The [1.0.3 record](docs/validation/2026-09-28-release-1.0.3.md) tracks the remaining Viewer
-  and final local-input checks; this ticket is not publication approval.
+  The [1.0.3 record](docs/validation/2026-09-28-release-1.0.3.md) records the completed exact-artifact matrix, Viewer
+  and local-input checks; publication status is tracked separately.
 - September 28: the signed 1.0.1 candidate passed the full 36-check matrix, after the full
   16-case source suite passed without skips. Publication and public downloads were verified.
   See [1.0.1 qualification](docs/validation/2026-09-28-privacy-release.md); this closes the
