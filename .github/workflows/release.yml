@@ -38,7 +38,10 @@ jobs:
               jq -e '.deployment_branch_policy.custom_branch_policies == true and
                 any(.protection_rules[]; .type == "required_reviewers" and (.reviewers | length) > 0)' >/dev/null
             gh api "repos/$GITHUB_REPOSITORY/environments/$environment/deployment-branch-policies" |
-              jq -e '.branch_policies | length > 0 and all(.[]; .type == "tag" and .name == "v*")' >/dev/null
+              jq -e --arg environment "$environment" '.branch_policies |
+                any(.[]; .type == "tag" and .name == "v*") and
+                all(.[]; (.type == "tag" and .name == "v*") or
+                  ($environment == "release-publication" and .type == "branch" and .name == "main"))' >/dev/null
           done
 
   candidate:

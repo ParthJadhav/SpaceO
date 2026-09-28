@@ -43,6 +43,12 @@ slices and the combined artifact are independently verified.
 ## Required artifact qualification
 
 The release owner selected a **native-app and Chromium** scope on 2026-09-24.
+For the 1.0.1 privacy maintenance release, human Viewer control is qualified only
+with Viewer on a physical display and the target application on a SpaceO virtual display.
+Running Viewer inside a SpaceO virtual display is excluded: qualification observed intermittent
+stream staleness in that nested arrangement, and no runtime fix is claimed. The owner explicitly accepted this disclosed scope and approved publication on September 28, 2026. This limitation is also recorded in the release
+notes, README, installation, and setup guidance.
+
 Managed Electron launches are outside this scope and must return
 `unsupported_target` before starting a process. The full computer-use matrix must exercise
 native and Chromium behavior and verify Electron refusal; refusal is an enforced product
@@ -126,7 +132,12 @@ must require an authorized reviewer in repository settings. It starts only after
 artifact exists, downloads that artifact by immutable artifact ID, authenticates and repeats its
 distribution verification, rechecks that the remote tag has not moved, and publishes those exact
 files without rebuilding or using signing/notarization credentials. The existing `release`
-environment may independently protect candidate signing credentials. Environment protection and
+environment may independently protect candidate signing credentials. For the retained 1.0.1
+candidate, `publish-retained.yml` supplies the same post-artifact reviewer gate and pins the
+original artifact, digest, source, tag object, and provenance. Its protected-main invocation
+publishes the completed scope notes atomically with the five verified assets; it receives no
+signing secrets. The publication environment permits `main` and release tags, while the signing
+environment remains tag-only. Environment protection and
 secrets are repository configuration, not claims made by this repository.
 
 A maintainer must not bypass a failed gate by uploading locally built artifacts, rebuilding after
@@ -134,9 +145,13 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.1` is being qualified for a privacy maintenance release. The owner authorized public
+Version `1.0.1` has passed the required checks for the physical-display Viewer scope described
+above. The owner accepted that scope and approved publication on September 28, 2026. A subsequent
+Command–Tab concern was withdrawn as unrelated, and the owner explicitly confirmed normal local
+pointer, keyboard, and app focus behavior. Host postflight is complete; protected publication is
+authorized. The owner authorized public
 history cleanup and a new release on September 28, 2026. This authorizes the migration and release
-work; successful candidate qualification is still required before publication. The existing
+work. The completed checks do not authorize silently expanding the qualified Viewer arrangement. The existing
 signed download remains available until its replacement is verified. The former release tag,
 artifacts, and provenance will then be retired as part of the authorized privacy migration.
 
@@ -144,9 +159,11 @@ Display, input, and session implementation is unchanged from the September 26 li
 Relative to pre-migration main, only the embedded version changes in runtime source; relative to
 1.0.0, the candidate also includes the existing unreadable-MCP-configuration fix. Exact-artifact
 verification, the full live suite, and the full computer-use matrix passed. Interactive Viewer
-qualification remains pending because an external lock controller prevented confirmation of the
-unlocked input and escape path. Results are retained under
-`docs/validation/2026-09-28-privacy-release.md`; publication remains gated.
+qualification also passed after normal owner unlock, with Viewer on the built-in display and
+the synthetic target on a virtual display. The retained record documents the inspected nested
+automation limitations and final cleanup. Results are retained under
+`docs/validation/2026-09-28-privacy-release.md`. The owner approved the disclosed scope and directed publication; the protected workflow
+must still authenticate and publish the exact candidate.
 
 Publisher name and Team ID remain public code-signing metadata. GitHub retains read-only PR refs
 and cached historical views independently of branch rewrites; source cleanup cannot promise

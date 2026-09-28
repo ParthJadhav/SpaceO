@@ -16,7 +16,7 @@ fail() {
 assert_contains() {
     local file="$1"
     local expected="$2"
-    grep -F "$expected" "$file" >/dev/null \
+    grep -F -- "$expected" "$file" >/dev/null \
         || fail "$file does not contain required policy: $expected"
 }
 
@@ -73,6 +73,22 @@ assert_text_excludes "$publication_job" 'scripts/release.sh candidate'
 assert_text_excludes "$publication_job" 'swift build'
 assert_text_excludes "$publication_job" 'notarytool submit'
 assert_text_excludes "$publication_job" 'codesign --sign'
+
+# The retained-candidate path cannot rebuild or substitute caller-selected provenance.
+retained_workflow="$REPOSITORY_ROOT/.github/workflows/publish-retained.yml"
+assert_contains "$retained_workflow" "github.ref == 'refs/heads/main'"
+assert_contains "$retained_workflow" 'environment: release-publication'
+assert_contains "$retained_workflow" '.can_admins_bypass == false'
+assert_contains "$retained_workflow" 'actions/artifacts/10941066931'
+assert_contains "$retained_workflow" 'shasum -a 256 -c -'
+assert_contains "$retained_workflow" 'bash scripts/release.sh verify-candidate'
+assert_contains "$retained_workflow" '--notes-file "$RUNNER_TEMP/spaceo-release-notes.md"'
+assert_text_excludes "$(cat "$retained_workflow")" 'secrets.'
+assert_text_excludes "$(cat "$retained_workflow")" 'inputs.'
+assert_text_excludes "$(cat "$retained_workflow")" 'scripts/release.sh candidate'
+assert_text_excludes "$(cat "$retained_workflow")" 'swift build'
+assert_text_excludes "$(cat "$retained_workflow")" 'notarytool submit'
+assert_text_excludes "$(cat "$retained_workflow")" 'codesign --sign'
 
 # CI and both release jobs must use the GitHub-hosted Apple Silicon runner and the pinned
 # toolchain. The check script rejects host drift before any build or publication work begins.

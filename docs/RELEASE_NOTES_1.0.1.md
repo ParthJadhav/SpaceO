@@ -10,6 +10,13 @@ and Chromium scope as 1.0.0. Managed Electron application launches remain unsupp
   for common personal data. Git history uses GitHub noreply contributor metadata.
 - Bind the signed candidate provenance to the rewritten source commit and a new immutable tag.
 
+## Viewer limitation
+
+For 1.0.1, use Viewer on a physical display while the controlled application runs on a SpaceO
+virtual display. Hosting Viewer itself on a SpaceO virtual display is not qualified or supported:
+that nested arrangement showed intermittent stream staleness during qualification. No runtime
+fix for nested Viewer use is included in this privacy maintenance candidate.
+
 Download the DMG, signed checksum, and signed candidate record from this release. Follow
 [INSTALL.md](INSTALL.md) for publisher, checksum, and notarization verification. Publisher identity
 in Developer ID certificates remains public and is required to authenticate the download.

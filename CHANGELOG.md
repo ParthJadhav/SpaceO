@@ -8,6 +8,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [1.0.1] - 2026-09-28
 
+- Qualify human Viewer control with Viewer on a physical display. Hosting Viewer inside a SpaceO virtual display is unsupported because intermittent stream staleness remains unresolved; the release owner accepted this limit.
+
 This maintenance release includes the verified installer and privacy hardening below. Public Git
 history uses noreply contributor metadata. Its new signed candidate record binds the release
 to the rewritten source history; earlier release provenance is not relabeled.
