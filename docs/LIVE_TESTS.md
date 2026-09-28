@@ -101,7 +101,8 @@ Admit only an Apple Silicon host on the pinned toolchain, and retain both checks
 
 ```bash
 test "$(uname -m)" = arm64
-SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2 \
+DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer \
+  SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2 \
   bash scripts/check-swift-toolchain.sh
 ```
 
