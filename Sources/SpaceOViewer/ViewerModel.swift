@@ -430,24 +430,44 @@ final class ViewerModel {
 
     /// Frame consumers keyed by surface. Every open console window and the mini monitor gets
     /// each frame; one shared closure meant the newest window silently blanked the others.
+    var performanceFrameSinkCount: Int { frameSinks.count }
     @ObservationIgnored private var frameSinks: [AnyHashable: (CMSampleBuffer) -> Void] = [:]
+    @ObservationIgnored private var frameDemandTask: Task<Void, Never>?
     private static let defaultFrameSinkID = "default"
 
     /// The default surface's sink; kept for callers with one surface.
     var onFrame: ((CMSampleBuffer) -> Void)? {
         get { frameSinks[Self.defaultFrameSinkID] }
         set {
-            if let newValue { frameSinks[Self.defaultFrameSinkID] = newValue }
-            else { frameSinks.removeValue(forKey: Self.defaultFrameSinkID) }
+            if let newValue { addFrameSink(Self.defaultFrameSinkID, newValue) }
+            else { removeFrameSink(Self.defaultFrameSinkID) }
         }
     }
 
     func addFrameSink(_ id: AnyHashable, _ sink: @escaping (CMSampleBuffer) -> Void) {
+        let wasEmpty = frameSinks.isEmpty
         frameSinks[id] = sink
+        if wasEmpty { reconcileFrameDemand() }
     }
 
     func removeFrameSink(_ id: AnyHashable) {
-        frameSinks.removeValue(forKey: id)
+        guard frameSinks.removeValue(forKey: id) != nil else { return }
+        if frameSinks.isEmpty { reconcileFrameDemand() }
+    }
+
+    private func reconcileFrameDemand() {
+        guard frameDemandTask == nil else { return }
+        // Surface creation/destruction can happen inside a SwiftUI update. Defer observable
+        // state changes and coalesce a same-update surface replacement into no stream restart.
+        frameDemandTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            frameDemandTask = nil
+            if frameSinks.isEmpty {
+                if streamState != .idle { restartStreamForCurrentSelection() }
+            } else if streamState == .idle, currentStreamTarget != nil {
+                restartStreamForCurrentSelection()
+            }
+        }
     }
 
     let preferencesStore: ViewerPreferencesStore?
@@ -1956,7 +1976,9 @@ final class ViewerModel {
         liveSince = nil
         recentFrameTimes = []
 
-        guard let target else {
+        // No console or Mini Monitor needs pixels. Retire the capture and its surfaces while
+        // retaining selection; the first returning consumer restarts through the same barrier.
+        guard let target, !frameSinks.isEmpty else {
             streamState = .idle
             return
         }
@@ -1983,7 +2005,10 @@ final class ViewerModel {
                     pointSize: target.display.bounds.size,
                     sourceRect: target.sourceRect,
                     onFrame: { [weak self] sample in
-                        guard pendingFrame.offer(FrameDelivery(sample: sample)) else { return }
+                        guard pendingFrame.offer(FrameDelivery(sample: sample)) else {
+                            PerformanceTrace.signposter.emitEvent("Viewer.FrameCoalesced")
+                            return
+                        }
                         Task { @MainActor [weak self] in
                             guard let delivery = pendingFrame.take() else { return }
                             self?.receiveFrame(delivery.sample, generation: generation)

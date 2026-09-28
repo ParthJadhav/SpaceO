@@ -151,6 +151,7 @@ final class ViewerSessionStatusTests: XCTestCase {
     @MainActor
     func testAStreamFailedForLackOfScreenRecordingIsOneIssueNotTwo() throws {
         let model = makeModel(sessions: [try session()], screenRecording: false)
+        model.addFrameSink("fixture") { _ in }
         model.selectSession("s1")
         XCTAssertTrue(model.healthAlerts.contains { $0.id == "stream" })
         XCTAssertTrue(model.issues.contains { $0.id == "screen-recording" })

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Durable, host-local diagnostic logging switches shared by the daemon, the MCP server, and the
 /// CLI (`spaceo logging enable|disable|status`).
@@ -89,7 +90,7 @@ public struct LoggingSettings: Codable, Sendable, Equatable {
     ) -> Resolution {
         var settings = LoggingSettings()
         var fileExists = false
-        if let data = FileManager.default.contents(atPath: fileURL.path), data.count <= 16_384,
+        if let data = readSettingsData(fileURL),
            let decoded = try? JSONDecoder().decode(LoggingSettings.self, from: data),
            let valid = try? decoded.validated() {
             settings = valid
@@ -105,6 +106,35 @@ public struct LoggingSettings: Codable, Sendable, Equatable {
             overrides.append("\(key)=1")
         }
         return Resolution(settings: settings, fileExists: fileExists, environmentOverrides: overrides)
+    }
+
+    /// Bound allocation before reading, including files that grow after fstat. Refuse special
+    /// files so a malformed local setting cannot stall the request path on a pipe or device.
+    static func readSettingsData(_ url: URL) -> Data? {
+        let descriptor = open(url.path, O_RDONLY | O_CLOEXEC | O_NONBLOCK)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var info = stat()
+        let limit = 16_384
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_size >= 0, info.st_size <= limit else { return nil }
+        var data = Data(count: limit + 1)
+        var used = 0
+        let valid = data.withUnsafeMutableBytes { buffer in
+            while used < buffer.count {
+                let count = read(descriptor, buffer.baseAddress!.advanced(by: used), buffer.count - used)
+                if count == 0 { return used <= limit }
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    return false
+                }
+                used += count
+            }
+            return false
+        }
+        guard valid else { return nil }
+        data.count = used
+        return data
     }
 
     public static func load(

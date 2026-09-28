@@ -86,6 +86,7 @@ final class ViewerClipboardTests: XCTestCase {
             accessibilityAnnouncement: { _ in },
             pasteboardWriter: { pasteboard.write($0) },
             pasteboardReader: { pasteboard.readValue })
+        model.addFrameSink("fixture") { _ in }
         model.selectSession(session.id)
         return model
     }

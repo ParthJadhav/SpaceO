@@ -998,6 +998,8 @@ case "daemon":
         supervisedByLaunchd: daemonSupervised)
     let holder = DaemonManagerHolder()
     let server = Transport.Server(path: socketPath) { request in
+        let trace = PerformanceTrace.signposter.beginInterval("Daemon.Request", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Daemon.Request", trace) }
         let started = ContinuousClock.now
         // Keep baselines for unexpected failures, but an unconfigured logger cannot use one.
         let metricsStarted = DaemonLog.shared.isConfigured ? ProcessMetricsSnapshot.capture() : nil

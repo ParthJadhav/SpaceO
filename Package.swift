@@ -29,6 +29,7 @@ let package = Package(
                 .linkedFramework("CoreMedia"),
             ]
         ),
+        .executableTarget(name: "SpaceOPerformance", dependencies: ["SpaceOKit"]),
         .target(name: "SpaceOMCP", dependencies: ["SpaceOKit"]),
         .executableTarget(name: "spaceo", dependencies: ["SpaceOKit", "SpaceOMCP"]),
         // The VM-style console app. Touches no private API itself; everything unusual it does

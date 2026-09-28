@@ -89,8 +89,9 @@ final class VMSurfaceView: NSView {
             layer?.backgroundColor = NSColor.black.cgColor
             contentLayer.contentsGravity = .resizeAspect
             layer?.addSublayer(contentLayer)
+            let pointerBounds = CGRect(x: -4, y: -4, width: 8, height: 8)
             virtualPointerLayer.path = CGPath(
-                ellipseIn: CGRect(x: -4, y: -4, width: 8, height: 8),
+                ellipseIn: pointerBounds,
                 transform: nil
             )
             virtualPointerLayer.fillColor = NSColor.controlAccentColor.cgColor
@@ -99,6 +100,12 @@ final class VMSurfaceView: NSView {
             virtualPointerLayer.shadowColor = NSColor.black.cgColor
             virtualPointerLayer.shadowOpacity = 0.45
             virtualPointerLayer.shadowRadius = 2
+            // The circle and its opaque stroke never change shape. Supply their outer
+            // outline so moving the pointer does not require an alpha-derived shadow.
+            let strokeOutset = virtualPointerLayer.lineWidth / 2
+            virtualPointerLayer.shadowPath = CGPath(
+                ellipseIn: pointerBounds.insetBy(dx: -strokeOutset, dy: -strokeOutset),
+                transform: nil)
             virtualPointerLayer.isHidden = true
             layer?.addSublayer(virtualPointerLayer)
         }
@@ -231,11 +238,14 @@ final class VMSurfaceView: NSView {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample),
               let surface = CVPixelBufferGetIOSurface(pixelBuffer)?.takeUnretainedValue()
         else { return }
+        let trace = PerformanceTrace.signposter.beginInterval("Viewer.SubmitSurface", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Viewer.SubmitSurface", trace) }
         lastSample = sample
         withoutImplicitAnimation { contentLayer.contents = surface }
     }
 
     func clearFrame() {
+        guard lastSample != nil else { return }
         lastSample = nil
         withoutImplicitAnimation { contentLayer.contents = nil }
     }

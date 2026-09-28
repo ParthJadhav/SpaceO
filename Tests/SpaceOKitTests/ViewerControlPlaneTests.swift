@@ -1049,6 +1049,7 @@ final class ViewerControlPlaneTests: XCTestCase {
                                  frame: CGRect(x: 0, y: 0, width: 80, height: 80))
             },
             appNameProvider: { $0 == 555 ? "SecurityAgent" : nil })
+        model.addFrameSink("fixture") { _ in }
         model.selectSession("agent")
         try await waitUntil { engine.pendingCount >= 1 }
         engine.completeAll()
@@ -1093,6 +1094,7 @@ final class ViewerControlPlaneTests: XCTestCase {
                 return response
             },
             accessibilityAnnouncement: { _ in })
+        model.addFrameSink("fixture") { _ in }
         model.selectSession("a")
         try await waitUntil { engine.pendingCount >= 1 }
         engine.completeAll()
@@ -1125,6 +1127,7 @@ final class ViewerControlPlaneTests: XCTestCase {
             daemonTransport: { request in recorder.append(request); return .success() },
             accessibilityAnnouncement: { _ in })
 
+        model.addFrameSink("fixture") { _ in }
         model.takeControl(for: "b")
         XCTAssertEqual(model.pendingControlSessionID, "b")
         model.selectSession("a")

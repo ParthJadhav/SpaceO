@@ -319,7 +319,6 @@ jobs:
             "$base.candidate.txt" \
             "$base.candidate.txt.sig" \
             --verify-tag \
-            --generate-notes \
             --latest \
-            --notes "Native apps and Chromium browsers on Apple Silicon. Managed Electron launches (including Cursor and VS Code) are refused before startup because they can take desktop focus. Those editors may still connect as MCP clients. See docs/RELEASE_NOTES_$version.md for release notes and docs/INSTALL.md for requirements and signature verification." \
+            --notes-file "docs/RELEASE_NOTES_$version.md" \
             --title "SpaceO $version"

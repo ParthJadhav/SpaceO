@@ -333,6 +333,8 @@ public enum Capture {
     private static func capture(filter: SCContentFilter,
                                 config: SCStreamConfiguration,
                                 what: String) async throws -> CGImage {
+        let trace = PerformanceTrace.signposter.beginInterval("Capture.Screenshot", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Capture.Screenshot", trace) }
         do {
             try Task.checkCancellation()
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)

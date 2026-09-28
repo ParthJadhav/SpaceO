@@ -74,6 +74,9 @@ final class Probe: NSObject, NSApplicationDelegate, MTKViewDelegate {
         window.contentView = view
         window.orderFront(nil) // no makeKey or activation
         self.window = window; self.view = view; self.frameLabel = label
+        if ProcessInfo.processInfo.environment["SPACEO_PERF_PROBE_READY"] == "1" {
+            FileHandle.standardOutput.write(Data("{\"ready\":true}\n".utf8))
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
             view.isPaused = true
             // Stop submitting, then give outstanding GPU/presentation callbacks a bounded drain.

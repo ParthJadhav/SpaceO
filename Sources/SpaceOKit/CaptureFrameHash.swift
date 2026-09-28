@@ -11,6 +11,8 @@ extension Capture {
     }
 
     static func validatedFrameHash(_ image: CGImage) throws -> UInt64 {
+        let trace = PerformanceTrace.signposter.beginInterval("Capture.Hash", id: PerformanceTrace.signposter.makeSignpostID())
+        defer { PerformanceTrace.signposter.endInterval("Capture.Hash", trace) }
         guard let data = image.dataProvider?.data,
               let base = CFDataGetBytePtr(data) else {
             throw SpaceOError.captureFailed("frame pixels are unavailable")

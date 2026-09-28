@@ -18,6 +18,17 @@ Status definitions:
 
 ## Active milestone
 
+### Performance soak: Chromium window identity becomes incomplete
+
+- Status: Open
+- During the September 28 candidate performance soak, screenshot discovery rejected an
+  unavailable/repeated Chrome AX window identity; cleanup retained the display and required
+  operator-approved recovery. Normal daemon shutdown then succeeded, with physical topology
+  restored. Preserve fail-closed discovery while investigating provider/window lifetime behavior.
+- Evidence: [performance follow-up](docs/validation/2026-09-28-performance-followup.md).
+- Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
+  live soak with successful captures and verified teardown; do not count the stopped run as passing.
+
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 
 - Priority: P0
