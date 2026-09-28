@@ -145,15 +145,17 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.1` has passed the required checks for the physical-display Viewer scope described
-above. The owner accepted that scope and approved publication on September 28, 2026. A subsequent
-Command–Tab concern was withdrawn as unrelated, and the owner explicitly confirmed normal local
-pointer, keyboard, and app focus behavior. Host postflight is complete; protected publication is
-authorized. The owner authorized public
-history cleanup and a new release on September 28, 2026. This authorizes the migration and release
-work. The completed checks do not authorize silently expanding the qualified Viewer arrangement. The existing
-signed download remains available until its replacement is verified. The former release tag,
-artifacts, and provenance will then be retired as part of the authorized privacy migration.
+Version `1.0.1` is [published](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.1) and its
+public downloads are verified. The owner accepted the physical-display Viewer scope and approved
+publication on September 28, 2026, then explicitly confirmed normal local pointer, keyboard, and
+app focus behavior. Protected publication [36397664909](https://github.com/ParthJadhav/SpaceO/actions/runs/36397664909)
+published the original qualified bytes with the scope disclosure present at first availability.
+All five unauthenticated public downloads matched the candidate; signatures, provenance,
+notarization, Gatekeeper, fresh-mount verification, and private-prefix installation passed.
+
+The old signed release stayed available until verification completed. Its release, tag, and
+candidate artifact were then retired as authorized for privacy cleanup, with private recovery
+copies retained and exact tag protections restored. The immutable `v1.0.1` tag did not move.
 
 Display, input, and session implementation is unchanged from the September 26 live qualification.
 Relative to pre-migration main, only the embedded version changes in runtime source; relative to
@@ -162,8 +164,8 @@ verification, the full live suite, and the full computer-use matrix passed. Inte
 qualification also passed after normal owner unlock, with Viewer on the built-in display and
 the synthetic target on a virtual display. The retained record documents the inspected nested
 automation limitations and final cleanup. Results are retained under
-`docs/validation/2026-09-28-privacy-release.md`. The owner approved the disclosed scope and directed publication; the protected workflow
-must still authenticate and publish the exact candidate.
+`docs/validation/2026-09-28-privacy-release.md`. The owner-approved scope, protected publication, and public-download verification are recorded
+there; the unsupported nested Viewer arrangement remains explicitly excluded.
 
 Publisher name and Team ID remain public code-signing metadata. GitHub retains read-only PR refs
 and cached historical views independently of branch rewrites; source cleanup cannot promise
