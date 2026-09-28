@@ -1,6 +1,6 @@
 # Privacy maintenance release qualification
 
-Version: `1.0.1`. Status: **checks passed for physical-display Viewer use; owner scope approval pending**.
+Version: `1.0.1`. Status: **GO — owner approved the disclosed scope and publication; protected publication pending**.
 
 The owner authorized history rewriting and a replacement release, and reserved this Mac for
 live qualification on September 28, 2026. This is implementer qualification on the owner's
@@ -102,7 +102,7 @@ to its display before control. Results:
 The earlier full live suite and exact-candidate matrix were not rerun. Source, scripts, workflows,
 and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is formally excluded from the proposed 1.0.1 supported scope
 and disclosed in release notes and user guidance; no runtime fix is claimed. Publication remains
-blocked until the owner accepts that limitation. Use Viewer on the physical display for human control.
+authorized by the owner with that disclosed limitation on September 28, 2026. Use Viewer on the physical display for human control.
 
 Final cleanup left zero SpaceO displays, zero orphan displays, lifecycle safety ready, and the
 same physical display topology. All pre-existing regular applications and the pre-existing daemon
@@ -134,3 +134,11 @@ uploaded as a public artifact. Retained evidence hashes:
 - exact-candidate matrix report SHA-256: `81a51e6bbf6977f44dae740e517da38df0e29ad614c3e851dc724ab0e1f22cfc`.
 
 - focused Viewer result SHA-256: `21fdc4333c45f1d2659da4ff692a600c77685280ebb07fb7bc612551e8f4729b`.
+
+## Owner publication decision
+
+On September 28, 2026, after reviewing the physical-display Viewer qualification and the
+unresolved nested-Viewer limitation disclosed in PR #22, the release owner explicitly directed:
+“Approve this scope and publish v1.0.1.” This records GO for the exact candidate above. The
+existing signed release stays available until all replacement public downloads are verified;
+retirement of the superseded release and history references follows that verification.
