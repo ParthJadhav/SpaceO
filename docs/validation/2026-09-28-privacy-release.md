@@ -1,6 +1,6 @@
 # Privacy maintenance release qualification
 
-Version: `1.0.1`. Status: **GO — owner approved the disclosed scope and confirmed normal host postflight; protected publication pending**.
+Version: `1.0.1`. Status: **Published and public downloads verified — owner-approved scope and normal host postflight confirmed**.
 
 The owner authorized history rewriting and a replacement release, and reserved this Mac for
 live qualification on September 28, 2026. This is implementer qualification on the owner's
@@ -18,7 +18,9 @@ identified below; the tag and artifact have not changed.
 | Immutable tag | `v1.0.1` |
 | Tag object | `7970665e11bafa44170a0e40947392c25d0564a7` |
 | CI | [36346722098](https://github.com/ParthJadhav/SpaceO/actions/runs/36346722098), passed |
-| Candidate workflow | [36347116087](https://github.com/ParthJadhav/SpaceO/actions/runs/36347116087), signing passed; publication waiting |
+| Candidate workflow | [36347116087](https://github.com/ParthJadhav/SpaceO/actions/runs/36347116087), signing passed; original publication cancelled in favor of the retained-candidate workflow |
+| Protected publication | [36397664909](https://github.com/ParthJadhav/SpaceO/actions/runs/36397664909), passed |
+| Publication documentation commit | `0c80a44bbfcc35829bc3fd98a773d6fc18403bde`, CI [36397640997](https://github.com/ParthJadhav/SpaceO/actions/runs/36397640997) passed |
 | Immutable Actions artifact | `10941066931` |
 | Artifact archive SHA-256 | `7cb509da4ce1f02676247e1fb5c38b98c2f7e43206497d79f611348fdd999487` |
 | DMG SHA-256 | `7e595ef101bcd1bc9e35efc5624322a78593cda2d6e757463178dd63b9044bee` |
@@ -148,9 +150,9 @@ The temporary administrator exception needed for the authorized force push was r
 immediately; the original branch protection was restored and verified.
 
 The withdrawn 1.1.2 candidate artifact was removed after preserving and validating a private
-recovery copy. The existing 1.0.0 release remains available while the replacement is gated. Its
-release, old tag, and candidate artifact will be retired only after the replacement download is
-verified. GitHub retains 19 old read-only pull-request head refs and cached historical views;
+recovery copy. The existing 1.0.0 release stayed available until all replacement downloads and the public
+installer were verified. Its release, old tag, and candidate artifact were then retired; the
+original tag protections were restored and verified immediately. GitHub retains 19 old read-only pull-request head refs and cached historical views;
 a private Support request is prepared. Rewriting main cannot remove those refs or third-party
 clones. Publisher name and Team ID remain necessary public certificate metadata.
 
@@ -170,8 +172,8 @@ unresolved nested-Viewer limitation disclosed in PR #22, the release owner expli
 conditional on the release gates. After withdrawing the Command–Tab concern as unrelated, the
 owner explicitly confirmed normal pointer, keyboard, and app focus behavior. Host postflight is
 complete and the publication approval remains in force. The
-existing signed release stays available until all replacement public downloads are verified;
-retirement of the superseded release and history references follows that verification.
+existing signed release remained available until all replacement public downloads were verified;
+retirement of the superseded release and history references followed that verification.
 
 ## Public release metadata
 
@@ -180,7 +182,7 @@ signed artifact stay unchanged; the completed qualification and owner GO are lin
 post-tag documentation commit. This follows the release policy's committed-or-immutably-linked
 evidence model rather than relabeling an already-qualified binary.
 
-The original waiting publication job is superseded and must be cancelled without approval. Its
+The original waiting publication job was cancelled without approval and superseded. Its
 generic notes predate the Viewer limitation. The one-time `publish-retained.yml` workflow runs
 from reviewed, protected `main` and requires the same `release-publication` reviewer boundary.
 That environment permits protected `main` in addition to release tags; the signing environment
@@ -192,3 +194,24 @@ original verifier. It does not rebuild, re-sign, or move the tag. It publishes a
 with `docs/RELEASE_BODY_1.0.1.md` in the same release creation, replacing its qualification-link
 placeholder with the workflow's immutable documentation commit. The warning is therefore present
 at first public availability. Public notes and download bytes must both verify before retirement.
+
+## Public-download verification
+
+[SpaceO 1.0.1](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.1) was published by the
+protected retained-candidate workflow on September 28, 2026. The release body contained the
+physical-display Viewer restriction at first public availability and links to the immutable
+qualification commit above. All five assets were downloaded without authentication and matched
+the qualified candidate byte-for-byte. Candidate provenance, publisher signatures, notarization
+staples, Gatekeeper, and fresh-mounted payload verification passed again on those public bytes.
+
+The public installer passed in an owner-only private prefix with setup, MCP-client registration,
+and PATH changes disabled. Installed CLI version and bytes matched the qualified candidate, and
+the installed Viewer passed strict nested signature verification. The normal installation and
+pre-existing daemon were not replaced or started. No further live input tests were run.
+
+The backed-up old release, tag, and candidate artifact were retired only after those checks.
+Eighty-four obsolete Actions runs pointing at superseded history were removed. A fresh public
+clone then passed historical personal-email metadata checks, tracked-file privacy checks, and
+Gitleaks credential scanning; the old tag was absent. The new publication log also passed
+personal-email and credential scans. These checks do not remove GitHub's retained PR refs or
+cached commit views; private Support cleanup remains separate and has not yet been submitted.
