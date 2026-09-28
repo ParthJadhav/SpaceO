@@ -144,9 +144,10 @@ Display, input, and session implementation is unchanged from the September 26 li
 Relative to pre-migration main, only the embedded version changes in runtime source; relative to
 1.0.0, the candidate also includes the existing unreadable-MCP-configuration fix. Exact-artifact
 verification, the full live suite, and the full computer-use matrix passed. Interactive Viewer
-qualification remains pending because an external lock controller prevented confirmation of the
-unlocked input and escape path. Results are retained under
-`docs/validation/2026-09-28-privacy-release.md`; publication remains gated.
+qualification also passed after normal owner unlock, with Viewer on the built-in display and
+the synthetic target on a virtual display. The retained record documents the inspected nested
+automation limitations and final cleanup. Results are retained under
+`docs/validation/2026-09-28-privacy-release.md`; protected publication is the next step.
 
 Publisher name and Team ID remain public code-signing metadata. GitHub retains read-only PR refs
 and cached historical views independently of branch rewrites; source cleanup cannot promise

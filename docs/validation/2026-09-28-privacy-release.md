@@ -1,11 +1,13 @@
 # Privacy maintenance release qualification
 
-Version: `1.0.1`. Status: **NO-GO: interactive Viewer qualification pending**.
+Version: `1.0.1`. Status: **qualification passed; protected publication pending**.
 
 The owner authorized history rewriting and a replacement release, and reserved this Mac for
 live qualification on September 28, 2026. This is implementer qualification on the owner's
 existing graphical login, not independent or fresh-user testing. Existing applications and the
-pre-existing daemon were preserved. Publication has not been approved.
+pre-existing daemon were preserved. The owner renewed the reserved-host authorization and directed completion of the remaining
+release work after normal unlock. Publication uses the protected workflow and the exact candidate
+identified below; the tag and artifact have not changed.
 
 ## Candidate identity
 
@@ -54,29 +56,49 @@ The live suite ran against the candidate source tree. The matrix ran against the
 candidate, not a local development build. It exercised native and Chromium placement,
 Accessibility, input, capture, isolation reporting, cleanup, and enforced Electron refusal.
 
-## Pending interactive check and recovery
+## Interactive qualification and recovery
 
-The candidate Viewer connected to the isolated daemon and showed a live stream. Taking Control
-paused the selected session, and an agent input attempt was refused with `session_paused`.
-An external lock controller covered the virtual display. A synthetic text attempt through the
-background automation route did not appear in the test document; this is **unconfirmed**, not
-passed Viewer input. Normal unlocked typing, the local Control-Command-Escape path, and the
-subsequent hand-back still require qualification. The owner was asked to unlock normally;
-no lock, TCC, or Gatekeeper protection was bypassed.
+The initial check was blocked by an external lock controller. It was stopped and cleaned up;
+the owner later unlocked normally and reserved the Mac again. No authentication or permission
+protection was bypassed.
 
-The blocked check was stopped and inspected. The candidate Viewer exited gracefully; both test
-sessions and their displays were destroyed, and the isolated daemon stopped. Postflight showed:
+The resumed check confirmed Viewer typing in a synthetic TextEdit document, agent refusal with
+`session_paused`, local Control-Command-Escape, hand-back, and subsequent agent typing. An initial
+nested arrangement placed Viewer on another virtual display and showed intermittent stream
+staleness. A later absolute automation click did not match the relative virtual pointer used
+while host input is captured; the UI named Finder and no keys were sent to that target. Those
+observations were retained, the test was stopped, and all test resources were cleaned up before
+further diagnosis.
 
-- zero SpaceO displays and zero orphan displays;
-- lifecycle safety state ready and unchanged physical display topology;
-- the pre-existing daemon and all pre-existing regular application processes preserved;
-- no additional regular application processes;
-- unchanged foreground process, physical pointer position, and pasteboard change count.
+A metadata-only ScreenCaptureKit diagnostic received 25 complete frames and 414 valid idle
+samples over approximately 15 seconds. No image contents were saved by that diagnostic. Source
+inspection identified the distinction between absolute background automation and captured
+relative-pointer input. This does not qualify the nested Viewer arrangement or claim a runtime
+fix for its stream behavior.
 
-Only the remaining Viewer stage may continue after the owner unlocks and a fresh preflight
-confirms readiness. The passing live suite and matrix must not be silently replaced by a rerun.
-Publication remains gated until the missing results are retained and the release-owner directive
-can be fulfilled with all required evidence.
+A focused qualification then used the normal arrangement: the exact signed Viewer, launched
+with `--background` and moved through the standard Window menu to the built-in display, with
+only the synthetic TextEdit target on an exclusive virtual display. The target window was fitted
+to its display before control. Results:
+
+- the stream stayed live before, throughout 44 seconds of control, and after hand-back;
+- the UI identified TextEdit as the keyboard destination before any text was sent;
+- Viewer-typed synthetic text was confirmed independently in Accessibility and live pixels;
+- agent input during human control was refused and its marker was absent;
+- Control-Command-Escape opened the hand-back sheet locally;
+- Skip resumed the agent, and subsequent agent text was confirmed in the target document.
+
+The earlier full live suite and exact-candidate matrix were not rerun. Source, scripts, workflows,
+and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is not
+part of this qualified arrangement; use Viewer on the physical display for human control.
+
+Final cleanup left zero SpaceO displays, zero orphan displays, lifecycle safety ready, and the
+same physical display topology. All pre-existing regular applications and the pre-existing daemon
+were preserved, with no additional regular app processes. Foreground application and pasteboard
+change count matched the focused check's baseline. Physical pointer position changed during the
+interactive Viewer test; it is not claimed unchanged. Control was released, the capture breadcrumb
+was cleared, and the test Viewer and isolated daemon exited. The earlier full matrix separately
+verified agent-side pointer/focus isolation.
 
 ## Privacy migration and retention
 
@@ -98,3 +120,5 @@ uploaded as a public artifact. Retained evidence hashes:
 
 - full live log SHA-256: `4aa96a50e41bc231eba08d029d89d9e1a6e65e24488e33eb82f1d95a21c3e9d5`;
 - exact-candidate matrix report SHA-256: `81a51e6bbf6977f44dae740e517da38df0e29ad614c3e851dc724ab0e1f22cfc`.
+
+- focused Viewer result SHA-256: `21fdc4333c45f1d2659da4ff692a600c77685280ebb07fb7bc612551e8f4729b`.
