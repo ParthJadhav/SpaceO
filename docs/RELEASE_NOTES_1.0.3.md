@@ -1,5 +1,9 @@
 # SpaceO 1.0.3
 
+> **Retained draft; public release withdrawn.** Qualification remains on hold for Viewer pointer
+> evidence and the Chromium soak diagnostic. Version 1.0.1 remains latest stable. The text below
+> records the candidate scope; it does not indicate current public availability.
+
 This release supersedes the unpublished 1.0.2 candidate and includes corrected, version-checked
 installation instructions. This performance maintenance release reduces unnecessary Viewer capture work and bounds
 logging-settings memory use. Native apps and Chromium browsers on Apple Silicon remain the

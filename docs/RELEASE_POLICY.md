@@ -145,6 +145,17 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
+Version `1.0.1` remains the latest stable release. Version `1.0.3` is retained as a draft candidate. Its briefly public signed downloads
+and private-prefix installer were verified, but post-publication review identified incomplete
+Viewer pointer evidence and the still-open Chromium soak diagnostic. The implementer corrected
+its initial full-release status, first to prerelease and then to draft, without modifying any
+asset or tag. The public release and assets were withdrawn; prereleases are subject to the same
+qualification gates. See the
+[1.0.3 record](validation/2026-09-28-release-1.0.3.md) for passing results, failed diagnostics and
+the publication HOLD. The superseded 1.0.2 candidate was never published.
+
+### Previous 1.0.1 qualification
+
 Version `1.0.1` is [published](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.1) and its
 public downloads are verified. The owner accepted the physical-display Viewer scope and approved
 publication on September 28, 2026, then explicitly confirmed normal local pointer, keyboard, and

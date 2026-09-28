@@ -6,12 +6,12 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
-## [1.0.3] - 2026-09-28
+## [1.0.3] - Draft; public release withdrawn 2026-09-28
 
 - Include the performance improvements below with version-checked installation instructions.
   The unpublished 1.0.2 candidate was superseded; its immutable tag was not moved.
 
-## [1.0.2] - 2026-09-28
+## [1.0.2] - Superseded candidate; never published
 
 - Stop Viewer capture when no console or Mini Monitor consumes frames, and resume when a
   surface returns. Retain selection, preserve shared streams, and retire late capture starts.
