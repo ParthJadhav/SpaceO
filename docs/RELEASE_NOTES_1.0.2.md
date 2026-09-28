@@ -20,9 +20,9 @@ Use Viewer on a physical display while the controlled app runs on a SpaceO virtu
 Hosting Viewer on a virtual display remains unsupported. A synthetic Chrome animation workload
 did not produce changing captured pixels; its cause remains unresolved. An intermittent Chrome
 Accessibility identity failure also remains under investigation; discovery continues to fail
-closed. See [performance evidence](validation/2026-09-28-performance-followup.md).
+closed. See [performance evidence](https://github.com/ParthJadhav/SpaceO/blob/v1.0.2/docs/validation/2026-09-28-performance-followup.md).
 
 Download the DMG, signed checksum and signed candidate record, then follow
-[verification and installation instructions](INSTALL.md). The previous 1.0.1 release remains
+[verification and installation instructions](https://github.com/ParthJadhav/SpaceO/blob/v1.0.2/docs/INSTALL.md). The previous 1.0.1 release remains
 available for rollback. Qualification and publication status are tracked in the
-[release record](validation/2026-09-28-release-1.0.2.md).
+[release record](https://github.com/ParthJadhav/SpaceO/blob/main/docs/validation/2026-09-28-release-1.0.2.md).
