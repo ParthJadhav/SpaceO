@@ -115,8 +115,9 @@ to its display before control. Results:
 - Control-Command-Escape opened the hand-back sheet locally;
 - Skip resumed the agent, and subsequent agent text was confirmed in the target document.
 
-The earlier full live suite and exact-candidate matrix were not rerun. Source, scripts, workflows,
-and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is formally excluded from the owner-approved 1.0.1 supported scope
+The earlier full live suite and exact-candidate matrix were not rerun. Runtime source and
+release verification scripts remain unchanged from the signed candidate. A separate protected
+publication workflow publishes the retained artifact with the completed scope disclosure. Viewer-on-virtual-display nesting is formally excluded from the owner-approved 1.0.1 supported scope
 and disclosed in release notes and user guidance; no runtime fix is claimed. Publication remains
 approved by the owner on September 28, 2026, with normal host postflight subsequently confirmed. Use Viewer on the physical display for human control.
 
@@ -179,9 +180,15 @@ signed artifact stay unchanged; the completed qualification and owner GO are lin
 post-tag documentation commit. This follows the release policy's committed-or-immutably-linked
 evidence model rather than relabeling an already-qualified binary.
 
-The protected publication job creates the release with generic notes. As part of completing this
-publication, the release body is replaced with the owner-approved scope, the explicit unsupported
-nested-Viewer warning, and immutable links to this qualification record and installation guidance.
-The replacement is not treated as verified, and the old release is not retired, until both the
-public notes and all five public asset bytes are verified. No candidate bytes or tag are changed
-by release-note finalization.
+The original waiting publication job is superseded and must be cancelled without approval. Its
+generic notes predate the Viewer limitation. The one-time `publish-retained.yml` workflow runs
+from reviewed, protected `main` and requires the same `release-publication` reviewer boundary.
+That environment permits protected `main` in addition to release tags; the signing environment
+remains tag-only. No administrator bypass or signing credentials are added.
+
+The new workflow pins the original artifact ID, archive digest, source, tag object, and candidate
+run/attempt, downloads the retained archive, and authenticates the signed candidate using its
+original verifier. It does not rebuild, re-sign, or move the tag. It publishes all five files
+with `docs/RELEASE_BODY_1.0.1.md` in the same release creation, replacing its qualification-link
+placeholder with the workflow's immutable documentation commit. The warning is therefore present
+at first public availability. Public notes and download bytes must both verify before retirement.

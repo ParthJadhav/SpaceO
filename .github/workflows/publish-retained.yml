@@ -1,0 +1,105 @@
+name: Publish qualified retained 1.0.1 candidate
+
+# One-time publication of the already signed candidate after post-tag qualification.
+# No user-supplied artifact, source, notes, or shell inputs; no signing credentials.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-v1.0.1
+  cancel-in-progress: false
+
+jobs:
+  publication:
+    if: github.ref == 'refs/heads/main' && vars.SPACEO_RELEASE_ENABLED == 'true' && github.event.repository.private == false
+    environment: release-publication
+    runs-on: macos-15
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      SPACEO_REQUIRED_XCODE_VERSION: "26.3"
+      SPACEO_REQUIRED_SWIFT_VERSION: "6.2"
+      SPACEO_RELEASE_TAG: v1.0.1
+      SPACEO_RELEASE_COMMIT: 7f80fc756a664daadd7ed8d8fb422fe28e65cb01
+      SPACEO_RELEASE_TAG_OBJECT: 7970665e11bafa44170a0e40947392c25d0564a7
+      SPACEO_RELEASE_WORKFLOW_REPOSITORY: ParthJadhav/SpaceO
+      SPACEO_RELEASE_WORKFLOW_RUN_ID: "36347116087"
+      SPACEO_RELEASE_WORKFLOW_RUN_ATTEMPT: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate approval boundary and prepare immutable notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ParthJadhav/SpaceO
+          gh api "repos/$GITHUB_REPOSITORY/environments/release-publication" |
+            jq -e '.can_admins_bypass == false and
+              .deployment_branch_policy.custom_branch_policies == true and
+              any(.protection_rules[]; .type == "required_reviewers" and (.reviewers | length) > 0)' >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/environments/release-publication/deployment-branch-policies" |
+            jq -e '.branch_policies | any(.[]; .type == "branch" and .name == "main") and
+              all(.[]; (.type == "tag" and .name == "v*") or (.type == "branch" and .name == "main"))' >/dev/null
+          git merge-base --is-ancestor "$SPACEO_RELEASE_COMMIT" HEAD
+          grep -F 'Status: **GO' docs/validation/2026-09-28-privacy-release.md >/dev/null
+          sed "s/QUALIFICATION_COMMIT/$GITHUB_SHA/g" docs/RELEASE_BODY_1.0.1.md > "$RUNNER_TEMP/spaceo-release-notes.md"
+          grep -F 'Hosting Viewer inside a SpaceO virtual display is unsupported' "$RUNNER_TEMP/spaceo-release-notes.md" >/dev/null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.1" --jq .object.sha)" = "$SPACEO_RELEASE_TAG_OBJECT"
+
+      - name: Download and authenticate exact retained archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          artifact="repos/$GITHUB_REPOSITORY/actions/artifacts/10941066931"
+          gh api "$artifact" | jq -e '.expired == false and
+            .workflow_run.id == 36347116087 and
+            .workflow_run.head_sha == "7f80fc756a664daadd7ed8d8fb422fe28e65cb01" and
+            .digest == "sha256:7cb509da4ce1f02676247e1fb5c38b98c2f7e43206497d79f611348fdd999487"' >/dev/null
+          gh api "$artifact/zip" > "$RUNNER_TEMP/spaceo-candidate.zip"
+          echo "7cb509da4ce1f02676247e1fb5c38b98c2f7e43206497d79f611348fdd999487  $RUNNER_TEMP/spaceo-candidate.zip" | shasum -a 256 -c -
+          mkdir "$RUNNER_TEMP/spaceo-release-candidate"
+          unzip -q "$RUNNER_TEMP/spaceo-candidate.zip" -d "$RUNNER_TEMP/spaceo-release-candidate"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 7f80fc756a664daadd7ed8d8fb422fe28e65cb01
+          path: candidate-source
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Independently verify signed candidate and distribution
+        working-directory: candidate-source
+        run: |
+          set -euo pipefail
+          bash scripts/check-swift-toolchain.sh
+          test "$(git rev-parse HEAD)" = "$SPACEO_RELEASE_COMMIT"
+          test "$(git rev-parse refs/tags/v1.0.1)" = "$SPACEO_RELEASE_TAG_OBJECT"
+          bash Tests/ReleaseSecurityTests.sh
+          bash scripts/release.sh verify-candidate "$RUNNER_TEMP/spaceo-release-candidate/SpaceO-1.0.1-macOS-arm64.candidate.txt"
+
+      - name: Publish verified assets and scope together
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.0.1" --jq .object.sha)" = "$SPACEO_RELEASE_TAG_OBJECT"
+          base="$RUNNER_TEMP/spaceo-release-candidate/SpaceO-1.0.1-macOS-arm64"
+          gh release create v1.0.1 \
+            "$base.dmg" "$base.sha256" "$base.sha256.sig" \
+            "$base.candidate.txt" "$base.candidate.txt.sig" \
+            --verify-tag --latest --title "SpaceO 1.0.1" \
+            --notes-file "$RUNNER_TEMP/spaceo-release-notes.md"

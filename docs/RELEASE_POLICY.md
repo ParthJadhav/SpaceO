@@ -132,7 +132,12 @@ must require an authorized reviewer in repository settings. It starts only after
 artifact exists, downloads that artifact by immutable artifact ID, authenticates and repeats its
 distribution verification, rechecks that the remote tag has not moved, and publishes those exact
 files without rebuilding or using signing/notarization credentials. The existing `release`
-environment may independently protect candidate signing credentials. Environment protection and
+environment may independently protect candidate signing credentials. For the retained 1.0.1
+candidate, `publish-retained.yml` supplies the same post-artifact reviewer gate and pins the
+original artifact, digest, source, tag object, and provenance. Its protected-main invocation
+publishes the completed scope notes atomically with the five verified assets; it receives no
+signing secrets. The publication environment permits `main` and release tags, while the signing
+environment remains tag-only. Environment protection and
 secrets are repository configuration, not claims made by this repository.
 
 A maintainer must not bypass a failed gate by uploading locally built artifacts, rebuilding after
