@@ -194,24 +194,36 @@ checks in `docs/LIVE_TESTS.md`, and retain their results. Before interpreting an
 matches the CLI. Both runs below must execute every test with zero failures and
 zero skips; retain the logs privately.
 
-The dedicated-login local run, in one shell, is:
+The dedicated-login local run is below. It runs in a subshell that stops at the first failure, so
+a failed admission check or live suite never reaches the next step. Each attempt writes to a new
+owner-only directory named for the commit and a UTC timestamp; `mkdir` without `-p` refuses to
+reuse one, so a retry never overwrites an interrupted attempt's evidence.
 
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
-export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
-test "$(uname -m)" = arm64
-bash scripts/check-swift-toolchain.sh
-swift run spaceo doctor
-umask 077
-evidence="$HOME/Library/Logs/SpaceO/qualification/$(git rev-parse --short HEAD)"
-mkdir -p "$evidence"
-SPACEO_LIVE_TESTS=1 SPACEO_LIVE_LOG="$evidence/live-tests.log" make test-live-full \
-  >"$evidence/live-command.log" 2>&1
-SPACEO_LIVE_TESTS=1 SPACEO_TEST_REPORT="$evidence/computer-use.json" make computer-use-check-full \
-  >"$evidence/computer-use-command.log" 2>&1
+(
+  set -euo pipefail
+  umask 077
+  export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+  export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
+  export SPACEO_LIVE_TESTS=1
+  evidence="$HOME/Library/Logs/SpaceO/qualification/$(git rev-parse --short HEAD)-$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$(dirname "$evidence")"
+  mkdir "$evidence"
+  uname -m | tee "$evidence/admission.log"
+  test "$(uname -m)" = arm64
+  bash scripts/check-swift-toolchain.sh 2>&1 | tee -a "$evidence/admission.log"
+  make release
+  .build/release/spaceo doctor 2>&1 | tee "$evidence/doctor.log"
+  SPACEO_LIVE_LOG="$evidence/live-tests.log" make test-live-full \
+    2>&1 | tee "$evidence/live-command.log"
+  SPACEO_TEST_REPORT="$evidence/computer-use.json" make computer-use-check-full \
+    2>&1 | tee "$evidence/computer-use-command.log"
+)
 ```
 
-The owner-only `$evidence` directory is the retained approval evidence; keep it private.
+`doctor` runs against the release binary the matrix launches. Review `doctor.log` for
+`can drive sessions: yes`, `can capture: yes`, and a matching daemon before accepting the run. The
+evidence directory, including `admission.log`, is the retained approval evidence; keep it private.
 
 The owner-authorized existing login may be used under the precautions in
 [the live-test guide](LIVE_TESTS.md). The suite creates displays, launches applications, and
