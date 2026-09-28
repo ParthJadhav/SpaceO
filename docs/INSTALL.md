@@ -7,10 +7,10 @@ containing two signed executables:
 - `SpaceO Viewer.app`, the optional graphical console
 
 
-For 1.0.1, use Viewer on a physical display while the controlled application runs on a SpaceO
+Use Viewer on a physical display while the controlled application runs on a SpaceO
 virtual display. Hosting Viewer itself on a SpaceO virtual display is not qualified or supported:
 that nested arrangement showed intermittent stream staleness during qualification. No runtime
-fix for nested Viewer use is included in this privacy maintenance candidate.
+fix for nested Viewer use is claimed; that arrangement remains unsupported.
 
 This is a direct Developer ID distribution, not a Mac App Store release. The disk image and Viewer
 must be notarized and stapled. Each release also includes a SHA-256
@@ -23,8 +23,13 @@ Review “Requirements and support status” in the project README and run `spac
 intended host before creating a session.
 
 Download the [latest signed release](https://github.com/ParthJadhav/SpaceO/releases/latest).
-The commands below use version `1.0.1`; only install a published artifact that passes all
-publisher, checksum, and notarization checks. See the [release policy](RELEASE_POLICY.md).
+Set the version to the published release you downloaded, then use the same value in every
+verification command below. Only install an artifact that passes all publisher, checksum and
+notarization checks. See the [release policy](RELEASE_POLICY.md).
+
+```bash
+SPACEO_VERSION="1.0.3"
+```
 
 ## Quick install
 
@@ -61,31 +66,31 @@ checksum as an official SpaceO publisher artifact before using it:
 
 ```bash
 codesign --verify \
-  --detached SpaceO-1.0.1-macOS-arm64.sha256.sig \
+  --detached "SpaceO-$SPACEO_VERSION-macOS-arm64.sha256.sig" \
   --strict --verbose=2 \
   -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.release-checksum"' \
-  SpaceO-1.0.1-macOS-arm64.sha256
+  "SpaceO-$SPACEO_VERSION-macOS-arm64.sha256"
 ```
 
 Only after that command succeeds, verify the disk image from the directory containing all three
 files:
 
 ```bash
-shasum -a 256 -c SpaceO-1.0.1-macOS-arm64.sha256
+shasum -a 256 -c "SpaceO-$SPACEO_VERSION-macOS-arm64.sha256"
 ```
 
 Ask Gatekeeper to assess the stapled disk image before mounting it:
 
 ```bash
 spctl --assess --type open --context context:primary-signature --verbose=4 \
-  SpaceO-1.0.1-macOS-arm64.dmg
+  "SpaceO-$SPACEO_VERSION-macOS-arm64.dmg"
 ```
 
 Mount it at a private temporary path and verify both payload signatures:
 
 ```bash
 SPACEO_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/spaceo-install.XXXXXX")"
-hdiutil attach SpaceO-1.0.1-macOS-arm64.dmg \
+hdiutil attach "SpaceO-$SPACEO_VERSION-macOS-arm64.dmg" \
   -readonly -nobrowse -mountpoint "$SPACEO_MOUNT"
 codesign --verify --strict --verbose=2 \
   -R '=anchor apple generic and certificate leaf[subject.OU] = "75LRT8TRQY" and identifier "dev.spaceo.cli"' \

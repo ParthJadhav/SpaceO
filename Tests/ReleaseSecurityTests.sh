@@ -117,6 +117,35 @@ MOCK_BIN="$TEST_ROOT/bin"
 FIXTURE_DIR="$TEST_ROOT/fixture"
 mkdir -p "$MOCK_BIN" "$FIXTURE_DIR"
 
+# Release instructions shipped inside the DMG must name the candidate version.
+guide_fixture="$TEST_ROOT/guide-version"
+mkdir -p "$guide_fixture/scripts" "$guide_fixture/docs" \
+    "$guide_fixture/Sources/SpaceOKit" "$guide_fixture/Sources/spaceo" \
+    "$guide_fixture/Sources/SpaceOMCP"
+cp "$RELEASE_SCRIPT" "$guide_fixture/scripts/release.sh"
+cp "$REPOSITORY_ROOT/VERSION" "$guide_fixture/VERSION"
+cp "$REPOSITORY_ROOT/Sources/SpaceOKit/SpaceOVersion.swift" "$guide_fixture/Sources/SpaceOKit/"
+cp "$REPOSITORY_ROOT/Sources/spaceo/main.swift" "$guide_fixture/Sources/spaceo/"
+cp "$REPOSITORY_ROOT/Sources/SpaceOMCP/MCPServer.swift" "$guide_fixture/Sources/SpaceOMCP/"
+printf 'SPACEO_VERSION="0.0.0"\n' > "$guide_fixture/docs/INSTALL.md"
+if bash "$guide_fixture/scripts/release.sh" check > "$TEST_ROOT/guide-check.log" 2>&1; then
+    fail "release check accepted installation instructions for a different version"
+fi
+assert_contains "$TEST_ROOT/guide-check.log" 'INSTALL.md example version must match VERSION'
+cp "$REPOSITORY_ROOT/docs/INSTALL.md" "$guide_fixture/docs/INSTALL.md"
+bash "$guide_fixture/scripts/release.sh" check >/dev/null
+printf '\nSPACEO_VERSION="0.0.0"\n' >> "$guide_fixture/docs/INSTALL.md"
+if bash "$guide_fixture/scripts/release.sh" check > "$TEST_ROOT/duplicate-guide.log" 2>&1; then
+    fail "release check accepted duplicate installation version assignments"
+fi
+assert_contains "$TEST_ROOT/duplicate-guide.log" 'INSTALL.md example version must match VERSION'
+cp "$REPOSITORY_ROOT/docs/INSTALL.md" "$guide_fixture/docs/INSTALL.md"
+printf '\nhdiutil attach SpaceO-1.0.1-macOS-arm64.dmg\n' >> "$guide_fixture/docs/INSTALL.md"
+if bash "$guide_fixture/scripts/release.sh" check > "$TEST_ROOT/literal-guide.log" 2>&1; then
+    fail "release check accepted a hard-coded artifact version"
+fi
+assert_contains "$TEST_ROOT/literal-guide.log" 'INSTALL.md artifact names must derive from SPACEO_VERSION'
+
 cat > "$MOCK_BIN/codesign" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -179,6 +208,7 @@ printf '{"version":"%s"}\n' "${TEST_RELEASE_VERSION:?}"
 CLI
 chmod +x "$mount_point/spaceo"
 touch "$mount_point/SpaceO Viewer.app/Contents/Info.plist"
+printf 'SPACEO_VERSION="%s"\n' "${FAKE_INSTALL_VERSION:-${TEST_RELEASE_VERSION:?}}" > "$mount_point/INSTALL.md"
 MOCK
 
 cat > "$MOCK_BIN/plutil" <<'MOCK'
@@ -325,6 +355,13 @@ fi
 )
 
 publisher_marker="$TEST_ROOT/publisher-executed"
+if PATH="$MOCK_BIN:$PATH" SWIFT=true NODE=true \
+   FAKE_TEAM_ID="$PUBLISHER_TEAM_ID" FAKE_INSTALL_VERSION=0.0.0 \
+   EXECUTION_MARKER="$publisher_marker" TEST_RELEASE_VERSION="$version" \
+   bash "$RELEASE_SCRIPT" verify "$artifact" > "$TEST_ROOT/mounted-guide.log" 2>&1; then
+    fail "a signed artifact with stale installation instructions was accepted"
+fi
+assert_contains "$TEST_ROOT/mounted-guide.log" 'INSTALL.md example version must match VERSION'
 PATH="$MOCK_BIN:$PATH" \
 SWIFT=true \
 NODE=true \
