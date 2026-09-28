@@ -100,7 +100,7 @@ to its display before control. Results:
 - Skip resumed the agent, and subsequent agent text was confirmed in the target document.
 
 The earlier full live suite and exact-candidate matrix were not rerun. Source, scripts, workflows,
-and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is formally excluded from the proposed 1.0.1 supported scope
+and tests remain unchanged from the signed candidate. Viewer-on-virtual-display nesting is formally excluded from the owner-approved 1.0.1 supported scope
 and disclosed in release notes and user guidance; no runtime fix is claimed. Publication remains
 authorized by the owner with that disclosed limitation on September 28, 2026. Use Viewer on the physical display for human control.
 
