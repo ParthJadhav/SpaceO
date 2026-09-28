@@ -194,9 +194,13 @@ checks in `docs/LIVE_TESTS.md`, and retain their results. Before interpreting an
 matches the CLI. Both runs below must execute every test with zero failures and
 zero skips; retain the logs privately.
 
-The dedicated-login local run is:
+The dedicated-login local run, in one shell, is:
 
 ```bash
+export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
+test "$(uname -m)" = arm64
+bash scripts/check-swift-toolchain.sh
 swift run spaceo doctor
 SPACEO_LIVE_TESTS=1 make test-live-full
 SPACEO_LIVE_TESTS=1 make computer-use-check-full

@@ -97,13 +97,15 @@ with the repository: CI and signing use disposable GitHub-hosted runners, which 
 graphical login, TCC grants, or private virtual-display support. Never register a personal
 workstation for public repository jobs.
 
-Admit only an Apple Silicon host on the pinned toolchain, and retain both checks with the run:
+Admit only an Apple Silicon host on the pinned toolchain, and retain both checks with the run.
+Run them in the same shell as the qualification commands so the exported toolchain stays active
+for every build and test:
 
 ```bash
+export DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer
+export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
 test "$(uname -m)" = arm64
-DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer \
-  SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2 \
-  bash scripts/check-swift-toolchain.sh
+bash scripts/check-swift-toolchain.sh
 ```
 
 A successful no-skip local run on that host (`make test-live-full` and
