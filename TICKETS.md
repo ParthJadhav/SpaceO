@@ -32,7 +32,7 @@ Status definitions:
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 
 - Priority: P0
-- Status: Done for the native + Chromium scope; 1.0.3 exact-candidate matrix passed; public publication remains held
+- Status: Done for the native + Chromium scope; 1.0.3 exact-candidate matrix passed; publication owner-authorized with disclosed gaps
 - September 28, 1.0.2: the candidate source passed all 16 live cases without skips, and the
   exact signed artifact passed all 36 matrix checks, including Chromium isolation and cleanup.
   See [1.0.2 qualification](docs/validation/2026-09-28-release-1.0.2.md). The unpublished 1.0.2
