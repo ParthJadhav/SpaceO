@@ -32,7 +32,11 @@ Status definitions:
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 
 - Priority: P0
-- Status: In verification; signed-candidate qualification still required
+- Status: Done for the native + Chromium scope; exact 1.0.2 artifact requalification pending
+- September 28: the signed 1.0.1 candidate passed the full 36-check matrix, after the full
+  16-case source suite passed without skips. Publication and public downloads were verified.
+  See [1.0.1 qualification](docs/validation/2026-09-28-privacy-release.md); this closes the
+  historical signed-candidate gap, not future release qualification.
 - September 24 fix: launch without a startup window, then create bounded background CDP targets
   on the agent display. Two focused Chromium live runs and a complete 16/16 no-skip
   WindowServer run passed. This source evidence does not qualify a signed distribution.
@@ -292,11 +296,13 @@ Status definitions:
 ### SPAO-115 — Ship a signed, notarized, versioned distribution
 
 - Priority: P0
-- Status: Open
+- Status: Done for 1.0.1; every new artifact still requires qualification
+- September 28: protected publication of the exact signed/notarized 1.0.1 candidate and all five
+  public downloads passed provenance, signature, Gatekeeper, fresh-mount and private installation
+  checks. Rollback was verified. See [the retained record](docs/validation/2026-09-28-privacy-release.md).
 - Evidence: The fail-closed Developer ID DMG, notarization, stapling, checksum-signing, fresh-mount
   verification, GitHub workflow, and install/upgrade/rollback/uninstall documentation are
-  implemented. `RELEASE_AUDIT.md` RA-044 remains unresolved because no credentialed,
-  qualified public artifact is recorded.
+  implemented. The historical RA-044 credentialed-artifact gap is closed by that record.
 - Impact: A normal user cannot install SpaceO through a trustworthy macOS release path, verify its
   provenance, or receive predictable upgrades without bypassing platform protections.
 - Acceptance:
