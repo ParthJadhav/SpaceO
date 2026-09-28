@@ -1,8 +1,9 @@
 # SpaceO 1.0.3
 
-> **Retained draft; public release withdrawn.** Qualification remains on hold for Viewer pointer
-> evidence and the Chromium soak diagnostic. Version 1.0.1 remains latest stable. The text below
-> records the candidate scope; it does not indicate current public availability.
+> **Known limitations:** Physical Viewer pointer qualification remains incomplete, and an
+> intermittent Chromium Accessibility-discovery/teardown diagnostic remains unresolved. The
+> release owner explicitly directed publication after these gaps were reported. Passing matrix,
+> capture, keyboard and artifact checks do not establish that these outstanding issues are fixed.
 
 This release supersedes the unpublished 1.0.2 candidate and includes corrected, version-checked
 installation instructions. This performance maintenance release reduces unnecessary Viewer capture work and bounds
