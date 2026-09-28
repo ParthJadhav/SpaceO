@@ -202,9 +202,16 @@ export SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2
 test "$(uname -m)" = arm64
 bash scripts/check-swift-toolchain.sh
 swift run spaceo doctor
-SPACEO_LIVE_TESTS=1 make test-live-full
-SPACEO_LIVE_TESTS=1 make computer-use-check-full
+umask 077
+evidence="$HOME/Library/Logs/SpaceO/qualification/$(git rev-parse --short HEAD)"
+mkdir -p "$evidence"
+SPACEO_LIVE_TESTS=1 SPACEO_LIVE_LOG="$evidence/live-tests.log" make test-live-full \
+  >"$evidence/live-command.log" 2>&1
+SPACEO_LIVE_TESTS=1 SPACEO_TEST_REPORT="$evidence/computer-use.json" make computer-use-check-full \
+  >"$evidence/computer-use-command.log" 2>&1
 ```
+
+The owner-only `$evidence` directory is the retained approval evidence; keep it private.
 
 The owner-authorized existing login may be used under the precautions in
 [the live-test guide](LIVE_TESTS.md). The suite creates displays, launches applications, and
