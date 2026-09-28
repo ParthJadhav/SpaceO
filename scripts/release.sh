@@ -75,6 +75,13 @@ require_command() {
     command -v "$1" >/dev/null 2>&1 || fail "required command is unavailable: $1"
 }
 
+assert_install_version() {
+    local install_version
+    install_version="$(awk -F'"' '/^SPACEO_VERSION=/ { print $2; exit }' "$1")"
+    [[ "$install_version" == "$VERSION" ]] \
+        || fail "INSTALL.md example version must match VERSION"
+}
+
 load_version() {
     [[ -f "$VERSION_FILE" ]] || fail "missing VERSION file"
     VERSION="$(tr -d '\r\n' < "$VERSION_FILE")"
@@ -87,10 +94,7 @@ load_version() {
     )"
     [[ "$source_version" == "$VERSION" ]] \
         || fail "VERSION ($VERSION) does not match SpaceOVersion.current ($source_version)"
-    local install_version
-    install_version="$(awk -F'"' '/^SPACEO_VERSION=/ { print $2; exit }' "$REPOSITORY_ROOT/docs/INSTALL.md")"
-    [[ "$install_version" == "$VERSION" ]] \
-        || fail "INSTALL.md example version must match VERSION"
+    assert_install_version "$REPOSITORY_ROOT/docs/INSTALL.md"
     grep -F "SpaceOVersion.current" "$REPOSITORY_ROOT/Sources/spaceo/main.swift" >/dev/null \
         || fail "CLI version output must use SpaceOVersion.current"
     grep -F "SpaceOVersion.current" "$REPOSITORY_ROOT/Sources/SpaceOMCP/MCPServer.swift" >/dev/null \
@@ -371,6 +375,7 @@ verify_distribution() {
     # notarized or not. The CLI is pinned by its designated requirement above and ships inside
     # the notarized, stapled DMG.
     spctl --assess --type execute "$app"
+    assert_install_version "$mount_point/INSTALL.md"
     assert_embedded_versions "$cli" "$app"
 
     hdiutil detach "$mount_point" -quiet

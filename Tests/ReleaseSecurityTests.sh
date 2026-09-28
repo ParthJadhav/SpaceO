@@ -197,6 +197,7 @@ printf '{"version":"%s"}\n' "${TEST_RELEASE_VERSION:?}"
 CLI
 chmod +x "$mount_point/spaceo"
 touch "$mount_point/SpaceO Viewer.app/Contents/Info.plist"
+printf 'SPACEO_VERSION="%s"\n' "${FAKE_INSTALL_VERSION:-${TEST_RELEASE_VERSION:?}}" > "$mount_point/INSTALL.md"
 MOCK
 
 cat > "$MOCK_BIN/plutil" <<'MOCK'
@@ -343,6 +344,13 @@ fi
 )
 
 publisher_marker="$TEST_ROOT/publisher-executed"
+if PATH="$MOCK_BIN:$PATH" SWIFT=true NODE=true \
+   FAKE_TEAM_ID="$PUBLISHER_TEAM_ID" FAKE_INSTALL_VERSION=0.0.0 \
+   EXECUTION_MARKER="$publisher_marker" TEST_RELEASE_VERSION="$version" \
+   bash "$RELEASE_SCRIPT" verify "$artifact" > "$TEST_ROOT/mounted-guide.log" 2>&1; then
+    fail "a signed artifact with stale installation instructions was accepted"
+fi
+assert_contains "$TEST_ROOT/mounted-guide.log" 'INSTALL.md example version must match VERSION'
 PATH="$MOCK_BIN:$PATH" \
 SWIFT=true \
 NODE=true \
