@@ -1,5 +1,9 @@
 # Installing a SpaceO release
 
+> This checkout describes the unreleased 1.0.3 candidate. For the latest stable release, use the
+> [version 1.0.1 installation guide](https://github.com/ParthJadhav/SpaceO/blob/v1.0.1/docs/INSTALL.md).
+> The example below is for a 1.0.3 candidate; do not use its version value with a 1.0.1 download.
+
 SpaceO's supported public distribution model is a versioned Developer ID macOS disk image
 containing two signed executables:
 
