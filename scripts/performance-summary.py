@@ -2,14 +2,22 @@
 """Summarize bounded performance-live.py reports; no raw daemon logs or image content."""
 import json
 import math
+import os
 from pathlib import Path
+import stat
 import statistics
 import sys
 
 
 def read(path):
-    with path.open("rb") as source:
-        data = source.read(16 * 1024 * 1024 + 1)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("report must be a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            data = source.read(16 * 1024 * 1024 + 1)
+    finally:
+        os.close(descriptor)
     if len(data) > 16 * 1024 * 1024:
         raise ValueError("report exceeds 16 MiB")
     return data.decode("utf-8")

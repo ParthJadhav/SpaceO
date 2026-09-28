@@ -4,6 +4,7 @@ Run through live-test-supervisor.py on a reserved host. Only generated sessions 
 Reports contain timings/counts, never leases, screenshots, AX content or request payloads.
 """
 import concurrent.futures
+from contextlib import contextmanager
 import json
 import importlib.util
 import hashlib
@@ -21,6 +22,43 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_REPLY = 8 * 1024 * 1024
+
+
+def safety_stop():
+    # Logging must never be a prerequisite for retaining a display owner.
+    try:
+        os.write(2, b"LIVE SAFETY STOP REQUEST: performance cleanup unconfirmed; inspect retained owner\n")
+    finally:
+        os.kill(os.getpid(), signal.SIGSTOP)
+        while True:
+            signal.pause()
+
+
+@contextmanager
+def retain_on_cleanup_failure(verified):
+    try:
+        yield
+    except BaseException:
+        if not verified():
+            safety_stop()
+        raise
+
+
+def sampler_completed_early(child, target, label, path, elapsed):
+    status = child.poll()
+    if status is None:
+        return False
+    # The bounded probe exits normally by itself. Its sampler can observe that exit before
+    # cleanup. Require recent coverage as well as a successful target exit; other early exits
+    # (including sampler completion while a long-lived target remains alive) are failures.
+    if status == 1 and label == "probe" and target.poll() == 0:
+        with path.open("rb") as source:
+            data = source.read(1024 * 1024 + 1)
+        if len(data) <= 1024 * 1024:
+            rows = data.splitlines()
+            if len(rows) >= 2 and 0 <= elapsed - json.loads(rows[-1])["elapsedSeconds"] <= 2.5:
+                return False
+    return True
 
 
 def executable_digest(path):
@@ -135,7 +173,7 @@ def main():
         errors = (out / (label + "-sampler.log")).open("wb")
         handles.extend((handle, errors))
         child = subprocess.Popen([sampler, str(process.pid), "600", "1"], stdout=handle, stderr=errors)
-        samplers.append(child)
+        samplers.append((child, process, label))
 
     def doctor():
         result = subprocess.run([binary, "doctor", "--json"], env=environment,
@@ -375,65 +413,89 @@ def main():
         progress("idle-after-capture"); pause(20)
         success = True
     finally:
-        progress("cleanup")
-        cleanup_errors = []
-        if probe is not None and probe.poll() is None:
-            try: probe.wait(timeout=20)
-            except subprocess.TimeoutExpired:
-                probe.terminate()
-                try: probe.wait(timeout=10)
-                except subprocess.TimeoutExpired: cleanup_errors.append("native probe did not exit")
-        if viewer is not None and viewer.poll() is None:
-            viewer.terminate()
-            try: viewer.wait(timeout=10)
-            except subprocess.TimeoutExpired: cleanup_errors.append("Viewer did not exit")
-        for channel in subscribers: channel.close()
-        for name, lease in list(owned.items()):
-            try:
-                call("session.destroy", session=name, controllerLeaseID=lease)
-                del owned[name]
-            except Exception:
-                cleanup_errors.append("session cleanup unconfirmed")
-        if server is not None: server.shutdown(); server.server_close()
-        with fixture_lock:
-            (out / "fixture-health.json").write_text(json.dumps(fixture_records, indent=2))
-        try:
-            if daemon is not None and daemon.poll() is None and not cleanup_errors:
-                for _ in range(25):
-                    if call("pool").get("usage", {}).get("displays") == 0: break
-                    time.sleep(1)
-                else: cleanup_errors.append("display retirement unconfirmed")
-                if not cleanup_errors:
-                    progress("idle-after-teardown"); time.sleep(15)
-                    for child in samplers:
-                        if child.poll() is None: child.terminate()
-                    call("daemon.stop", operatorScope=True)
-                    try: daemon.wait(timeout=15)
-                    except subprocess.TimeoutExpired: cleanup_errors.append("daemon stop unconfirmed")
-        except Exception:
-            cleanup_errors.append("daemon cleanup could not be verified")
-        if cleanup_errors:
-            (out / "operations.json").write_text(json.dumps(operations, indent=2))
-            (out / "summary.json").write_text(json.dumps(dict(ok=False, topologyRestored=False,
-                cleanupErrors=cleanup_errors, operations=len(operations), phases=phases,
-                elapsedSeconds=time.monotonic()-started), indent=2))
-            print("LIVE SAFETY STOP REQUEST: performance cleanup unconfirmed; inspect retained owner", flush=True)
-            os.kill(os.getpid(), signal.SIGSTOP)
-            while True: signal.pause()
-        for child in samplers:
-            if child.poll() is None: child.terminate()
-            child.wait(timeout=5)
-        for handle in handles: handle.close()
-        if baseline is not None:
-            after = doctor()
-            if topology(after) != topology(baseline) or after.get("displaySafety", {}).get("state") != "ready":
+        with retain_on_cleanup_failure(lambda: daemon is None or
+                (topology_restored and daemon.poll() is not None)):
+            sampler_errors = []
+            for child, target, label in samplers:
+                if sampler_completed_early(child, target, label, out / (label + "-resources.jsonl"),
+                                           time.monotonic() - started - sample_starts[label]):
+                    sampler_errors.append(label + " resource sampler exited before completion")
+            if sampler_errors:
                 success = False
-                raise RuntimeError("postflight topology or display safety changed")
-            topology_restored = True
-        scratch.cleanup()
-        (out / "operations.json").write_text(json.dumps(operations, indent=2))
-        (out / "summary.json").write_text(json.dumps(dict(ok=success, topologyRestored=topology_restored,
-            operations=len(operations), phases=phases, elapsedSeconds=time.monotonic()-started), indent=2))
+            # Check and stop these samplers while their targets still exist; the daemon
+            # remains sampled through the post-teardown idle phase below.
+            for child, _, label in samplers:
+                if label != "daemon" and child.poll() is None:
+                    child.terminate()
+                    child.wait(timeout=5)
+            progress("cleanup")
+            cleanup_errors = []
+            if probe is not None and probe.poll() is None:
+                try: probe.wait(timeout=20)
+                except subprocess.TimeoutExpired:
+                    probe.terminate()
+                    try: probe.wait(timeout=10)
+                    except subprocess.TimeoutExpired: cleanup_errors.append("native probe did not exit")
+            if viewer is not None and viewer.poll() is None:
+                viewer.terminate()
+                try: viewer.wait(timeout=10)
+                except subprocess.TimeoutExpired: cleanup_errors.append("Viewer did not exit")
+            for channel in subscribers: channel.close()
+            for name, lease in list(owned.items()):
+                try:
+                    call("session.destroy", session=name, controllerLeaseID=lease)
+                    del owned[name]
+                except Exception:
+                    cleanup_errors.append("session cleanup unconfirmed")
+            if server is not None: server.shutdown(); server.server_close()
+            with fixture_lock:
+                (out / "fixture-health.json").write_text(json.dumps(fixture_records, indent=2))
+            try:
+                if daemon is not None and daemon.poll() is None and not cleanup_errors:
+                    for _ in range(25):
+                        if call("pool").get("usage", {}).get("displays") == 0: break
+                        time.sleep(1)
+                    else: cleanup_errors.append("display retirement unconfirmed")
+                    if not cleanup_errors:
+                        progress("idle-after-teardown"); time.sleep(15)
+                        for child, target, label in samplers:
+                            if label == "daemon":
+                                if sampler_completed_early(child, target, label,
+                                        out / (label + "-resources.jsonl"),
+                                        time.monotonic() - started - sample_starts[label]):
+                                    sampler_errors.append("daemon resource sampler exited before completion")
+                                    success = False
+                                if child.poll() is None:
+                                    child.terminate()
+                                    child.wait(timeout=5)
+                        call("daemon.stop", operatorScope=True)
+                        try: daemon.wait(timeout=15)
+                        except subprocess.TimeoutExpired: cleanup_errors.append("daemon stop unconfirmed")
+            except Exception:
+                cleanup_errors.append("daemon cleanup could not be verified")
+            if cleanup_errors:
+                (out / "operations.json").write_text(json.dumps(operations, indent=2))
+                (out / "summary.json").write_text(json.dumps(dict(ok=False, topologyRestored=False,
+                    cleanupErrors=cleanup_errors, operations=len(operations), phases=phases,
+                    elapsedSeconds=time.monotonic()-started), indent=2))
+                safety_stop()
+            for child, _, _ in samplers:
+                if child.poll() is None: child.terminate()
+                child.wait(timeout=5)
+            for handle in handles: handle.close()
+            if baseline is not None:
+                after = doctor()
+                if topology(after) != topology(baseline) or after.get("displaySafety", {}).get("state") != "ready":
+                    success = False
+                    raise RuntimeError("postflight topology or display safety changed")
+                topology_restored = True
+            scratch.cleanup()
+            (out / "operations.json").write_text(json.dumps(operations, indent=2))
+            (out / "summary.json").write_text(json.dumps(dict(ok=success, topologyRestored=topology_restored,
+                samplerErrors=sampler_errors, operations=len(operations), phases=phases,
+                elapsedSeconds=time.monotonic()-started), indent=2))
+            if sampler_errors:
+                raise RuntimeError("resource sampling failed; see private summary")
     print("performance live workload passed", flush=True)
 
 if __name__ == "__main__":

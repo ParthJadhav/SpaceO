@@ -2,6 +2,7 @@
 """Deterministic report validation; no app, display or input access."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -63,5 +64,13 @@ class Reports(unittest.TestCase):
     def test_oversized_report_rejected(self):
         with (self.root/'operations.json').open('wb') as f: f.truncate(16*1024*1024+1)
         with self.assertRaises(ValueError): report.summarize(self.root)
+
+    def test_fifo_and_symlink_reports_are_refused_without_waiting_for_a_writer(self):
+        fifo = self.root / 'fifo'
+        os.mkfifo(fifo)
+        with self.assertRaises(ValueError): report.read(fifo)
+        link = self.root / 'link'
+        link.symlink_to(fifo)
+        with self.assertRaises(OSError): report.read(link)
 
 if __name__ == '__main__': unittest.main()
