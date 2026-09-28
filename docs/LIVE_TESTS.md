@@ -97,6 +97,15 @@ with the repository: CI and signing use disposable GitHub-hosted runners, which 
 graphical login, TCC grants, or private virtual-display support. Never register a personal
 workstation for public repository jobs.
 
-A successful no-skip local run (`make test-live-full` and `make computer-use-check-full`, retained
-privately) is still required *approval evidence* under `docs/RELEASE_POLICY.md` — the release
-owner reviews it at go/no-go rather than automation enforcing it.
+Admit only an Apple Silicon host on the pinned toolchain, and retain both checks with the run:
+
+```bash
+test "$(uname -m)" = arm64
+SPACEO_REQUIRED_XCODE_VERSION=26.3 SPACEO_REQUIRED_SWIFT_VERSION=6.2 \
+  bash scripts/check-swift-toolchain.sh
+```
+
+A successful no-skip local run on that host (`make test-live-full` and
+`make computer-use-check-full`, retained privately) is still required *approval evidence* under
+`docs/RELEASE_POLICY.md` — the release owner reviews it at go/no-go rather than automation
+enforcing it.

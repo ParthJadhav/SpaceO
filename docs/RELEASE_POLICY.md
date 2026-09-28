@@ -97,8 +97,9 @@ The live WindowServer suite is deliberately **not** an automated gate: commit `4
 (RELEASE_AUDIT Round 9) removed the commit-bound live record, the packaging dependency, and the
 host-attestation opt-ins by owner decision, and neither CI nor `scripts/release.sh` runs or
 verifies a live suite. What remains is an evidence requirement at approval time, checked by the
-release owner rather than by automation: a successful, fully-run (no-skip) execution of the live
-suite — a retained `make test-live-full` log —
+release owner rather than by automation: successful, fully-run (no-skip) executions of both the
+live suite and the computer-use matrix — retained `make test-live-full` and
+`make computer-use-check-full` logs from an Apple Silicon (`arm64`) host on the pinned toolchain —
 against the release commit or a commit whose display/input behavior is unchanged since that run.
 The release owner reviews that evidence at go/no-go; a missing, skipped, or failing live run
 blocks approval exactly like any other unmet gate below.
