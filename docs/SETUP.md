@@ -238,10 +238,10 @@ breach. `partial` means some required state could not be observed; it is not an 
 
 ## 7. Optional: the Viewer
 
-For 1.0.1, use Viewer on a physical display while the controlled application runs on a SpaceO
+Use Viewer on a physical display while the controlled application runs on a SpaceO
 virtual display. Hosting Viewer itself on a SpaceO virtual display is not qualified or supported:
 that nested arrangement showed intermittent stream staleness during qualification. No runtime
-fix for nested Viewer use is included in this privacy maintenance candidate.
+fix for nested Viewer use is claimed; that arrangement remains unsupported.
 
 
 `SpaceO Viewer` shows every agent display live and lets you take control of one with your own

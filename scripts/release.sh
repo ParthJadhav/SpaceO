@@ -87,6 +87,10 @@ load_version() {
     )"
     [[ "$source_version" == "$VERSION" ]] \
         || fail "VERSION ($VERSION) does not match SpaceOVersion.current ($source_version)"
+    local install_version
+    install_version="$(awk -F'"' '/^SPACEO_VERSION=/ { print $2; exit }' "$REPOSITORY_ROOT/docs/INSTALL.md")"
+    [[ "$install_version" == "$VERSION" ]] \
+        || fail "INSTALL.md example version must match VERSION"
     grep -F "SpaceOVersion.current" "$REPOSITORY_ROOT/Sources/spaceo/main.swift" >/dev/null \
         || fail "CLI version output must use SpaceOVersion.current"
     grep -F "SpaceOVersion.current" "$REPOSITORY_ROOT/Sources/SpaceOMCP/MCPServer.swift" >/dev/null \

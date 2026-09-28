@@ -117,6 +117,24 @@ MOCK_BIN="$TEST_ROOT/bin"
 FIXTURE_DIR="$TEST_ROOT/fixture"
 mkdir -p "$MOCK_BIN" "$FIXTURE_DIR"
 
+# Release instructions shipped inside the DMG must name the candidate version.
+guide_fixture="$TEST_ROOT/guide-version"
+mkdir -p "$guide_fixture/scripts" "$guide_fixture/docs" \
+    "$guide_fixture/Sources/SpaceOKit" "$guide_fixture/Sources/spaceo" \
+    "$guide_fixture/Sources/SpaceOMCP"
+cp "$RELEASE_SCRIPT" "$guide_fixture/scripts/release.sh"
+cp "$REPOSITORY_ROOT/VERSION" "$guide_fixture/VERSION"
+cp "$REPOSITORY_ROOT/Sources/SpaceOKit/SpaceOVersion.swift" "$guide_fixture/Sources/SpaceOKit/"
+cp "$REPOSITORY_ROOT/Sources/spaceo/main.swift" "$guide_fixture/Sources/spaceo/"
+cp "$REPOSITORY_ROOT/Sources/SpaceOMCP/MCPServer.swift" "$guide_fixture/Sources/SpaceOMCP/"
+printf 'SPACEO_VERSION="0.0.0"\n' > "$guide_fixture/docs/INSTALL.md"
+if bash "$guide_fixture/scripts/release.sh" check > "$TEST_ROOT/guide-check.log" 2>&1; then
+    fail "release check accepted installation instructions for a different version"
+fi
+assert_contains "$TEST_ROOT/guide-check.log" 'INSTALL.md example version must match VERSION'
+cp "$REPOSITORY_ROOT/docs/INSTALL.md" "$guide_fixture/docs/INSTALL.md"
+bash "$guide_fixture/scripts/release.sh" check >/dev/null
+
 cat > "$MOCK_BIN/codesign" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail

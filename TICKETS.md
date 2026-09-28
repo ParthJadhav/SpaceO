@@ -35,8 +35,10 @@ Status definitions:
 - Status: Done for the native + Chromium scope; 1.0.2 source suite and exact-candidate matrix passed
 - September 28, 1.0.2: the candidate source passed all 16 live cases without skips, and the
   exact signed artifact passed all 36 matrix checks, including Chromium isolation and cleanup.
-  See [1.0.2 qualification](docs/validation/2026-09-28-release-1.0.2.md). Publication remains
-  held for the separate Viewer and final local-input checks; this ticket is not publication approval.
+  See [1.0.2 qualification](docs/validation/2026-09-28-release-1.0.2.md). The unpublished 1.0.2
+  candidate was subsequently superseded by 1.0.3 for installation-documentation corrections.
+  The [1.0.3 record](docs/validation/2026-09-28-release-1.0.3.md) tracks the remaining Viewer
+  and final local-input checks; this ticket is not publication approval.
 - September 28: the signed 1.0.1 candidate passed the full 36-check matrix, after the full
   16-case source suite passed without skips. Publication and public downloads were verified.
   See [1.0.1 qualification](docs/validation/2026-09-28-privacy-release.md); this closes the
