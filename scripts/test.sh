@@ -90,8 +90,14 @@ run_live() {
     fi
 
     local status=0
-    NSUnbufferedIO=YES python3 "$SCRIPT_DIR/live-test-supervisor.py" --log "$log" -- \
+    SPACEO_LIVE_HEALTH_SCRIPT="$SCRIPT_DIR/host-health.py" NSUnbufferedIO=YES \
+        python3 "$SCRIPT_DIR/live-test-supervisor.py" --log "$log" -- \
         "$xctest" -XCTest "$test_filter" "$test_bundle" || status=$?
+    # A successful XCTest exit is not sufficient host-health evidence. Never restart a
+    # failed/suspended workload, and never touch the retained owner on a supervisor stop.
+    if (( status == 0 )); then
+        python3 "$SCRIPT_DIR/host-health.py" || fail "postflight host health refused; live qualification failed"
+    fi
     if (( require_full )); then
         bash "$SCRIPT_DIR/check-live-test-run.sh" "$log" || return 1
     elif [[ -n "$test_case" ]]; then

@@ -86,7 +86,15 @@ Status definitions:
 
 ### Host slowdown after sustained live testing
 
-- Status: Open for system slowdown attribution; current-source bounded memory follow-up passed
+- Status: Open, release blocking — forced restart and WindowServer/ColorSync stall; bounded application memory observations retained
+- September 29 late follow-up: the owner forced a 23:03 restart after a freeze. The earlier
+  20:28 watchdog had 75 WindowServer threads waiting through ColorSync. System sync timeouts
+  also occurred during the later passing workloads. Source assertions do not qualify 1.0.4;
+  pending publication was canceled and live work remains paused. The precise final-freeze
+  onset and root cause are unknown. See [RA-057 evidence](docs/validation/2026-09-29-freeze-investigation.md).
+- Implemented and verified offline: recent diagnostic history, checks after live-case pacing and
+  verified cleanup, and a final XCTest postflight. Quiet counters alone do not clear this
+  incident. Do not remove accumulated profiles or reset system services to make the gate pass.
 - September 29: user-reported slowdown persisted as a resource concern after test cleanup.
   Zero sessions/virtual displays remained; idle daemon leak scan reported zero leaked bytes.
   Normal memory pressure and zero sampled swap activity did not explain sustained ~100% combined
@@ -94,7 +102,7 @@ Status definitions:
 - A read-only host-health gate now refuses XCTest, MCP, and performance workload admission for
   memory pressure, active swap, busy ColorSync services, or unavailable counters. No system
   services or display preferences were reset. Current privileges cannot sample those root services.
-- Acceptance: verify recovered host responsiveness and quiet counters before resuming live work;
+- Acceptance: investigate system stalls and review host recovery/workload scope before resuming live work;
   retain daemon/Viewer footprint trends and leak evidence from a current-source bounded workload.
   An idle zero-leak result does not close workload memory qualification.
 - Offline ownership review found missing Viewer capture stops on model deallocation and late
@@ -114,8 +122,9 @@ Status definitions:
   workload, including 404 captures and both Viewer motion modes. Daemon/Viewer scans each
   reported zero leaked bytes; sampled footprints declined during the soak, and cleanup restored
   physical topology. The full 36-check MCP matrix and post-run host admission also passed.
-  This closes the bounded current-source memory follow-up, not the earlier system slowdown's
-  cause or an unlimited-duration leak guarantee. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
+  These remain bounded memory observations, not complete qualification: the later log review
+  found system display errors during this work. They do not close the slowdown's cause or
+  establish an unlimited-duration leak guarantee. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
 ### Performance soak: Chromium window identity becomes incomplete

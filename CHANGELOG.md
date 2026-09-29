@@ -6,6 +6,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Refuse live-test admission when recent WindowServer diagnostic reports exist, including
+  after a restart. Recheck host health before each live XCTest case and after cleanup, and fail
+  qualification when the final health check refuses even if all test assertions passed.
+
 ## [1.0.4] - 2026-09-29
 
 - Correct retained-window owner lookup to use the single-window Core Graphics API. Missing,

@@ -146,6 +146,12 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
+Version `1.0.4` is **on hold and unpublished** after the
+[September 29 freeze investigation](validation/2026-09-29-freeze-investigation.md).
+Its signed candidate was constructed, but the waiting publication workflow was canceled.
+The tag is immutable; passing test assertions did not establish a healthy host, and neither a
+restart nor a quiet counter sample supplies the missing qualification.
+
 Version `1.0.3` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3)
 by explicit release-owner direction after the qualification gaps were reported. The owner made a
 release-specific exception for incomplete physical Viewer pointer evidence and the unresolved

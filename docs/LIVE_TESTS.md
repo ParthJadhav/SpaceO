@@ -61,6 +61,19 @@ ColorSync CPU below 50% of one core. These conservative test thresholds are not 
 diagnosis. Missing counters, a service restart, or a diagnostic timeout refuse admission.
 Reports contain numeric counters and reason codes, not process lists or content.
 
+Admission also checks bounded WindowServer report metadata in system/user diagnostic directories
+and their `Retired` directories. A report modified in the current boot or last 24 hours,
+whichever is longer, refuses admission; unreadable or over-budget metadata refuses as unknown.
+No report contents are read. This conservative check survives a restart but is not proof of
+recovery when the interval expires. XCTest checks again after each 90-second pacing interval,
+before display work, and after verified cleanup. Its wrapper provides the required helper and
+requires a final passing health sample even if all case assertions pass. A health refusal after
+verified cleanup fails the run without suspending a safely retired display owner.
+
+The [September 29 freeze investigation](validation/2026-09-29-freeze-investigation.md) places
+further live qualification and 1.0.4 publication on hold. Passing current counters cannot clear
+that incident or the system errors found during earlier passing workloads.
+
 A refusal requires inspection and recovery, not a retry loop. If the user reports slowdown,
 pause live work even when this narrow check passes. Verify zero sessions and original topology,
 then stop an idle test daemon normally. Preserve unrelated applications, evidence, and display

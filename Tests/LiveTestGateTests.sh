@@ -163,6 +163,13 @@ cat >"$STUB_BIN/python3" <<'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-}" == */host-health.py ]]; then
     echo '{"admitted":true,"testFixture":true}'
+    if [[ -n "${STUB_HEALTH_COUNT:-}" ]]; then
+        count=0
+        [[ ! -f "$STUB_HEALTH_COUNT" ]] || read -r count <"$STUB_HEALTH_COUNT"
+        count=$((count + 1))
+        echo "$count" >"$STUB_HEALTH_COUNT"
+        if (( count > 1 )); then exit "${STUB_POST_HEALTH_EXIT:-0}"; fi
+    fi
     exit "${STUB_HOST_HEALTH_EXIT:-0}"
 fi
 exec "$SPACEO_TEST_REAL_PYTHON" "$@"
@@ -176,6 +183,7 @@ STUB
 cat >"$STUB_BIN/xctest" <<'STUB'
 #!/usr/bin/env bash
 echo "stub xctest invoked with: $*" >"${STUB_INVOCATION:-/dev/null}"
+[[ "${SPACEO_LIVE_HEALTH_SCRIPT:-}" == /*/scripts/host-health.py ]] || exit 98
 cat "$STUB_LOG"
 exit "${STUB_EXIT:-0}"
 STUB
@@ -209,6 +217,14 @@ if STUB_HOST_HEALTH_EXIT=1 run_test_sh_live "$TEST_ROOT/all-skipped.log" 0 >"$TE
 fi
 [[ ! -e "$TEST_ROOT/invocation.txt" ]] || fail "host-health refusal launched XCTest"
 grep -Fq "host is not quiet enough" "$TEST_ROOT/health-refusal.log" || fail "missing host-health refusal"
+
+# A green XCTest transcript cannot hide a failing final OS-health sample.
+if output="$(STUB_HEALTH_COUNT="$TEST_ROOT/health-count" STUB_POST_HEALTH_EXIT=1 \
+    run_test_sh_live "$TEST_ROOT/real-count.log" 0 --require-full)"; then
+    fail "live tests accepted a failed postflight after successful assertions"
+fi
+grep -Fq "postflight host health refused" <<<"$output" || fail "missing postflight refusal"
+[[ "$(cat "$TEST_ROOT/health-count")" == 2 ]] || fail "health checks did not bracket XCTest"
 
 # A run where every test skipped must fail even though the compiler reported success.
 if output="$(run_test_sh_live "$TEST_ROOT/all-skipped.log" 0 --require-full)"; then
