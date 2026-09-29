@@ -502,3 +502,22 @@ errors or topology changes; no observer sample reported Chrome active. Full dete
 verification of the production fix passed: 1,675 Swift tests, supporting checks, and the
 34-tool MCP smoke test. The rebuilt ad-hoc Viewer passed strict/deep signature verification,
 and `git diff --check` passed. Standard production-path live checks follow separately.
+
+
+The first standard workload on source `793cf25` failed safely during launch: after reveal,
+Chrome placed the full-height requested window 30 points below the tile's top, overflowing its
+bottom. The placement guard refused it. This exposed a geometry issue previously masked by
+hidden application state; it is not recorded as a passing motion test. Cleanup/topology were
+verified in `.artifacts/fresh-reveal-793cf25/`.
+
+Browser background-window creation now requests the existing inset `defaultFrame` instead of
+the entire tile. The subsequent placement checks remain authoritative. Both the input region
+and computed frame must be valid and fit protocol integer limits before endpoint discovery;
+sub-point dimensions cannot become zero-sized CDP requests. Sixty focused Chromium/launch tests
+passed, including exact inset bounds, unchanged background-only creation and tab parameters,
+and rejection of an unusably small inset before connecting.
+
+Full verification of the combined reveal/inset changes passed: 1,676 Swift tests, supporting
+checks, and the 34-tool MCP smoke check. The rebuilt Viewer passed strict/deep signature
+verification, and `git diff --check` passed. The rejected full-height launch cleaned up after
+52.094 seconds with no sampler errors. No containment tolerance was relaxed.

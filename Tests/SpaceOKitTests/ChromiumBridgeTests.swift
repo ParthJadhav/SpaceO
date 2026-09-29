@@ -495,7 +495,10 @@ final class ChromiumBridgeTests: XCTestCase {
             XCTAssertEqual(method, "Target.createTarget")
             XCTAssertEqual(params["background"] as? Bool, true)
             if params["newWindow"] as? Bool == true {
-                XCTAssertEqual(params["left"] as? Int, 2000)
+                XCTAssertEqual(params["left"] as? Int, 2032)
+                XCTAssertEqual(params["top"] as? Int, 32)
+                XCTAssertEqual(params["width"] as? Int, 1216)
+                XCTAssertEqual(params["height"] as? Int, 736)
             } else {
                 XCTAssertNil(params["left"], "tab creation must omit window-only bounds")
             }
@@ -508,6 +511,18 @@ final class ChromiumBridgeTests: XCTestCase {
         XCTAssertEqual(log.events, files.map(\.absoluteString))
         let bound = await bridge.boundTargetID
         XCTAssertNil(bound)
+    }
+
+    func testStartupRejectsTooSmallInsetBeforeConnecting() async throws {
+        let bridge = ChromiumBridge(port: 1, commandExecutor: { _, _ in
+            XCTFail("invalid geometry must not create a target")
+            return [:]
+        })
+        do {
+            try await bridge.createBackgroundPages(files: [],
+                region: CGRect(x: 0, y: 0, width: 1, height: 1))
+            XCTFail("sub-point inset dimensions must not be truncated to zero")
+        } catch SpaceOError.badRequest {} catch { XCTFail("unexpected error: \(error)") }
     }
 
     func testStartupRejectsAnUnconfirmedCreatedPage() async throws {

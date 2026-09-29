@@ -164,7 +164,13 @@ public actor ChromiumBridge {
             throw SpaceOError.badRequest("invalid browser startup request")
         }
         try WindowPlacement.validate(frame: region)
-        guard [region.minX, region.minY, region.width, region.height].allSatisfy({
+        // A newly revealed macOS window can be shifted below the menu bar. Starting at the
+        // tile's full height leaves no room for that adjustment and fails containment after
+        // reveal. Use the same inset frame as ordinary fitted windows, then verify placement.
+        let windowFrame = WindowPlacement.defaultFrame(in: region)
+        try WindowPlacement.validate(frame: windowFrame)
+        guard [region.minX, region.minY, region.width, region.height,
+               windowFrame.minX, windowFrame.minY, windowFrame.width, windowFrame.height].allSatisfy({
             $0 >= CGFloat(Int32.min) && $0 <= CGFloat(Int32.max)
         }) else {
             throw SpaceOError.badRequest("browser startup bounds exceed the protocol integer range")
@@ -195,10 +201,10 @@ public actor ChromiumBridge {
                     "url": page, "background": true, "newWindow": index == 0,
                 ]
                 if index == 0 {
-                    parameters["left"] = Int(region.minX)
-                    parameters["top"] = Int(region.minY)
-                    parameters["width"] = Int(region.width)
-                    parameters["height"] = Int(region.height)
+                    parameters["left"] = Int(windowFrame.minX)
+                    parameters["top"] = Int(windowFrame.minY)
+                    parameters["width"] = Int(windowFrame.width)
+                    parameters["height"] = Int(windowFrame.height)
                 }
                 let result = try await performCommand("Target.createTarget", parameters, budget: budget,
                                                       onSend: { attempted = true })
