@@ -73,6 +73,9 @@ Status definitions:
   windows after reveal exposed menu-bar clamping of full-height windows. The next standard
   run stopped during launch on AX window-count error `-25204`, before motion coverage. Both
   production-path attempts cleaned up; live validation of the combined fix remains pending.
+- Source `63c515e` passed the standard static/animated/scrolling Viewer workload with changing
+  motion pixels and verified cleanup. The motion fix is validated for that source workload.
+  Post-fix MCP qualification remains incomplete: native AX discovery intermittently fails.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
@@ -95,6 +98,10 @@ Status definitions:
   `-25201`; the run command failed after 33.813 seconds. Cleanup and physical topology were
   verified. This supplies a concrete provider status for a startup identity failure, without
   establishing that it shares the earlier soak fault’s cause. No blind retry was performed.
+- Native coverage also exposed transient AX window-count failures (`-25204`) after reveal and
+  during later window-list/screenshot commands. A bounded post-reveal readiness poll improves
+  launch sequencing but does not close the general read failure. A separate latency probe's
+  three reads all succeeded within 250 ms; larger production IPC limits are not yet justified.
 - Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
   live soak with successful captures and verified teardown; do not count the stopped run as passing.
 

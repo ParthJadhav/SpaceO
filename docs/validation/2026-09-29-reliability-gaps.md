@@ -578,3 +578,28 @@ a later placement failure. An unavailable window tree is never treated as empty 
 Twenty-five focused readiness/launch tests passed. The post-reveal readiness change passed
 `make verify-release` with 1,677 Swift tests, supporting checks, and the 34-tool MCP smoke check.
 The rebuilt Viewer passed strict/deep signature verification and `git diff --check` passed.
+
+
+On source `7c8fa44`, the next full MCP matrix passed native launch but stopped at document-window
+identification: `windows` returned AX window-count error `-25204` after 856 ms. Six checks passed,
+one failed, none were skipped/blocked, and four tool calls ran in 31.407 seconds. Its wrapper
+verified cleanup and stopped its daemon. This demonstrates that the remaining read failure is
+not limited to the immediate post-reveal placement boundary. Evidence is private in
+`.artifacts/post-reveal-readiness-7c8fa44/`.
+
+A separate, explicitly instrumented native-only matrix on the same source measured three
+read-only AX window-count calls against the exact session-owned TextEdit process. At messaging
+limits of 250 ms, 750 ms, and 1.5 seconds, successful reads took approximately 123 ms, 99 ms,
+and 0.24 ms respectively. These samples do not justify increasing production limits. The helper
+recorded only counts, status codes, and durations; source/binary and modified harness are retained
+in `.artifacts/ax-latency-7c8fa44/`. The instrumentation ran after the first window-list request
+and a session inventory lookup, so it is not a timing measurement of the earlier failed IPC.
+
+That native-only run later stopped at its scroll-evidence check because a screenshot's AX
+window-count read failed (`-25204`, command duration 1.704 seconds). It did not establish that
+scrolling itself failed. Nine checks passed and one failed, with eight tool calls in 47.439
+seconds. No passing full matrix or soak is claimed. The private daemon cleaned up normally;
+the source-matching default daemon was restored with ready safety, drive/capture grants, zero
+sessions, and the original physical topology. No production IPC limit was changed. The earlier
+1,677-test deterministic verification still covers the final source; final changes here only
+record the observed results, and `git diff --check` passed.
