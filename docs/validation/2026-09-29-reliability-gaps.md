@@ -137,4 +137,24 @@ Targeted evidence: 78 identity/discovery/readiness tests, six startup-lock tests
 stop during startup), 40 TOML/configuration/inspection tests, and 17 inspection tests including
 new inherited-pipe and excessive-output cases passed. Follow-up `make verify-release` passed:
 1,665 deterministic Swift tests, supporting Python/shell/JavaScript checks, and the 34-tool
-MCP smoke check. `git diff --check` passed. Live follow-up evidence is pending.
+MCP smoke check. `git diff --check` passed.
+
+### Follow-up live diagnostics (`688e4f1`)
+
+- Supervised native workflow: one passing case, no skips/failures, 92.94 seconds including
+  mandatory pacing. Input readback, covered isolation checks, and teardown passed.
+- Full MCP matrix: 36 passed, zero failed/blocked/skipped, 44 calls in 75.76 seconds.
+  The matrix CLI SHA-256 still matched the built CLI after Viewer packaging.
+- Ad-hoc Viewer bundle: strict/deep signature verification passed.
+- Focused Chromium/physical-Viewer animation diagnostic: **failed**, 93.59 seconds including
+  cleanup. The animated phase produced identical in-memory capture digests; Viewer reported
+  zero FPS with a running stream, a frame sink, and an unoccluded physical-display window.
+  Its last-frame age reached 25.79 seconds. Chrome reported visible document state, but
+  animation callbacks advanced only from 4 to 26 across 23 heartbeat samples; the preceding
+  static phase advanced from 61 to 1,201 across 20 samples. Scrolling was not reached.
+- All three runs restored the original physical topology with no SpaceO/orphan displays and
+  ready safety. The failed Viewer run was inspected and is not passing qualification evidence.
+
+Private evidence: `.artifacts/source-live-688e4f1c-20260929T101220Z/`. These remain source
+diagnostics on the unpinned toolchain. The intermittent AX identity fault did not reproduce;
+the animation failure is a separate unresolved problem. No release was published.
