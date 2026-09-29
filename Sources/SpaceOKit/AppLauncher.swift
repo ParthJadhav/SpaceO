@@ -348,6 +348,11 @@ public enum AppLauncher {
                 try await Task.sleep(nanoseconds: 150_000_000)
                 try Task.checkCancellation()
                 revealWatcher?.sweep()
+                // Revealing can rebuild the app's AX window tree. Wait for a complete readable
+                // list before the final placement; retry observations, never partial moves.
+                launchPhase = .revealedReadiness
+                _ = try await WindowPlacement.waitForWindow(of: app.pid,
+                    timeout: min(timeout, 2), pollNanoseconds: 25_000_000)
                 launchPhase = .revealedPlacement
                 let placed = try WindowPlacement.placeAll(of: app.pid, into: region)
                 try Task.checkCancellation()
@@ -379,6 +384,7 @@ public enum AppLauncher {
         case initialPlacement = "initial placement"
         case settledPlacement = "settled placement"
         case reveal
+        case revealedReadiness = "post-reveal window readiness"
         case revealedPlacement = "post-reveal placement"
     }
 

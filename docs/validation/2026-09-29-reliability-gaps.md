@@ -551,3 +551,30 @@ coverage checks every phase across provider, deadline, and cancellation stop rea
 Fifteen focused launch tests passed. Full `make verify-release` passed with 1,677 Swift tests,
 supporting checks, and the 34-tool MCP smoke check. The rebuilt ad-hoc Viewer passed strict/deep
 signature verification and `git diff --check` passed before the next instrumented source run.
+
+
+## Production motion pass and post-reveal AX readiness
+
+The standard Viewer-only workload on source `63c515e` passed static, animated, and scrolling
+coverage without an external reveal helper or diagnostic launch flag. Both motion capture pairs
+changed; Viewer delivery remained on physical displays (zero Viewer windows on SpaceO displays),
+with motion samples generally around 6–11 FPS. The complete run passed in 126.261 seconds with
+verified cleanup/topology and no sampler errors. Private evidence is
+`.artifacts/launch-phase-63c515e/viewer/`. This validates the production reveal/inset solution for
+the observed motion failure, while the remaining source acceptance checks are tracked separately.
+
+The following supervised full MCP matrix failed its native TextEdit launch: five checks passed,
+one failed, none were skipped/blocked, and only three tool calls ran before stopping. The new
+phase label identified `post-reveal placement`: AX window count returned `-25204`. The matrix
+ended after 25.403 seconds; its wrapper verified zero sessions, original topology, and ready
+safety before stopping the private daemon. No complete-matrix success is claimed.
+
+The launcher now uses the existing bounded complete-window readiness poll after reveal and
+before final placement, with a maximum of two seconds (or the shorter requested launch timeout).
+Only discovery is retried; movement still runs once against freshly discovered windows with its
+existing identity and containment checks. The new phase distinguishes a readiness timeout from
+a later placement failure. An unavailable window tree is never treated as empty or successful.
+
+Twenty-five focused readiness/launch tests passed. The post-reveal readiness change passed
+`make verify-release` with 1,677 Swift tests, supporting checks, and the 34-tool MCP smoke check.
+The rebuilt Viewer passed strict/deep signature verification and `git diff --check` passed.
