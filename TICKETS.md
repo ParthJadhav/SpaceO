@@ -69,7 +69,10 @@ Status definitions:
   throttling is established for this run; why those frames remain undrawn is still open.
 - Source `df8fb07`: native observation found Chrome hidden despite reported launch success.
   An explicit non-activating unhide after verified placement restored changing pixels and
-  Viewer delivery. Reveal now uses bounded AXHidden reads; standard live validation follows.
+  Viewer delivery. Source `793cf25` adds bounded AXHidden reads; `3e85de4` insets new browser
+  windows after reveal exposed menu-bar clamping of full-height windows. The next standard
+  run stopped during launch on AX window-count error `-25204`, before motion coverage. Both
+  production-path attempts cleaned up; live validation of the combined fix remains pending.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).

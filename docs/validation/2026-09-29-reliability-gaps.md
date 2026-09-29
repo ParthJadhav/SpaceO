@@ -521,3 +521,18 @@ Full verification of the combined reveal/inset changes passed: 1,676 Swift tests
 checks, and the 34-tool MCP smoke check. The rebuilt Viewer passed strict/deep signature
 verification, and `git diff --check` passed. The rejected full-height launch cleaned up after
 52.094 seconds with no sampler errors. No containment tolerance was relaxed.
+
+
+The standard production-path workload on source `3e85de4` did not reach Viewer creation or
+motion coverage. The `run` command failed after 5.028 seconds with a bounded AX provider error:
+window count unavailable, AX error `-25204`. The evidence does not identify which placement
+pass failed, so this is not assigned to post-reveal placement without further instrumentation.
+The attempt ended after 51.033 seconds with verified cleanup, no sampler errors, and the original
+physical topology. It is not a passing motion result, and no unchanged-source retry followed.
+Private evidence is `.artifacts/reveal-inset-3e85de4/`.
+
+The matching source daemon was restored with ready safety, drive/capture grants, and zero
+sessions. The current production fix has passed deterministic verification, but the standard
+animated/scrolling workload and post-fix isolation matrix remain outstanding. The explicit
+helper experiment demonstrates a recoverable hidden-window cause; it does not substitute for
+these production-path acceptance checks. Both open Chromium findings remain tracked.
