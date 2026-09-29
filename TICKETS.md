@@ -82,7 +82,7 @@ Status definitions:
 
 ### Host slowdown after sustained live testing
 
-- Status: Open; live work paused pending recovery
+- Status: Open; host admission recovered, workload memory follow-up incomplete
 - September 29: user-reported slowdown persisted as a resource concern after test cleanup.
   Zero sessions/virtual displays remained; idle daemon leak scan reported zero leaked bytes.
   Normal memory pressure and zero sampled swap activity did not explain sustained ~100% combined
@@ -97,6 +97,11 @@ Status definitions:
   startup completion after owner deallocation. Both paths now explicitly stop capture, with
   deterministic regressions that failed before the fix. This does not establish the slowdown's
   cause or close the current-source live memory follow-up.
+- On resumed source `3e1306b`, host admission passed and the full 36-check MCP matrix passed.
+  The exercised daemon's leak scan found zero leaked bytes; peak sampled footprint was about
+  30.02 MiB. The combined Viewer soak remains incomplete: one attempt stopped for confirmed
+  human control, and a newly reserved attempt exposed the owner-lookup defect below. Normal
+  recovery restored physical topology; no system services were killed or reset.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
 ### Performance soak: Chromium window identity becomes incomplete
@@ -126,6 +131,21 @@ Status definitions:
   lock or timeout increase was added. Cleanup passed; the general read failure remains open.
 - Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
   live soak with successful captures and verified teardown; do not count the stopped run as passing.
+
+### Retained-window owner lookup uses the wrong Core Graphics array representation
+
+- Status: In verification
+- Source `3e1306b` failed the combined scrolling workload with `known window owner is unavailable`.
+  Cleanup quit its Chrome process but retained the display after the incomplete discovery. The
+  supervised run was stopped; explicit normal daemon shutdown then restored physical topology.
+- `CGWindowListCreateDescriptionFromArray([windowID] as CFArray)` boxed the IDs instead of
+  supplying the API's raw ID entries. A read-only comparison found zero matching owners through
+  that path versus 11/11 through the direct single-window API.
+- `liveOwnerPID` now uses `CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID)`, requires
+  exactly one matching ID, and refuses missing, nonpositive, or out-of-range owner PIDs. Existing
+  fail-closed retained-window behavior is preserved. Deterministic tests cover query scope,
+  identity mismatch, malformed replies, and PID bounds; live soak verification remains pending.
+- This diagnoses the current owner lookup defect, not every historical AX provider failure.
 
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 

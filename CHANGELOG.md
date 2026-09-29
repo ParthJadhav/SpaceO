@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Correct retained-window owner lookup to use the single-window Core Graphics API. Missing,
+  mismatched, or invalid owner data still refuses capture and movement instead of guessing.
+
 - Stop Viewer capture when its model is released, including capture startup that completes
   after the owner disappears. Release the model's repeating refresh timer as well.
 

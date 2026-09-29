@@ -709,3 +709,75 @@ Verification passed with `make verify-release`: 1,679 Swift tests, supporting ch
 34-tool MCP smoke check. The final 23-test stream-lifecycle run passed without new warnings;
 the final release Viewer was rebuilt and passed strict/deep codesign verification. No live
 capture was started. `git diff --check` passed before commit.
+
+## Recovered-host validation of `3e1306b`
+
+After the user requested continuation, the read-only admission check passed: combined ColorSync
+CPU was 4.36%, memory pressure was normal, and swap counters did not advance. This establishes
+admission for the sampled interval, not the cause of the earlier slowdown or permanent recovery.
+The default daemon remained stopped and the initial topology contained only physical display 1.
+
+A supervised full MCP matrix passed all **36 checks with 44 tool calls**, zero failures, blocked
+checks, or skips, in 44.828 seconds. Native TextEdit and Chromium actions and isolation passed;
+the Electron check still proves pre-launch refusal, not support. The private daemon's resource
+sampler remained active through cleanup: 47 samples, approximately 30.02 MiB peak physical
+footprint and 22.45 MiB at the end. A post-workload `leaks --noContent --nostacks` scan, before
+daemon shutdown, exited successfully with **zero leaks / zero leaked bytes**. Cleanup retired
+the pool, restored the initial topology, and stopped the private daemon normally. Postflight
+host admission passed with 7.92% ColorSync CPU, normal pressure, and no swap activity.
+Private evidence: `.artifacts/recovered-matrix-3e1306b/`.
+
+The first combined Viewer/performance attempt was interrupted by operator control. Static and
+animated phases ran; animation capture pixels changed and Viewer telemetry reached 29.5 FPS.
+The next `open.url` was refused with `session_paused`, following four Viewer `session.control`
+requests. The user confirmed interacting with the Viewer. No pause was overridden and this run
+is not counted as passing soak evidence. Cleanup restored physical topology with no sampler
+errors; the daemon ended near 18.45 MiB physical footprint. The planned post-soak leak scans did
+not run because the capture soak was never reached. Postflight host admission still passed
+(8.34% ColorSync CPU, normal pressure, zero swap deltas).
+Private evidence: `.artifacts/recovered-performance-3e1306b/`.
+
+The user then explicitly reserved the Mac again and agreed to leave the Viewer untouched for
+one fresh bounded run. These remain source diagnostics on Xcode 27.0 / Swift 6.4, not evidence
+for a signed candidate or the required pinned release toolchain.
+
+## Retained-window owner lookup defect
+
+The newly reserved combined run on `3e1306b` reached scrolling after passing animation pixels
+and Viewer delivery, but discovery reported `known window owner is unavailable`. Its first
+cleanup pass quit the owned Chrome process, retained session `perf-0` and its display because
+discovery was incomplete, and requested supervisor suspension. The run is failed, not passing
+memory/soak evidence; its planned post-soak leak scans were never reached. Evidence is retained
+in `.artifacts/reserved-performance-3e1306b/`.
+
+Recovery was separate from the test: after confirming the owned Chrome process had exited,
+only the retained daemon was resumed and sent a normal operator shutdown request. It succeeded,
+physical display 1 was again the only online/active display, and display safety remained ready.
+Only then were the stopped, non-owner Python worker and resource sampler terminated. No display
+owner was killed, no test was resumed, and no journal or system-service state was reset.
+Post-recovery admission passed with 12.11% ColorSync CPU, normal pressure, and zero swap deltas.
+
+Inspection found that `WindowPlacement.liveOwnerPID` supplied `[windowID] as CFArray` to
+`CGWindowListCreateDescriptionFromArray`. That bridging produces boxed numbers, while the
+API accepts an array of raw window IDs. A bounded, read-only comparison over 11 existing windows
+found zero matching owners through the old call and 11/11 through
+`CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID)`; each direct reply contained one
+window. Only counts were recorded, not window titles, screenshots, or Accessibility content.
+The probe is retained as `owner-lookup-probe.txt` beside the failed run. Apple's
+[window-information API](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo(_:_:))
+and the installed `CGWindow.h` define the direct query and its window-selection option.
+
+The implementation now uses that single-window query, verifies exactly one matching returned
+window ID, and accepts only a positive PID representable by `pid_t`. Zero IDs do not query
+WindowServer. Deterministic injection tests exercise the query scope, CFNumber response values,
+absent/malformed/ambiguous replies, ID mismatch, and invalid PID bounds. Existing transactional
+discovery still refuses unknown ownership and preserves the retained ledger; no cached PID or
+geometry is treated as identity. This fixes a concrete lookup defect exposed by AX omissions,
+without claiming that all historical provider timeouts or missing AX identities share its cause.
+
+Verification of the lookup fix passed: 37 focused owner/discovery/teardown tests and
+`make verify-release` with 1,683 Swift tests, supporting checks, and all 34 MCP smoke tools.
+The release Viewer bundle was rebuilt and passed strict/deep codesign verification.
+`git diff --check` passed. The first focused run exposed a test fixture supplying a Swift
+`Int32` rather than the Core Graphics dictionary's numeric representation; the fixture now
+checks bridged CFNumber values and an `Int` boundary value, and the corrected run passed.

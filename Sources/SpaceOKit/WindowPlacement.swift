@@ -433,11 +433,24 @@ public enum WindowPlacement {
     /// window on the strength of a WindowServer lookup has to ask *whose* it is, or a later
     /// re-park moves a window belonging to an application SpaceO never launched.
     public static func liveOwnerPID(of windowID: CGWindowID) -> pid_t? {
+        liveOwnerPID(of: windowID, copyWindowInfo: CGWindowListCopyWindowInfo)
+    }
+
+    static func liveOwnerPID(
+        of windowID: CGWindowID,
+        copyWindowInfo: (CGWindowListOption, CGWindowID) -> CFArray?
+    ) -> pid_t? {
+        // CreateDescriptionFromArray expects raw CGWindowID entries, not the CFNumbers
+        // produced by bridging [windowID]. Query the single window directly instead.
         guard windowID != 0,
-              let list = CGWindowListCreateDescriptionFromArray(
-                  [windowID] as CFArray) as? [[String: Any]],
-              let owner = list.first?[kCGWindowOwnerPID as String] as? Int
+              let list = copyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+              list.count == 1,
+              let info = list.first,
+              let returnedID = info[kCGWindowNumber as String] as? CGWindowID,
+              returnedID == windowID,
+              let owner = info[kCGWindowOwnerPID as String] as? Int,
+              let pid = pid_t(exactly: owner), pid > 0
         else { return nil }
-        return pid_t(owner)
+        return pid
     }
 }
