@@ -67,6 +67,9 @@ Status definitions:
   second. A follow-up trace counted 473 `ThrottleUndrawnFrames` decisions versus eight sent
   frame-timing updates in eight seconds, while native pixels remained unchanged. Undrawn-frame
   throttling is established for this run; why those frames remain undrawn is still open.
+- Source `df8fb07`: native observation found Chrome hidden despite reported launch success.
+  An explicit non-activating unhide after verified placement restored changing pixels and
+  Viewer delivery. Reveal now uses bounded AXHidden reads; standard live validation follows.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).

@@ -461,3 +461,44 @@ recur in these attempts. These focused source diagnostics are not passing releas
 After recording both traces, `make verify-release` passed with 1,673 Swift tests, supporting
 checks, and the 34-tool MCP smoke test. `git diff --check` passed. The final changes are audit
 and backlog updates only; neither an experimental switch nor a renderer workaround was added.
+
+
+## Native visibility identifies a missed reveal
+
+The next source `df8fb07` diagnostic kept its read-only native observer alive through static
+and scrolling rendering. Of 54 samples, the initial startup sample reported not hidden; the
+remaining 53 reported Chrome hidden and inactive with zero on-screen windows. AX consistently
+reported one owned, non-minimized window after startup. The trace again showed 472
+`ThrottleUndrawnFrames` decisions versus eight frame-timing updates, and all native captures
+were unchanged. Cleanup verified physical topology after 108.837 seconds. Evidence is private
+in `.artifacts/visibility-trace-df8fb07/`.
+
+A separate diagnostic permitted exactly one non-activating `NSRunningApplication.unhide()`
+request after 25 seconds, gated on SpaceO's successful launch/placement result and the original
+private process identity. Chrome then became not hidden with an on-screen window while remaining
+inactive. Native captures changed before, during, and after the subsequent trace, and recent
+Viewer samples reached 8.5, 10.5, and 12 FPS. The method's immediate Boolean return was false;
+only later observations established visibility. The trace exceeded its 100,000-event cap once
+rendering resumed, so the diagnostic run is not recorded as a complete passing trace or full
+performance qualification. The bounded helper, hashes, and outcome are retained privately in
+`.artifacts/reveal-trace-df8fb07/`; no trace payload or screenshots were saved.
+
+The production reveal gate had used `NSRunningApplication.isHidden`, allowing a cached false
+observation to skip `unhide()` and report readiness. Apple's
+[NSRunningApplication documentation](https://developer.apple.com/documentation/appkit/nsrunningapplication?language=objc)
+explains that changing properties retain their values until a main-run-loop turn. The native
+observer and explicit-reveal experiment identify hidden application state as a concrete cause
+of the observed motion failure; they do not explain every intermittent window-identity failure.
+
+The fix reads the application's `AXHidden` attribute through the existing bounded AX provider.
+Reveal's one-second deadline is passed into each read; unknown or failed observations cannot
+confirm success, cancellation/identity are checked before unhide, and an expired read cannot
+trigger a late unhide or claim readiness. The unhide return value is not treated as confirmation.
+Existing post-reveal placement and containment checks remain in place. Fourteen targeted launch
+polling tests pass, including new unknown/error and late-hidden/late-visible observations.
+
+The explicit-reveal diagnostic cleaned up normally after 111.074 seconds, with no sampler
+errors or topology changes; no observer sample reported Chrome active. Full deterministic
+verification of the production fix passed: 1,675 Swift tests, supporting checks, and the
+34-tool MCP smoke test. The rebuilt ad-hoc Viewer passed strict/deep signature verification,
+and `git diff --check` passed. Standard production-path live checks follow separately.

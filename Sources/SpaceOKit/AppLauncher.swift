@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Darwin
 
@@ -327,7 +328,16 @@ public enum AppLauncher {
                     guard app.identity.isAlive else {
                         throw SpaceOError.applicationExited("launched process exited")
                     }
-                }, isHidden: { runningApp.isHidden }, unhide: { _ = runningApp.unhide() })
+                }, isHidden: { remaining in
+                    let budget = try AXTraversalBudget(
+                        limits: AXWindowDiscovery.limits(remaining: remaining),
+                        now: { DispatchTime.now().uptimeNanoseconds }, isCancelled: { Task.isCancelled })
+                    let element = AX.application(app.pid)
+                    let provider = SystemAXTraversalProvider()
+                    return try AXTraversal.boundedCall(element, provider: provider, budget: budget) {
+                        provider.bool(element, attribute: kAXHiddenAttribute as String)
+                    }
+                }, unhide: { _ = runningApp.unhide() })
                 try await Task.sleep(nanoseconds: 150_000_000)
                 try Task.checkCancellation()
                 revealWatcher?.sweep()
@@ -569,11 +579,25 @@ public enum AppLauncher {
 
     static func reveal(name: String, runtime: WaitRuntime = .live,
                        validate: () throws -> Void,
-                       isHidden: () -> Bool, unhide: () -> Void) async throws {
+                       isHidden: (TimeInterval) throws -> Bool?, unhide: () -> Void) async throws {
+        // NSRunningApplication.isHidden is cached until the main run loop advances. A stale
+        // false value can skip unhide entirely. Callers must provide a fresh, bounded read;
+        // neither an unknown observation nor an unhide return value confirms visibility.
+        let deadline = runtime.now().addingTimeInterval(1)
+        func hidden() throws -> Bool? {
+            let remaining = deadline.timeIntervalSince(runtime.now())
+            guard remaining >= 0.01 else { return nil }
+            return try isHidden(remaining)
+        }
         let revealed = try await BridgeReadiness.wait(timeout: 1, interval: 0.025,
             runtime: runtime, validate: validate) {
-                if isHidden() { unhide() }
-                return !isHidden()
+                guard let before = try hidden() else { return false }
+                if !before { return true }
+                try Task.checkCancellation()
+                try validate()
+                guard runtime.now() < deadline else { return false }
+                unhide()
+                return try hidden() == false
             }
         guard revealed else {
             throw SpaceOError.launchFailed("\(name) could not be revealed after its windows were placed")
