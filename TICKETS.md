@@ -33,6 +33,16 @@ Status definitions:
   executable version probing kept behind an explicit option. Verification is tracked in the
   same audit record.
 
+### Single-window capture snapshot ownership
+
+- Status: Done (deterministic verification; live validation recorded in the audit)
+- `Capture.window` selected a shareable window solely by its numeric ID after an asynchronous
+  snapshot request. It now requires a positive requested PID and a matching snapshot owner before
+  constructing the capture filter; missing ownership and placeholder IDs fail closed.
+- This also protects direct SDK callers, which do not have the daemon's later geometry checks.
+  It does not establish process incarnation from a PID alone or close the Chromium motion gap.
+- Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
+
 ### Chromium motion remains stale in physical-display Viewer
 
 - Status: Open

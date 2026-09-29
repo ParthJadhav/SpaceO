@@ -387,3 +387,28 @@ the Viewer passed strict/deep signature verification. The restored default daemo
 CLI with ready safety, drive/capture grants, zero sessions, and the original physical topology.
 `make verify-release` then passed with 1,670 Swift tests, supporting checks, and the 34-tool MCP
 smoke check; `git diff --check` passed. Only audit/backlog records changed in the final worktree.
+
+
+## Single-window capture snapshot ownership
+
+Inspection of the frozen-capture path identified a separate omission: `Capture.window` awaited
+ScreenCaptureKit's shareable-content snapshot, then selected the first matching numeric window
+ID without checking its owning process. Window IDs can be recycled. The daemon performs later
+session/geometry validation before publishing screenshots, but direct SDK calls do not have
+that layer. This was a source-level finding, not an observed user-content disclosure or an
+explanation of the Chromium freeze.
+
+The capture layer now validates a nonzero requested window ID, a positive requested PID, and a
+matching, known ScreenCaptureKit owner from the exact snapshot used to construct the filter.
+Mismatch or unknown ownership produces a structured capture failure before native capture starts.
+The check adds no extra native lookup or retry. It does not establish process incarnation from a
+PID alone; existing session identity and post-capture geometry checks remain necessary.
+
+All nine targeted CaptureIsolationTests passed, including three new cases covering accepted
+matching ownership, a reused ID with a foreign/unknown owner, and invalid requested identities.
+These tests use synthetic values and do not access WindowServer or capture images.
+
+`make verify-release` passed with 1,673 Swift tests, supporting checks, and the 34-tool MCP
+smoke check. The rebuilt ad-hoc Viewer passed strict/deep signature verification and
+`git diff --check` passed. A focused live matrix follows separately; these deterministic
+checks do not by themselves qualify the new capture behavior on a release candidate.

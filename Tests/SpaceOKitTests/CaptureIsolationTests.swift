@@ -9,6 +9,29 @@ import CoreGraphics
 /// passed to the filter, or a fail-closed error — deterministic without attaching a real display.
 final class CaptureIsolationTests: XCTestCase {
 
+    func testWindowCaptureAcceptsMatchingSnapshotOwner() throws {
+        let window = WindowRef(windowID: 42, pid: 101, title: "", frame: .zero)
+        try Capture.validateWindowCaptureOwner(window, ownerPID: 101)
+    }
+
+    func testWindowCaptureRefusesRecycledIDAndUnknownOwner() {
+        let window = WindowRef(windowID: 42, pid: 101, title: "", frame: .zero)
+        for owner: pid_t? in [202, nil, 0, -1] {
+            XCTAssertThrowsError(try Capture.validateWindowCaptureOwner(window, ownerPID: owner)) { error in
+                guard case SpaceOError.captureFailed = error else {
+                    return XCTFail("expected a structured capture failure")
+                }
+            }
+        }
+    }
+
+    func testWindowCaptureRefusesPlaceholderAndInvalidRequestedProcess() {
+        for (id, pid): (CGWindowID, pid_t) in [(0, 101), (42, 0), (42, -1)] {
+            let window = WindowRef(windowID: id, pid: pid, title: "", frame: .zero)
+            XCTAssertThrowsError(try Capture.validateWindowCaptureOwner(window, ownerPID: pid))
+        }
+    }
+
     private final class FakeDisplayBacking: StageDisplayBacking, @unchecked Sendable {
         let displayID: CGDirectDisplayID
         let bounds = CGRect(x: 0, y: 0, width: 2560, height: 1600)

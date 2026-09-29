@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Refuse single-window capture when ScreenCaptureKit reports a different or unknown owning
+  process, so a recycled window ID cannot silently select another process’s window.
+
 - Keep default doctor MCP inspection passive. Use `doctor --probe-client-versions` to explicitly
   execute configured commands with `version`; unprobed external versions remain unknown.
 
