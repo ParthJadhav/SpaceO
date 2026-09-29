@@ -274,3 +274,8 @@ current-executable fingerprint checks. The shared reader's existing growth check
 Final `make verify-release` passed with 1,668 Swift tests, supporting checks, and the 34-tool
 MCP smoke check. The rebuilt ad-hoc Viewer passed strict/deep signature verification, and
 `git diff --check` passed. The new fingerprint bound needs no desktop mutation to test.
+
+The idle default daemon was then restarted on verified source `3e8c809`. Doctor confirmed a
+matching executable, drive/capture grants, ready safety, zero sessions, and unchanged physical-only
+topology. The private `fingerprint-postflight.json` retains this final state. This startup check
+does not extend the earlier live matrix results to a new release candidate.
