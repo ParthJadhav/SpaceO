@@ -1,9 +1,5 @@
 # SpaceO 1.0.4 — Background control and reliability fixes
 
-> **Draft — not yet published or qualified for distribution.** Final live testing and
-> verification of the signed release candidate are outstanding. The latest public release
-> remains [1.0.3](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3).
-
 SpaceO 1.0.4 improves background Chromium rendering, tightens capture ownership checks, and
 cleans up Viewer capture resources more reliably. It also makes daemon startup, diagnostics,
 and client configuration handling more predictable when applications or files stop responding.
@@ -44,17 +40,20 @@ and client configuration handling more predictable when applications or files st
   health before starting and require changing pixels as well as Viewer frame delivery in
   animated and scrolling workloads.
 
-## Scope and remaining qualification
+## Validation and supported scope
 
 The supported scope remains native apps and Chromium on Apple Silicon, subject to runtime
 capability checks. Use Viewer on a physical display with the controlled application on a SpaceO
 display. Managed Electron launches and Viewer hosted inside a SpaceO display remain unsupported.
 
-These fixes do **not** establish that every intermittent Accessibility failure is resolved or
-that the application is leak-free. Final-source live qualification, the combined Viewer memory
-soak and leak scan, and physical Viewer pointer qualification remain outstanding. Earlier source
-builds passed the full MCP matrix and bounded workloads, but those results do not qualify this
-candidate. The signed, notarized distribution must be verified before publication.
+The release source passed a six-minute combined Viewer/capture workload, including animated and
+scrolling content, 404 captures, and verified cleanup. Daemon and Viewer scans each reported zero
+leaked bytes, and sampled memory declined during the soak. The full 36-check MCP matrix also
+passed, along with all 16 live tests without skips, on Xcode 26.3 / Swift 6.2.4.
 
-See the [release preparation record](https://github.com/ParthJadhav/SpaceO/blob/release/1.0.4/docs/validation/2026-09-29-release-1.0.4.md)
-for the exact verification status and retained evidence.
+These bounded checks do **not** establish that every intermittent Accessibility failure is
+resolved or that the application is leak-free. Unknown window identity and unconfirmed input
+still fail explicitly. The earlier host slowdown is not attributed to a proven SpaceO leak.
+
+See the [release record](https://github.com/ParthJadhav/SpaceO/blob/main/docs/validation/2026-09-29-release-1.0.4.md)
+for verification status, artifact qualification and retained evidence.

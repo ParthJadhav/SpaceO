@@ -144,8 +144,11 @@ uses controller leases only in memory, and verifies teardown/topology. On unveri
 the supervisor suspends the process group for operator recovery; do not retry or resume it
 without that decision. The `--supervised-worker` argument is internal to this entry point.
 
-This is an experimental performance harness, not release qualification. Its corrected Viewer
-Chrome-animation workload has not passed; the native Metal diagnostic has passed. See the
+This is an experimental performance harness, not a substitute for release qualification.
+Source `942e460` passed its full combined Chrome/Viewer workload on Xcode 26.3 / Swift 6.2.4,
+including static, animated and scrolling phases, 404 captures, resource sampling, zero-byte
+daemon/Viewer leak scans and verified teardown. See the
+[1.0.4 source evidence](validation/2026-09-29-release-1.0.4.md) and the earlier
 [follow-up evidence and stopped soak](validation/2026-09-28-performance-followup.md).
 
 The browser fixture emits a bounded loopback heartbeat with only mode, document visibility and

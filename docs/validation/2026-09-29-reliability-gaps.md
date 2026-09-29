@@ -821,3 +821,27 @@ the observer exited on the admission refusal. Evidence is retained separately in
 physical topology unchanged. Intermittent host paging remains a qualification blocker even
 after the idle daemon's cleanup; this does not establish a SpaceO leak or attribute the paging
 to that daemon. No admission threshold was changed and no automatic retry loop was started.
+
+## Pinned-toolchain release-source follow-up
+
+After the owner supplied the required official Xcode archive, the release source `942e460`
+was rebuilt with Xcode 26.3 / Swift 6.2.4. All 1,683 deterministic Swift tests and supporting
+checks passed, along with the optimized warnings-as-errors build and Viewer bundle verification.
+The same display/input behavior then passed the full combined Viewer/capture workload in
+367.875 seconds: 404 captures, static/animated/scrolling Viewer phases, logical session churn,
+and verified teardown. The wrong-array owner lookup failure did not recur. Both daemon and
+Viewer leak scans found zero leaked bytes, and their sampled footprints declined during the
+soak. All 36 MCP checks passed afterward, followed by healthy host admission and no retained
+SpaceO display. No safety threshold or fail-closed identity check was weakened.
+
+See the [1.0.4 preparation record](2026-09-29-release-1.0.4.md) for measurements, private evidence
+locations, and remaining release gates. These results close the bounded source-workload and
+Viewer leak-scan gap, but do not establish the earlier system slowdown's cause, resolve every
+historical AX provider diagnostic, or qualify the eventual signed distribution by themselves.
+
+The same pinned-toolchain source then passed all 16 full live cases without skips or failures
+in 1,470.617 seconds on macOS 27.2 build 26B5091g. Doctor verified original physical topology,
+ready lifecycle state and no daemon afterward. ColorSync remained above the live-admission
+threshold in the immediate post-run sample (69.71% combined CPU); pressure was normal and swap
+deltas were zero. Further live work was paused while remote CI and release preparation ran.
+The successful test results do not turn that separate host-health refusal into a pass.

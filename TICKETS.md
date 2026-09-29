@@ -45,7 +45,7 @@ Status definitions:
 
 ### Chromium motion remains stale in physical-display Viewer
 
-- Status: Open
+- Status: Done for source verification; exact signed-candidate qualification pending
 - September 29 source `688e4f1`: native workflow and all 36 MCP checks passed, but the
   focused animation workload reproduced unchanged capture pixels and zero sustained Viewer FPS.
   A separately inspected occlusion-switch experiment also failed and its production flag was
@@ -76,13 +76,17 @@ Status definitions:
 - Source `63c515e` passed the standard static/animated/scrolling Viewer workload with changing
   motion pixels and verified cleanup. The motion fix is validated for that source workload.
   Post-fix MCP qualification remains incomplete: native AX discovery intermittently fails.
+- Pinned-toolchain source `942e460` passed the complete combined Viewer/capture workload with
+  changing animated and scrolling pixels, sustained Viewer frames, and verified cleanup;
+  all 36 MCP checks then passed. This verifies the motion fix in the release source while
+  preserving the separately tracked intermittent AX diagnostic.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
 ### Host slowdown after sustained live testing
 
-- Status: Open; live work paused for swap activity, workload memory follow-up incomplete
+- Status: Open for system slowdown attribution; current-source bounded memory follow-up passed
 - September 29: user-reported slowdown persisted as a resource concern after test cleanup.
   Zero sessions/virtual displays remained; idle daemon leak scan reported zero leaked bytes.
   Normal memory pressure and zero sampled swap activity did not explain sustained ~100% combined
@@ -106,6 +110,12 @@ Status definitions:
   before creating any daemon/display. A longer inspection still found swap activity with normal
   pressure and low ColorSync CPU. The current-source combined soak and Viewer leak scan remain
   pending; no threshold was relaxed to run them.
+- Pinned-toolchain source `942e460` subsequently passed the complete 367.875-second combined
+  workload, including 404 captures and both Viewer motion modes. Daemon/Viewer scans each
+  reported zero leaked bytes; sampled footprints declined during the soak, and cleanup restored
+  physical topology. The full 36-check MCP matrix and post-run host admission also passed.
+  This closes the bounded current-source memory follow-up, not the earlier system slowdown's
+  cause or an unlimited-duration leak guarantee. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
 ### Performance soak: Chromium window identity becomes incomplete
@@ -138,7 +148,7 @@ Status definitions:
 
 ### Retained-window owner lookup uses the wrong Core Graphics array representation
 
-- Status: In verification
+- Status: Done for source verification; exact signed-candidate qualification pending
 - Source `3e1306b` failed the combined scrolling workload with `known window owner is unavailable`.
   Cleanup quit its Chrome process but retained the display after the incomplete discovery. The
   supervised run was stopped; explicit normal daemon shutdown then restored physical topology.
@@ -150,6 +160,9 @@ Status definitions:
   fail-closed retained-window behavior is preserved. Deterministic tests cover query scope,
   identity mismatch, malformed replies, and PID bounds; live soak verification remains pending.
 - This diagnoses the current owner lookup defect, not every historical AX provider failure.
+- Pinned-toolchain source `942e460` passed the combined static/animated/scrolling Viewer workload,
+  404 captures, logical session churn and verified teardown, followed by all 36 MCP checks.
+  The earlier owner-lookup failure did not recur. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
 
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 

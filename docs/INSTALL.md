@@ -1,9 +1,5 @@
 # Installing a SpaceO release
 
-> This branch prepares 1.0.4, which is not yet published. The latest public release is
-> [1.0.3](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3). Until 1.0.4 is published,
-> use `1.0.3` as the version in the manual verification commands below.
-
 SpaceO's supported public distribution model is a versioned Developer ID macOS disk image
 containing two signed executables:
 
