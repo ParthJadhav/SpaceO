@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.4] - Unreleased candidate
+
 - Correct retained-window owner lookup to use the single-window Core Graphics API. Missing,
   mismatched, or invalid owner data still refuses capture and movement instead of guessing.
 
