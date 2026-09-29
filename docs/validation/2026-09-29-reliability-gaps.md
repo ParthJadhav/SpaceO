@@ -801,3 +801,23 @@ evidence is in `.artifacts/owner-lookup-efc51f4/`. The lookup fix's full combine
 Viewer leak scan remain unverified; the passing MCP/workload leak evidence earlier in this
 record belongs to `3e1306b`, not this changed source. Pinned-toolchain and exact signed-candidate
 release qualification also remain outstanding.
+
+## Follow-up: installed daemon origin and cleanup
+
+The user confirmed that no other workflow should be running. Process ancestry identified an
+idle installed SpaceO MCP client under a Claude process hosted by T3 Code; the separate daemon
+was detached and not supervised by a launch agent. This is a plausible source of daemon startup,
+not proof of its original caller. An operator read confirmed zero sessions. The installed 1.1.1
+CLI then stopped its daemon normally; the Claude session and its idle MCP client were preserved.
+Doctor confirmed no running default daemon, ready safety, and the original physical-only
+topology. Evidence is retained in `.artifacts/daemon-origin-98882b8/`.
+
+A subsequent host check passed (14.21% ColorSync CPU, normal pressure, zero swap deltas), so a
+fresh bounded workload was requested under the user's continued idle-host reservation. Its own
+preflight refused admission for 64 swap-ins in five seconds, with normal pressure, zero
+swap-outs, and 15.46% ColorSync CPU. No test daemon, Viewer, display, or leak scan was started;
+the observer exited on the admission refusal. Evidence is retained separately in
+`.artifacts/owner-recovered-98882b8/`. Final doctor still found the default daemon stopped and
+physical topology unchanged. Intermittent host paging remains a qualification blocker even
+after the idle daemon's cleanup; this does not establish a SpaceO leak or attribute the paging
+to that daemon. No admission threshold was changed and no automatic retry loop was started.
