@@ -118,6 +118,17 @@ Start with the read-only check:
 spaceo doctor
 ```
 
+Doctor reads MCP registrations without launching their configured commands. It knows the version
+of its own executable; other command paths report an unknown version until explicitly probed.
+To check those versions, use:
+
+```bash
+spaceo doctor --probe-client-versions
+```
+
+This option executes each distinct configured command with the `version` argument. Wrappers or
+unrelated programs can have side effects; use it only for registrations you intend to execute.
+
 For a report and MCP configuration without permission prompts, daemon startup, or a test display:
 
 ```bash

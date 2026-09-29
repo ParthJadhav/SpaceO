@@ -159,6 +159,39 @@ final class MCPClientInspectionTests: XCTestCase {
         XCTAssertEqual(probes, 1)
     }
 
+    func testPassiveInspectionDoesNotInvokeExternalProgramsEvenWhenNamedSpaceO() {
+        let registrations = ["/bin/unrelated", "/other/spaceo"].map {
+            MCPClientRegistration(client: .claudeCode, scope: "user", source: "/fixture",
+                                  command: $0, arguments: ["mcp"])
+        }
+        let statuses = MCPClientInspection.statuses(registrations: registrations,
+            cliVersion: "1.0.0", cliPath: "/current/spaceo", resolve: { $0 },
+            probe: { _ in XCTFail("passive inspection must not execute external commands"); return nil },
+            allowExternalVersionProbe: false)
+        for status in statuses where status.registration != nil {
+            XCTAssertNil(status.version)
+            XCTAssertNil(status.matchesCLI)
+            XCTAssertTrue(status.problem?.contains("not executed") == true)
+            XCTAssertTrue(status.remedy?.contains("--probe-client-versions") == true)
+        }
+    }
+
+    func testPassiveInspectionCanUseKnownCurrentVersionAndReportsInvalidArguments() {
+        let registration = MCPClientRegistration(client: .codex, scope: "config", source: "/fixture",
+            command: "/current/spaceo", arguments: ["mcp"])
+        let current = MCPClientInspection.status(for: registration, cliVersion: "1.0.0",
+            cliPath: "/current/spaceo", resolve: { $0 }, probe: { _ in "1.0.0" },
+            allowExternalVersionProbe: false)
+        XCTAssertEqual(current.matchesCLI, true)
+        var invalid = registration
+        invalid.command = "/other/wrapper"
+        invalid.arguments = ["daemon"]
+        let external = MCPClientInspection.status(for: invalid, cliVersion: "1.0.0",
+            cliPath: "/current/spaceo", resolve: { $0 }, probe: { _ in XCTFail("no external probe"); return nil },
+            allowExternalVersionProbe: false)
+        XCTAssertTrue(external.problem?.contains("do not start with mcp") == true)
+    }
+
     /// Doctor's probe runs a real, harmless binary: `/bin/echo` prints text shaped like
     /// `spaceo version` output.
     func testProbeParsesARealProcessAndTimesOut() throws {

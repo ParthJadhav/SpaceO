@@ -50,7 +50,8 @@ public struct MCPClientStatus: Equatable, Sendable {
     }
 }
 
-/// Reads which `spaceo` binary each MCP client launches, without modifying anything.
+/// Reads which `spaceo` binary each MCP client launches. Callers choose whether to execute
+/// external version probes; a configured wrapper or unrelated executable may have side effects.
 ///
 /// MCP tools come from the binary the client launches, not from the daemon, so an upgraded daemon
 /// does not give a client new tools while its config still names an old copy. This is the check
@@ -254,13 +255,15 @@ public enum MCPClientInspection {
         return nil
     }
 
-    /// Pure status for one registration. `probe` runs `<path> version` and returns its version.
+    /// Status for one registration using an explicitly supplied version provider. Passive callers
+    /// disable external probes and supply the loaded version for `cliPath` without executing it.
     public static func status(
         for registration: MCPClientRegistration,
         cliVersion: String,
         cliPath: String,
         resolve: (String) -> String?,
-        probe: (String) -> String?
+        probe: (String) -> String?,
+        allowExternalVersionProbe: Bool = true
     ) -> MCPClientStatus {
         var status = MCPClientStatus(client: registration.client, registration: registration)
         let register = "`spaceo setup --client \(registration.client.rawValue)`"
@@ -271,6 +274,15 @@ public enum MCPClientInspection {
             return status
         }
         status.resolvedPath = path
+        guard allowExternalVersionProbe || path == cliPath else {
+            status.problem = "external command was not executed by this read-only check"
+            status.remedy = "use `spaceo doctor --probe-client-versions` to execute configured commands "
+                + "with `version`, or re-register this build with \(register)"
+            if registration.arguments.first != "mcp" {
+                status.problem = "configured arguments do not start with mcp; external command was not executed"
+            }
+            return status
+        }
         guard let version = probe(path) else {
             status.problem = "`\(path) version` did not answer"
             status.remedy = "check \(path) runs, or re-register this build with \(register)"
@@ -293,13 +305,15 @@ public enum MCPClientInspection {
     }
 
     /// Statuses for every client, one line per registration plus a not-configured line for
-    /// clients with none. Probes each distinct path once.
+    /// clients with none. Probes each permitted distinct path once. The injected-provider API
+    /// preserves its existing probing default; read-only doctor disables external probes.
     public static func statuses(
         registrations: [MCPClientRegistration],
         cliVersion: String,
         cliPath: String,
         resolve: (String) -> String?,
-        probe: (String) -> String?
+        probe: (String) -> String?,
+        allowExternalVersionProbe: Bool = true
     ) -> [MCPClientStatus] {
         var cache: [String: String?] = [:]
         let cachedProbe: (String) -> String? = { path in
@@ -317,7 +331,8 @@ public enum MCPClientInspection {
             }
             for entry in entries {
                 result.append(status(for: entry, cliVersion: cliVersion, cliPath: cliPath,
-                                     resolve: resolve, probe: cachedProbe))
+                                     resolve: resolve, probe: cachedProbe,
+                                     allowExternalVersionProbe: allowExternalVersionProbe))
             }
         }
         return result

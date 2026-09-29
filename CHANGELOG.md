@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Keep default doctor MCP inspection passive. Use `doctor --probe-client-versions` to explicitly
+  execute configured commands with `version`; unprobed external versions remain unknown.
+
 - Bound executable fingerprint reads to 64 MiB of regular-file data. Pipes, oversized files,
   and unreadable paths now report unknown identity instead of blocking or reading indefinitely.
 

@@ -99,6 +99,7 @@ extension CLISpec {
         "now": "stop immediately instead of waiting for sessions to finish",
         "fix": "offer the safe remediations doctor found, each behind a prompt",
         "interactive": "also require interactive readiness (daemon grants match this app)",
+        "probe-client-versions": "execute configured client commands with the version argument (may have side effects)",
         "no-prompt": "never open a permission prompt or System Settings",
         "no-self-test": "skip the live session self-test",
         "client": "MCP client: claude-code, codex, cursor, or claude-desktop",

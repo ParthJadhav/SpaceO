@@ -20,7 +20,7 @@ public enum CLISpec {
         "require-window", "strict", "interactive",
         "new-tab", "mute-audio", "new-instance", "replace", "submit", "annotate", "dry-run",
         "follow", "fix", "yes", "print", "now", "continue-on-failure", "press",
-        "export",
+        "export", "probe-client-versions",
     ]
 
     /// Flags that always take a value, either as `--flag value` or `--flag=value`.
@@ -55,7 +55,7 @@ public enum CLISpec {
         "daemon.uninstall": ["socket", "json", "yes"],
         "daemon.status": ["socket", "json"],
         "place": ["socket", "json", "session", "lease", "window", "placement", "strict", "require-isolation"],
-        "doctor": ["socket", "json", "interactive", "fix", "yes"],
+        "doctor": ["socket", "json", "interactive", "fix", "yes", "probe-client-versions"],
         "setup": ["socket", "json", "no-prompt", "no-self-test", "client", "yes", "print"],
         "skill": ["json"],
         "logging.status": ["json"],

@@ -29,7 +29,9 @@ Status definitions:
 - Follow-up implementation: preserve window-ID provider errors with bounded busy retries,
   bound and cancel startup-lock waits, scan Codex TOML boundaries without confusing instructions or
   array contents with tables, bound doctor version-probe pipes, and cap executable fingerprint
-  reads with regular-file validation. Verification is tracked in the same audit record.
+  reads with regular-file validation. Default doctor client inspection is now passive, with
+  executable version probing kept behind an explicit option. Verification is tracked in the
+  same audit record.
 
 ### Chromium motion remains stale in physical-display Viewer
 

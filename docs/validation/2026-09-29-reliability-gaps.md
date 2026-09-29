@@ -279,3 +279,25 @@ The idle default daemon was then restarted on verified source `3e8c809`. Doctor 
 matching executable, drive/capture grants, ready safety, zero sessions, and unchanged physical-only
 topology. The private `fingerprint-postflight.json` retains this final state. This startup check
 does not extend the earlier live matrix results to a new release candidate.
+
+
+## Passive doctor client inspection
+
+The default read-only doctor inspection executed every resolved MCP command with a `version`
+argument, even for unrelated executables and wrappers. Argument validation happened afterward.
+A malformed registration could therefore cause side effects merely by inspecting host health.
+The new default reports external command versions as unprobed/unknown without invoking them.
+The running CLI's known version remains available without execution. An explicit
+`doctor --probe-client-versions` option preserves bounded executable probing when the operator
+intends to run those registrations. The injected-provider library API retains its existing
+probing default for callers that explicitly supply a provider; doctor selects passive policy.
+
+CLI flag classification, allowed flags, help, generated completion/schema inputs, and setup
+instructions are aligned. Thirty-five focused inspection, scripting, and help/spec tests passed.
+The scripting regression uses a harmless fixture executable that creates its own marker: the
+marker stays absent for default doctor and appears for explicit probing, which still reports the
+fixture's stale version. The existing doctor test was adapted rather than adding live desktop
+coverage. Final `make verify-release` passed with 1,670 Swift tests, supporting checks, and
+the 34-tool MCP smoke test. The built CLI help and machine-readable schema include the option,
+and the rebuilt ad-hoc Viewer passed strict/deep signature verification. `git diff --check`
+passed. This change does not resolve the motion-rendering gap.
