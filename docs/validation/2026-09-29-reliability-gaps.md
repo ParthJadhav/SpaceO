@@ -228,3 +228,49 @@ and has zero sessions with working drive/capture grants. Private evidence is ret
 qualification claim follows these failed results. The next useful boundary to investigate is
 Chromium-produced frames versus WindowServer/ScreenCaptureKit-delivered pixels, rather than
 adding more unproven launch flags.
+
+
+## Chromium versus native pixel boundary
+
+Using the unchanged production build at `faebb12`, a bounded diagnostic connected only to the
+private Chrome process recorded in the generated session. It validated the owned temporary
+profile, read its bounded DevTools endpoint marker, and selected the page by exact fixture URL
+and title. Images stayed in memory; only change booleans and numeric fixture counters were kept.
+
+The initial probe was inconclusive because its failure report omitted the command stage. It
+also used a screenshot clip. Chromium's [Page handler implementation](https://raw.githubusercontent.com/chromium/chromium/main/content/browser/devtools/protocol/page_handler.cc)
+shows that clipped screenshots can temporarily resize the view and screenshot requests actively
+ask the page to produce frames. Such a request is therefore not a passive observation of the
+normal renderer. After inspecting the first attempt and verifying cleanup, the corrected probe
+removed clipping and recorded command completion/stage separately.
+
+In the corrected run, `Runtime.evaluate` completed and read the generated scrolling fixture:
+visible document state, 27 animation callbacks, scroll offset 216, viewport 1280 × 633.
+`Page.captureScreenshot` then **did not answer within its four-second command deadline**. No CDP
+image comparison was possible. Native capture pairs before and after the probe remained
+identical, including across the probe. This is not proof that a longer CDP deadline cannot
+succeed, nor does it establish a Chromium or macOS root cause. It does show the diagnostic reached
+the intended live renderer and the observed symptom is not confined to Viewer frame delivery.
+
+Both attempts failed and cleaned up normally (102.97 and 100.95 seconds, including cleanup).
+Physical topology was restored with zero virtual/orphan displays and ready safety. The matching
+default daemon was restored with zero sessions and working input/capture grants. No production
+change or renderer workaround was retained. Private scripts, digests, command-stage results,
+and postflight are retained under `.artifacts/pixel-boundary-faebb121-20260929T103809Z/`.
+
+
+## Executable fingerprint read bound
+
+A separate diagnostic review found `RuntimeIdentity.currentExecutableSHA256` opened arbitrary
+paths with `FileHandle` and read until EOF despite its bounded-I/O documentation. A pipe could
+block at open/read and a growing or oversized file had no byte ceiling. Fingerprinting now uses
+the existing opened-descriptor regular-file reader with a 64 MiB limit. Failures return unknown
+identity; no prefix digest is accepted. Regular-file symlinks remain supported, and replacing
+the target's content is observed on the next call rather than cached.
+
+Five targeted tests passed: three new file-boundary tests (known full digests and replacement,
+oversized sparse-file refusal, and pipe/directory/missing/non-file refusal) plus both existing
+current-executable fingerprint checks. The shared reader's existing growth checks still apply.
+Final `make verify-release` passed with 1,668 Swift tests, supporting checks, and the 34-tool
+MCP smoke check. The rebuilt ad-hoc Viewer passed strict/deep signature verification, and
+`git diff --check` passed. The new fingerprint bound needs no desktop mutation to test.

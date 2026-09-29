@@ -8,6 +8,9 @@ import MachO
 /// detect the stale-daemon case on their own. Hashing once at startup costs bounded I/O and lets
 /// every client prove which installed image is actually serving requests.
 public enum RuntimeIdentity {
+    /// Bound fingerprinting for CLI and Viewer binaries. An oversized or non-regular
+    /// executable path is unknown identity, never a partial fingerprint or an unbounded read.
+    static let maximumExecutableBytes = 64 * 1_048_576
     /// Prefer the loaded build UUID; re-signing an embedded helper changes only its file hash.
     public static func matches(
         _ daemon: DaemonRuntimeInfo?,
@@ -74,21 +77,9 @@ public enum RuntimeIdentity {
         executableURL: URL? = Bundle.main.executableURL
     ) -> String? {
         guard let executableURL,
-              let handle = try? FileHandle(forReadingFrom: executableURL) else {
+              let data = try? BoundedRegularFile.read(executableURL, maximumBytes: maximumExecutableBytes) else {
             return nil
         }
-        defer { try? handle.close() }
-
-        var digest = SHA256()
-        while true {
-            let data: Data
-            do {
-                guard let chunk = try handle.read(upToCount: 1_048_576) else { break }
-                data = chunk
-            } catch { return nil }
-            if data.isEmpty { break }
-            digest.update(data: data)
-        }
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }

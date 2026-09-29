@@ -28,8 +28,8 @@ Status definitions:
   identities still fail closed, and the underlying provider/lifetime cause needs live diagnosis.
 - Follow-up implementation: preserve window-ID provider errors with bounded busy retries,
   bound and cancel startup-lock waits, scan Codex TOML boundaries without confusing instructions or
-  array contents with tables, and bound doctor version-probe pipes. Verification is tracked in
-  the same audit record.
+  array contents with tables, bound doctor version-probe pipes, and cap executable fingerprint
+  reads with regular-file validation. Verification is tracked in the same audit record.
 
 ### Chromium motion remains stale in physical-display Viewer
 
@@ -42,6 +42,10 @@ Status definitions:
   first-navigation scrolling experiment. Both restored physical topology. This rules out a
   CSS-animation-only failure and a second navigation as a sufficient explanation; the
   rendering/capture boundary remains undiagnosed.
+- A bounded CDP comparison reached the fixture (`Runtime.evaluate` succeeded), but Chrome’s
+  own screenshot request exceeded four seconds while native pixels remained unchanged. No
+  CDP image comparison or root-cause claim follows this timeout. Both attempts cleaned up
+  normally; see the pixel-boundary section of the audit.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).

@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Bound executable fingerprint reads to 64 MiB of regular-file data. Pipes, oversized files,
+  and unreadable paths now report unknown identity instead of blocking or reading indefinitely.
+
 - Allow a focused Chromium Viewer animation or scrolling diagnostic while preserving the static
   baseline and recording omitted coverage in performance reports.
 
