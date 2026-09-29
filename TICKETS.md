@@ -65,6 +65,11 @@ Status definitions:
   did not reproduce; its cause and animated/Viewer reproduction remain unresolved. See the
   [reliability audit](docs/validation/2026-09-29-reliability-gaps.md). This is source evidence on
   Xcode 27.0/Swift 6.4, not pinned-toolchain or signed-candidate release qualification.
+- September 29, source `ed40aaa`: a supervised screencast diagnostic stopped during Chrome
+  launch, before Viewer creation or the CDP probe. Window identity lookup reported AX error
+  `-25201`; the run command failed after 33.813 seconds. Cleanup and physical topology were
+  verified. This supplies a concrete provider status for a startup identity failure, without
+  establishing that it shares the earlier soak fault’s cause. No blind retry was performed.
 - Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
   live soak with successful captures and verified teardown; do not count the stopped run as passing.
 

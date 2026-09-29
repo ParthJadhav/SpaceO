@@ -306,3 +306,32 @@ The idle default daemon was restarted on verified source `9f0713c`. Doctor confi
 matching executable, drive/capture grants, ready safety, zero sessions, and unchanged
 physical-only topology. Private passive-doctor postflight evidence retains the result.
 No applications or virtual displays were created for this restoration.
+
+
+## Screencast diagnostic blocked at Chrome window identity
+
+A separate bounded diagnostic on source `ed40aaa` was designed to start an eight-second CDP
+screencast against only the generated scrolling fixture and compare native captures before,
+during, and afterward. It selected the exact private Chrome endpoint and fixture URL/title,
+acknowledged incoming frames, retained only frame counts/digest comparisons, and did not activate
+or focus the application. The helper and its caller were syntax-checked and retained with hashes
+in the owner-only `.artifacts/screencast-boundary-ed40aaa/` directory. Production code was unchanged.
+
+The supervised run failed before executing that probe. Chrome's `run` command returned
+`operation_failed` after 33.813 seconds; the bounded readiness path reported incomplete window
+discovery because window identity was unavailable with AX error `-25201`. Viewer creation and
+fixture navigation had not occurred. This is evidence of a launch/readiness identity failure,
+not evidence for or against screencasting as a rendering diagnostic. It does not establish that
+the September 28 soak failure has the same cause. Inspection confirmed that readiness already
+re-polls provider failures within its existing deadline, so adding an unbounded retry or accepting
+unidentified windows is not justified.
+
+The attempt ended after 76.428 seconds with no sampler errors, verified session/display cleanup,
+and restored physical topology. No automatic retry followed. The default matching daemon was
+restored and doctor confirmed drive/capture grants, ready safety, and zero sessions; the private
+postflight retains these checks. This is source diagnostic evidence on the current toolchain,
+not release qualification. Both Chromium motion and intermittent identity findings remain open.
+
+After recording the diagnostic, `make verify-release` passed again: 1,670 Swift tests,
+supporting checks, and the 34-tool MCP smoke check. `git diff --check` passed. A final doctor
+check still reported a matching daemon, ready safety, and no SpaceO or orphaned displays.
