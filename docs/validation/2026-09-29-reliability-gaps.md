@@ -205,4 +205,26 @@ of focused coverage. This is diagnostic coverage, not a workaround for frozen pi
 
 Verification: `make verify-release` passed (1,665 Swift tests and 34-tool MCP smoke). The
 seven fixture and seven report tests passed after the summary-coverage addition, and
-`git diff --check` passed. Focused live scrolling evidence remains pending.
+`git diff --check` passed.
+
+### Scrolling results
+
+On source `729ded4`, the supervised static-and-scrolling run failed in 94.28 seconds including
+cleanup. The scrolling capture pair was identical; Viewer delivered no sustained motion frames.
+Chrome again reported 23 motion heartbeat samples with callbacks advancing from 4 to 26.
+The requested `[static, scrolling]` coverage survived the derived summary unchanged. Animation
+was intentionally excluded and is not covered by this diagnostic.
+
+After inspection and verified physical-only cleanup, a separate retained diagnostic script loaded
+scrolling as the first page, deliberately omitting the static baseline. It failed in 74.02 seconds
+with the same identical-capture result and 23 heartbeat samples advancing from 4 to 26. This is
+not a standard full-workload result; its exact script and digest are retained privately. It rules
+out a second navigation as a sufficient explanation, but does not establish the platform cause.
+No production behavior was changed in either diagnostic.
+
+Both runs restored topology and ready safety. The default daemon was restored, matches the CLI,
+and has zero sessions with working drive/capture grants. Private evidence is retained at
+`.artifacts/scroll-diagnostic-729ded43-20260929T103022Z/`. No automatic retry or release
+qualification claim follows these failed results. The next useful boundary to investigate is
+Chromium-produced frames versus WindowServer/ScreenCaptureKit-delivered pixels, rather than
+adding more unproven launch flags.

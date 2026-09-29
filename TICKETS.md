@@ -31,13 +31,17 @@ Status definitions:
   array contents with tables, and bound doctor version-probe pipes. Verification is tracked in
   the same audit record.
 
-### Chromium animation remains stale in physical-display Viewer
+### Chromium motion remains stale in physical-display Viewer
 
 - Status: Open
 - September 29 source `688e4f1`: native workflow and all 36 MCP checks passed, but the
   focused animation workload reproduced unchanged capture pixels and zero sustained Viewer FPS.
   A separately inspected occlusion-switch experiment also failed and its production flag was
   removed. Both attempts cleaned up normally; neither is passing qualification evidence.
+- Source `729ded4`: a focused static/scrolling diagnostic also failed, as did a separate
+  first-navigation scrolling experiment. Both restored physical topology. This rules out a
+  CSS-animation-only failure and a second navigation as a sufficient explanation; the
+  rendering/capture boundary remains undiagnosed.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
