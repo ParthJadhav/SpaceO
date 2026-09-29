@@ -24,6 +24,19 @@ final class LaunchPollingTests: XCTestCase {
         return url
     }
 
+    func testLaunchAXFailureNamesPhaseWithoutChangingStopReason() throws {
+        for phase in AppLauncher.LaunchPhase.allCases {
+            for reason: AXTraversalStopReason in [.provider, .deadline, .cancelled] {
+                let original = AXTraversalStopped(reason: reason, detail: "window count unavailable")
+                let error = AppLauncher.launchFailure(original, application: "not included", phase: phase)
+                let stopped = try XCTUnwrap(error as? AXTraversalStopped)
+                XCTAssertEqual(stopped.reason, reason)
+                XCTAssertEqual(stopped.detail, "launch \(phase.rawValue): window count unavailable")
+                XCTAssertFalse(stopped.detail.contains("not included"))
+            }
+        }
+    }
+
     func testChromiumStartupDeadlineHasActionableLaunchError() {
         let error = AppLauncher.launchFailure(DevToolsDeadline.Exceeded(), application: "Test Browser")
         guard case let SpaceOError.launchFailed(message) = error else {
@@ -174,20 +187,59 @@ final class LaunchPollingTests: XCTestCase {
         let clock = Clock()
         var attempts = 0
         try await AppLauncher.reveal(name: "Test", runtime: clock.runtime, validate: {},
-            isHidden: { false }, unhide: { XCTFail("already visible") })
+            isHidden: { _ in false }, unhide: { XCTFail("already visible") })
         XCTAssertTrue(clock.sleeps.isEmpty)
         try await AppLauncher.reveal(name: "Test", runtime: clock.runtime, validate: {},
-            isHidden: { attempts < 2 }, unhide: { attempts += 1 })
+            isHidden: { _ in attempts < 2 }, unhide: { attempts += 1 })
         XCTAssertEqual(attempts, 2)
         XCTAssertEqual(clock.sleeps, [0.025])
         let refusing = Clock()
         do {
             try await AppLauncher.reveal(name: "Test", runtime: refusing.runtime, validate: {},
-                isHidden: { true }, unhide: {})
+                isHidden: { _ in true }, unhide: {})
             XCTFail("a permanently hidden app must fail")
         } catch is SpaceOError {} catch { XCTFail("unexpected error: \(error)") }
         XCTAssertEqual(refusing.sleeps.reduce(0, +), 1, accuracy: 0.000001)
         XCTAssertTrue(refusing.sleeps.allSatisfy { $0 <= 0.025 })
+    }
+
+    func testRevealDoesNotAcceptUnknownVisibilityOrFailedReads() async throws {
+        for fails in [false, true] {
+            let clock = Clock()
+            var probes = 0
+            do {
+                try await AppLauncher.reveal(name: "Test", runtime: clock.runtime, validate: {},
+                    isHidden: { remaining in
+                        probes += 1
+                        XCTAssertGreaterThanOrEqual(remaining, 0.01)
+                        XCTAssertLessThanOrEqual(remaining, 1)
+                        if fails { throw SpaceOError.accessibilityDenied }
+                        return nil
+                    }, unhide: { XCTFail("unknown state does not authorize another reveal attempt") })
+                XCTFail("unknown visibility must not become success")
+            } catch is SpaceOError {} catch { XCTFail("unexpected error: \(error)") }
+            XCTAssertGreaterThan(probes, 1)
+            XCTAssertEqual(clock.sleeps.reduce(0, +), 1, accuracy: 0.000001)
+        }
+    }
+
+    func testRevealChargesObservationTimeAndRejectsLateResults() async throws {
+        for hidden in [false, true] {
+            let clock = Clock()
+            var probes = 0
+            do {
+                try await AppLauncher.reveal(name: "Test", runtime: clock.runtime, validate: {},
+                    isHidden: { remaining in
+                        probes += 1
+                        XCTAssertEqual(remaining, 1)
+                        clock.advance(1.1)
+                        return hidden
+                    }, unhide: { XCTFail("late state must not trigger unhide") })
+                XCTFail("late visibility must not succeed")
+            } catch is SpaceOError {} catch { XCTFail("unexpected error: \(error)") }
+            XCTAssertEqual(probes, 1)
+            XCTAssertTrue(clock.sleeps.isEmpty)
+        }
     }
 
     func testRevealDoesNotUnhideAfterCancellationOrIdentityFailure() async throws {
@@ -196,14 +248,14 @@ final class LaunchPollingTests: XCTestCase {
         do {
             try await AppLauncher.reveal(name: "Test",
                 runtime: .init(now: { clock.now() }, sleep: { _ in throw CancellationError() }),
-                validate: {}, isHidden: { true }, unhide: { attempts += 1 })
+                validate: {}, isHidden: { _ in true }, unhide: { attempts += 1 })
             XCTFail("cancelled sleep must stop reveal")
         } catch is CancellationError {} catch { XCTFail("unexpected error: \(error)") }
         XCTAssertEqual(attempts, 1)
         do {
             try await AppLauncher.reveal(name: "Test", runtime: clock.runtime,
                 validate: { throw SpaceOError.applicationExited("test") },
-                isHidden: { true }, unhide: { attempts += 1 })
+                isHidden: { _ in true }, unhide: { attempts += 1 })
             XCTFail("identity failure must stop reveal")
         } catch is SpaceOError {} catch { XCTFail("unexpected error: \(error)") }
         XCTAssertEqual(attempts, 1)
@@ -221,7 +273,7 @@ final class LaunchPollingTests: XCTestCase {
         let revealTask = Task {
             withUnsafeCurrentTask { $0?.cancel() }
             try await AppLauncher.reveal(name: "Test", validate: { XCTFail("cancelled validation") },
-                isHidden: { XCTFail("cancelled state read"); return true },
+                isHidden: { _ in XCTFail("cancelled state read"); return true },
                 unhide: { XCTFail("cancelled reveal") })
         }
         do { try await revealTask.value; XCTFail("cancellation must propagate") }

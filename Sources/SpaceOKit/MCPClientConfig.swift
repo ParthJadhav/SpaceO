@@ -16,6 +16,7 @@ public enum MCPClientConfigError: Error, LocalizedError, Equatable {
     case missingExecutable(String)
     case tooLarge(Int)
     case malformedJSON(String)
+    case malformedTOML(String)
     case unreadable(String)
 
     public var errorDescription: String? {
@@ -30,6 +31,8 @@ public enum MCPClientConfigError: Error, LocalizedError, Equatable {
             return "existing configuration is \(bytes) bytes; refusing to rewrite files over \(MCPClientConfig.maximumConfigBytes) bytes"
         case .malformedJSON(let why):
             return "existing configuration is not a JSON object: \(why)"
+        case .malformedTOML(let why):
+            return "existing TOML configuration cannot be safely edited: \(why); not overwriting it"
         case .unreadable(let path):
             return "could not read \(path) as UTF-8 text; not overwriting it. Fix or move it, then retry"
         }
@@ -80,12 +83,20 @@ public struct MCPClientConfig {
 
     /// The current contents of a client config: nil only when no file exists. A file that exists
     /// but cannot be read as UTF-8 throws, because treating it as absent would overwrite it.
-    public static func readExisting(at url: URL, fileManager: FileManager = .default) throws -> String? {
-        guard fileManager.fileExists(atPath: url.path) else { return nil }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+    public static func readExisting(at url: URL, fileManager _: FileManager = .default) throws -> String? {
+        do {
+            let data = try BoundedRegularFile.read(url, maximumBytes: maximumConfigBytes)
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw MCPClientConfigError.unreadable(url.path)
+            }
+            return text
+        } catch BoundedRegularFile.ReadError.missing {
+            return nil
+        } catch BoundedRegularFile.ReadError.tooLarge(let bytes) {
+            throw MCPClientConfigError.tooLarge(bytes)
+        } catch {
             throw MCPClientConfigError.unreadable(url.path)
         }
-        return text
     }
 
     /// New file contents with the `spaceo` entry set to `executablePath mcp`.
@@ -100,7 +111,7 @@ public struct MCPClientConfig {
         case .claudeCode:
             return command(for: client, executablePath: executablePath)!.joined(separator: " ")
         case .codex:
-            return mergedTOML(existing: existing ?? "", executablePath: executablePath)
+            return try mergedTOML(existing: existing ?? "", executablePath: executablePath)
         case .cursor, .claudeDesktop:
             return try mergedJSON(existing: existing, executablePath: executablePath)
         }
@@ -122,6 +133,9 @@ public struct MCPClientConfig {
                 throw MCPClientConfigError.malformedJSON("top level is not an object")
             }
             root = dictionary
+        }
+        if let existingServers = root["mcpServers"], !(existingServers is [String: Any]) {
+            throw MCPClientConfigError.malformedJSON("mcpServers must be an object; not overwriting it")
         }
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         servers[serverName] = ["command": executablePath, "args": ["mcp"]]
@@ -146,13 +160,13 @@ public struct MCPClientConfig {
     /// Replace the existing `[mcp_servers.spaceo]` table or append one. Deliberately not a TOML
     /// parser: it only needs to find table boundaries, and rewriting the user's other tables would
     /// lose comments and formatting we have no business touching.
-    static func mergedTOML(existing: String, executablePath: String) -> String {
+    static func mergedTOML(existing: String, executablePath: String) throws -> String {
         let table = tomlTable(executablePath: executablePath)
         if existing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return table + "\n"
         }
         var lines = existing.components(separatedBy: "\n")
-        if let range = tomlTableRange(lines: lines) {
+        if let range = try tomlTableRange(lines: lines) {
             lines.replaceSubrange(range, with: table.components(separatedBy: "\n"))
             return lines.joined(separator: "\n")
         }
@@ -164,30 +178,8 @@ public struct MCPClientConfig {
 
     /// Lines from the spaceo header up to (not including) the next table header. Blank and comment
     /// lines that lead into the next header stay with that header, so they are preserved.
-    static func tomlTableRange(lines: [String]) -> Range<Int>? {
-        guard let start = lines.firstIndex(where: { isSpaceOHeader($0) }) else { return nil }
-        var end = lines.count
-        for index in (start + 1)..<lines.count where isTableHeader(lines[index]) {
-            end = index
-            break
-        }
-        while end > start + 1 {
-            let candidate = lines[end - 1].trimmingCharacters(in: .whitespaces)
-            if candidate.isEmpty || candidate.hasPrefix("#") { end -= 1 } else { break }
-        }
-        return start..<end
-    }
-
-    private static func isTableHeader(_ line: String) -> Bool {
-        line.trimmingCharacters(in: .whitespaces).hasPrefix("[")
-    }
-
-    private static func isSpaceOHeader(_ line: String) -> Bool {
-        var trimmed = line.trimmingCharacters(in: .whitespaces)
-        if let comment = trimmed.firstIndex(of: "#") {
-            trimmed = String(trimmed[..<comment]).trimmingCharacters(in: .whitespaces)
-        }
-        return trimmed.replacingOccurrences(of: " ", with: "") == tomlHeader
+    static func tomlTableRange(lines: [String]) throws -> Range<Int>? {
+        try TOMLTableScanner.spaceOTableRange(lines: lines)
     }
 
     /// TOML basic string. Same escapes as JSON minus the optional `\/`, so one rule set serves both.

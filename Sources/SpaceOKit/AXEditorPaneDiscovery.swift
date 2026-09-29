@@ -130,8 +130,8 @@ enum AXEditorPaneDiscovery {
         }
 
         try collect(window, depth: 0)
-        let finalID = try AXTraversal.boundedCall(window, provider: provider, budget: budget) {
-            provider.windowID(window)
+        let finalID = try AXWindowDiscovery.boundedProviderCall(window, provider: provider, budget: budget) {
+            try provider.identifiedWindowID(window)
         }
         guard finalID == windowID else { throw incomplete("the window changed during discovery") }
         return found
@@ -140,7 +140,7 @@ enum AXEditorPaneDiscovery {
     private static func root<P: AXEditorPaneDiscoveryProviding>(
         app: P.Element, windowID: CGWindowID, provider: P, budget: AXTraversalBudget
     ) throws -> P.Element {
-        let count = try AXTraversal.boundedCall(app, provider: provider, budget: budget) {
+        let count = try AXWindowDiscovery.boundedProviderCall(app, provider: provider, budget: budget) {
             try provider.windowCount(app)
         }
         guard count >= 0 else { throw incomplete("negative window count") }
@@ -151,13 +151,13 @@ enum AXEditorPaneDiscovery {
         while start < count {
             let size = min(budget.limits.childPageSize, count - start)
             try budget.consumeAllocation(size * MemoryLayout<P.Element>.stride)
-            let page = try AXTraversal.boundedCall(app, provider: provider, budget: budget) {
+            let page = try AXWindowDiscovery.boundedProviderCall(app, provider: provider, budget: budget) {
                 try provider.windowElements(app, start: start, count: size)
             }
             guard page.count == size else { throw incomplete("window list changed during paging") }
             for element in page {
-                let id = try AXTraversal.boundedCall(element, provider: provider, budget: budget) {
-                    provider.windowID(element)
+                let id = try AXWindowDiscovery.boundedProviderCall(element, provider: provider, budget: budget) {
+                    try provider.identifiedWindowID(element)
                 }
                 if id == windowID { return element }
             }

@@ -404,9 +404,11 @@ final class CLIScriptingContractTests: XCTestCase {
         XCTAssertTrue(commands.last?.hasPrefix("claude mcp add -s user spaceo -- ") == true)
     }
 
-    func testDoctorReportsAStaleClientFromTheFixtureHome() throws {
+    func testDoctorRequiresExplicitClientProbeAndPreservesStaleReporting() throws {
         let stale = fixtureHome.appendingPathComponent("old-spaceo")
-        try "#!/bin/sh\necho 'spaceo 0.0.1'\n".write(to: stale, atomically: true, encoding: .utf8)
+        let marker = URL(fileURLWithPath: stale.path + ".invoked")
+        try "#!/bin/sh\nprintf invoked > \"$0.invoked\"\necho 'spaceo 0.0.1'\n"
+            .write(to: stale, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stale.path)
         try "{\"mcpServers\":{\"spaceo\":{\"command\":\"\(stale.path)\",\"args\":[\"mcp\"]}}}"
             .write(to: fixtureHome.appendingPathComponent(".claude.json"), atomically: true, encoding: .utf8)
@@ -414,17 +416,20 @@ final class CLIScriptingContractTests: XCTestCase {
         let object = try json(result.stdout)
         let clients = try XCTUnwrap(object["mcpClients"] as? [[String: Any]])
         let claude = try XCTUnwrap(clients.first { $0["client"] as? String == "claude-code" })
-        XCTAssertEqual(claude["version"] as? String, "0.0.1")
-        XCTAssertEqual(claude["matchesCLI"] as? Bool, false)
+        XCTAssertTrue(claude["version"] is NSNull)
+        XCTAssertTrue(claude["matchesCLI"] is NSNull)
+        XCTAssertTrue((claude["problem"] as? String)?.contains("not executed") == true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path))
         XCTAssertNotNil(claude["remedy"] as? String)
         XCTAssertEqual(clients.filter { $0["configured"] as? Bool == false }.count, 3)
         let daemon = try XCTUnwrap(object["daemon"] as? [String: Any])
         XCTAssertEqual(daemon["state"] as? String, "not_running")
 
-        let text = try run(["doctor", "--socket", missingSocket()])
+        let text = try run(["doctor", "--probe-client-versions", "--socket", missingSocket()])
         XCTAssertTrue(text.stdout.contains("\nMCP clients\n"))
         XCTAssertTrue(text.stdout.contains("STALE (this CLI is \(SpaceOVersion.current))"))
         XCTAssertTrue(text.stdout.contains("cli version         : \(SpaceOVersion.current) ("))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
     }
 
     /// A socket that accepts but never answers: doctor must say "busy", not "not running", and

@@ -116,11 +116,7 @@ public final class SetupProgressStore {
     }
 
     public func load() -> SetupProgress {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeRegular,
-              let size = attributes[.size] as? NSNumber,
-              size.intValue <= Self.maximumBytes,
-              let data = try? Data(contentsOf: url, options: [.uncached]) else {
+        guard let data = try? BoundedRegularFile.read(url, maximumBytes: Self.maximumBytes) else {
             return SetupProgress()
         }
         let decoder = JSONDecoder()

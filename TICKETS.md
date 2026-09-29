@@ -2,13 +2,13 @@
 
 ## Product direction
 
-SpaceO permits virtual-display creation and input control without product-enforced allowlists,
-caps, incident lockouts, or acknowledgement gates. Runtime prerequisites and structural validity
-remain: the operating system must expose the API being called, dimensions must be positive,
-finite, integral and representable by the platform type, and failed platform operations are
-reported.
+SpaceO provides background display and input control for its qualified native and Chromium
+scope. Runtime capabilities, structural validation, controller ownership, input limits, display
+creation budgets, and persistent lifecycle failure latches remain enforced. Failed or unknown
+platform operations are reported without claiming delivery or isolation. Managed Electron
+launches remain refused until attention isolation is proven. See [display safety](docs/DISPLAY_SAFETY.md).
 
-Current milestone: **Unrestricted creation and control stabilization**
+Current milestone: **Reliable background control and qualification**
 
 Status definitions:
 
@@ -18,6 +18,106 @@ Status definitions:
 
 ## Active milestone
 
+### September 29 reliability gap audit
+
+- Implemented: descriptor-bounded configuration reads, refusal to discard malformed JSON
+  `mcpServers` collections, shared Accessibility retry budgets, window-count revalidation,
+  and a shared daemon restart deadline.
+- Evidence and remaining limits: [reliability gap audit](docs/validation/2026-09-29-reliability-gaps.md).
+- These fixes do not close the Chromium identity soak finding below. Missing or repeated
+  identities still fail closed, and the underlying provider/lifetime cause needs live diagnosis.
+- Follow-up implementation: preserve window-ID provider errors with bounded busy retries,
+  bound and cancel startup-lock waits, scan Codex TOML boundaries without confusing instructions or
+  array contents with tables, bound doctor version-probe pipes, and cap executable fingerprint
+  reads with regular-file validation. Default doctor client inspection is now passive, with
+  executable version probing kept behind an explicit option. Verification is tracked in the
+  same audit record.
+
+### Single-window capture snapshot ownership
+
+- Status: Done (deterministic verification; live validation recorded in the audit)
+- `Capture.window` selected a shareable window solely by its numeric ID after an asynchronous
+  snapshot request. It now requires a positive requested PID and a matching snapshot owner before
+  constructing the capture filter; missing ownership and placeholder IDs fail closed.
+- This also protects direct SDK callers, which do not have the daemon's later geometry checks.
+  It does not establish process incarnation from a PID alone or close the Chromium motion gap.
+- Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
+
+### Chromium motion remains stale in physical-display Viewer
+
+- Status: Done for source verification; exact signed-candidate qualification pending
+- September 29 source `688e4f1`: native workflow and all 36 MCP checks passed, but the
+  focused animation workload reproduced unchanged capture pixels and zero sustained Viewer FPS.
+  A separately inspected occlusion-switch experiment also failed and its production flag was
+  removed. Both attempts cleaned up normally; neither is passing qualification evidence.
+- Source `729ded4`: a focused static/scrolling diagnostic also failed, as did a separate
+  first-navigation scrolling experiment. Both restored physical topology. This rules out a
+  CSS-animation-only failure and a second navigation as a sufficient explanation; the
+  rendering/capture boundary remains undiagnosed.
+- A bounded CDP comparison reached the fixture (`Runtime.evaluate` succeeded), but Chrome’s
+  own screenshot request exceeded four seconds while native pixels remained unchanged. No
+  CDP image comparison or root-cause claim follows this timeout. Both attempts cleaned up
+  normally; see the pixel-boundary section of the audit.
+- Source `5d4a0e7`: an instrumented launch succeeded and the eight-second CDP screencast
+  completed its start/stop commands but emitted zero frames. Native pixels stayed unchanged
+  before, during, and afterward while the visible fixture’s animation counter advanced. A
+  separate Chrome timer-source experiment also failed animation capture and sustained Viewer
+  delivery; its temporary launch switch was removed. Both cleanups restored physical topology.
+- Source `f5f7b93`: bounded compositor traces recorded about 60 display-link callbacks per
+  second. A follow-up trace counted 473 `ThrottleUndrawnFrames` decisions versus eight sent
+  frame-timing updates in eight seconds, while native pixels remained unchanged. Undrawn-frame
+  throttling is established for this run; why those frames remain undrawn is still open.
+- Source `df8fb07`: native observation found Chrome hidden despite reported launch success.
+  An explicit non-activating unhide after verified placement restored changing pixels and
+  Viewer delivery. Source `793cf25` adds bounded AXHidden reads; `3e85de4` insets new browser
+  windows after reveal exposed menu-bar clamping of full-height windows. The next standard
+  run stopped during launch on AX window-count error `-25204`, before motion coverage. Both
+  production-path attempts cleaned up; live validation of the combined fix remains pending.
+- Source `63c515e` passed the standard static/animated/scrolling Viewer workload with changing
+  motion pixels and verified cleanup. The motion fix is validated for that source workload.
+  Post-fix MCP qualification remains incomplete: native AX discovery intermittently fails.
+- Pinned-toolchain source `942e460` passed the complete combined Viewer/capture workload with
+  changing animated and scrolling pixels, sustained Viewer frames, and verified cleanup;
+  all 36 MCP checks then passed. This verifies the motion fix in the release source while
+  preserving the separately tracked intermittent AX diagnostic.
+- Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
+  change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
+- Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
+
+### Host slowdown after sustained live testing
+
+- Status: Open for system slowdown attribution; current-source bounded memory follow-up passed
+- September 29: user-reported slowdown persisted as a resource concern after test cleanup.
+  Zero sessions/virtual displays remained; idle daemon leak scan reported zero leaked bytes.
+  Normal memory pressure and zero sampled swap activity did not explain sustained ~100% combined
+  CPU in the two system ColorSync services. The idle SpaceO daemon was stopped normally.
+- A read-only host-health gate now refuses XCTest, MCP, and performance workload admission for
+  memory pressure, active swap, busy ColorSync services, or unavailable counters. No system
+  services or display preferences were reset. Current privileges cannot sample those root services.
+- Acceptance: verify recovered host responsiveness and quiet counters before resuming live work;
+  retain daemon/Viewer footprint trends and leak evidence from a current-source bounded workload.
+  An idle zero-leak result does not close workload memory qualification.
+- Offline ownership review found missing Viewer capture stops on model deallocation and late
+  startup completion after owner deallocation. Both paths now explicitly stop capture, with
+  deterministic regressions that failed before the fix. This does not establish the slowdown's
+  cause or close the current-source live memory follow-up.
+- On resumed source `3e1306b`, host admission passed and the full 36-check MCP matrix passed.
+  The exercised daemon's leak scan found zero leaked bytes; peak sampled footprint was about
+  30.02 MiB. The combined Viewer soak remains incomplete: one attempt stopped for confirmed
+  human control, and a newly reserved attempt exposed the owner-lookup defect below. Normal
+  recovery restored physical topology; no system services were killed or reset.
+- After correcting that defect in `efc51f4`, admission refused a new workload for swap-ins
+  before creating any daemon/display. A longer inspection still found swap activity with normal
+  pressure and low ColorSync CPU. The current-source combined soak and Viewer leak scan remain
+  pending; no threshold was relaxed to run them.
+- Pinned-toolchain source `942e460` subsequently passed the complete 367.875-second combined
+  workload, including 404 captures and both Viewer motion modes. Daemon/Viewer scans each
+  reported zero leaked bytes; sampled footprints declined during the soak, and cleanup restored
+  physical topology. The full 36-check MCP matrix and post-run host admission also passed.
+  This closes the bounded current-source memory follow-up, not the earlier system slowdown's
+  cause or an unlimited-duration leak guarantee. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
+- Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
+
 ### Performance soak: Chromium window identity becomes incomplete
 
 - Status: Open
@@ -26,8 +126,43 @@ Status definitions:
   operator-approved recovery. Normal daemon shutdown then succeeded, with physical topology
   restored. Preserve fail-closed discovery while investigating provider/window lifetime behavior.
 - Evidence: [performance follow-up](docs/validation/2026-09-28-performance-followup.md).
+- September 29: source checkpoint `84f153f` passed all 16 live cases, all 36 MCP matrix checks,
+  and a 400-capture daemon-only static-page workload with verified cleanup. The identity fault
+  did not reproduce; its cause and animated/Viewer reproduction remain unresolved. See the
+  [reliability audit](docs/validation/2026-09-29-reliability-gaps.md). This is source evidence on
+  Xcode 27.0/Swift 6.4, not pinned-toolchain or signed-candidate release qualification.
+- September 29, source `ed40aaa`: a supervised screencast diagnostic stopped during Chrome
+  launch, before Viewer creation or the CDP probe. Window identity lookup reported AX error
+  `-25201`; the run command failed after 33.813 seconds. Cleanup and physical topology were
+  verified. This supplies a concrete provider status for a startup identity failure, without
+  establishing that it shares the earlier soak fault’s cause. No blind retry was performed.
+- Native coverage also exposed transient AX window-count failures (`-25204`) after reveal and
+  during later window-list/screenshot commands. A bounded post-reveal readiness poll improves
+  launch sequencing but does not close the general read failure. A separate latency probe's
+  three reads all succeeded within 250 ms; larger production IPC limits are not yet justified.
+  A subsequent content-free call trace reproduced 36 failures, including 34 without overlapping
+  bounded AX work. Watcher contention alone does not explain that reproduction; no global AX
+  lock or timeout increase was added. Cleanup passed; the general read failure remains open.
 - Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
   live soak with successful captures and verified teardown; do not count the stopped run as passing.
+
+### Retained-window owner lookup uses the wrong Core Graphics array representation
+
+- Status: Done for source verification; exact signed-candidate qualification pending
+- Source `3e1306b` failed the combined scrolling workload with `known window owner is unavailable`.
+  Cleanup quit its Chrome process but retained the display after the incomplete discovery. The
+  supervised run was stopped; explicit normal daemon shutdown then restored physical topology.
+- `CGWindowListCreateDescriptionFromArray([windowID] as CFArray)` boxed the IDs instead of
+  supplying the API's raw ID entries. A read-only comparison found zero matching owners through
+  that path versus 11/11 through the direct single-window API.
+- `liveOwnerPID` now uses `CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID)`, requires
+  exactly one matching ID, and refuses missing, nonpositive, or out-of-range owner PIDs. Existing
+  fail-closed retained-window behavior is preserved. Deterministic tests cover query scope,
+  identity mismatch, malformed replies, and PID bounds; live soak verification remains pending.
+- This diagnoses the current owner lookup defect, not every historical AX provider failure.
+- Pinned-toolchain source `942e460` passed the combined static/animated/scrolling Viewer workload,
+  404 captures, logical session churn and verified teardown, followed by all 36 MCP checks.
+  The earlier owner-lookup failure did not recur. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
 
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 

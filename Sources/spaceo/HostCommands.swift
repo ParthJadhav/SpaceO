@@ -348,7 +348,8 @@ func runDoctor() -> Never {
         cliVersion: SpaceOVersion.current, cliPath: cliPath,
         resolve: { MCPClientInspection.resolve(command: $0, pathVariable: environmentPath,
                                                isExecutable: FileManager.default.isExecutableFile(atPath:)) },
-        probe: { $0 == cliPath ? SpaceOVersion.current : MCPClientInspection.probeVersion(path: $0) })
+        probe: { $0 == cliPath ? SpaceOVersion.current : MCPClientInspection.probeVersion(path: $0) },
+        allowExternalVersionProbe: args.bool("probe-client-versions"))
     let viewer = installedViewer()
 
     // Unknown daemon health cannot inherit the caller's grants or count as an image match.

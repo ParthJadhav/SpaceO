@@ -37,6 +37,36 @@ process.stdout.write(JSON.stringify({animation:box.style.animation,scrolls,rows:
 '''
 
 class Fixture(unittest.TestCase):
+    def test_unhealthy_host_stops_before_daemon_or_fixture_start(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('.build/release/spaceo', '.build/process-resources',
+                         '.build/SpaceO Viewer.app/Contents/MacOS/SpaceOViewer'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            with patch.object(live, 'ROOT', root), \
+                 patch.object(live.sys, 'argv', ['performance-live.py', str(root / 'report')]), \
+                 patch.dict(live.os.environ, {'SPACEO_LIVE_TESTS': '1'}, clear=True), \
+                 patch.object(live.subprocess, 'run', return_value=Mock(returncode=1)), \
+                 patch.object(live.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(SystemExit, 'host is not quiet enough'):
+                    live.main()
+                spawn.assert_not_called()
+
+    def test_focused_motion_keeps_static_baseline_and_explicit_coverage(self):
+        self.assertEqual(live.viewer_modes({}), ("static", "animated", "scrolling"))
+        for mode in ("animated", "scrolling"):
+            self.assertEqual(live.viewer_modes({"SPACEO_PERF_VIEWER_MOTION": mode}), ("static", mode))
+
+    def test_invalid_or_inapplicable_motion_is_refused_before_live_work(self):
+        for mode in ("", "static", "animated,scrolling", "unknown"):
+            with self.assertRaises(ValueError):
+                live.viewer_modes({"SPACEO_PERF_VIEWER_MOTION": mode})
+        for workload in ("SPACEO_PERF_DAEMON_ONLY", "SPACEO_PERF_NATIVE_PROBE"):
+            with self.assertRaises(ValueError):
+                live.viewer_modes({"SPACEO_PERF_VIEWER_MOTION": "scrolling", workload: "1"})
+
     def test_safety_stop_does_not_depend_on_logging(self):
         class Suspended(Exception): pass
         with patch.object(live.os, 'write', side_effect=OSError('closed log')), \

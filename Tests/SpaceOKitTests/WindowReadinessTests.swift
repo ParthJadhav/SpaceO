@@ -85,31 +85,6 @@ final class WindowReadinessTests: XCTestCase {
         XCTAssertEqual(clock.sleeps, [0.1, 0.1])
     }
 
-    func testBusyAccessibilityRefusalIsRetriedABoundedNumberOfTimes() {
-        var calls = 0
-        var pauses = 0
-        let recovered = AXWindowDiscovery.retryingBusy(pause: { _ in pauses += 1 }) {
-            calls += 1
-            return calls < 3 ? .cannotComplete : .success
-        }
-        XCTAssertEqual(recovered, .success)
-        XCTAssertEqual(calls, 3)
-        XCTAssertEqual(pauses, 2)
-
-        calls = 0
-        let persistent = AXWindowDiscovery.retryingBusy(pause: { _ in }) { calls += 1; return .cannotComplete }
-        XCTAssertEqual(persistent, .cannotComplete)
-        XCTAssertEqual(calls, 3)
-
-        calls = 0
-        let refused = AXWindowDiscovery.retryingBusy(pause: { _ in XCTFail("no retry") }) {
-            calls += 1
-            return .apiDisabled
-        }
-        XCTAssertEqual(refused, .apiDisabled, "only a busy application is retried")
-        XCTAssertEqual(calls, 1)
-    }
-
     func testProviderFailureFollowedByEmptyPollTimesOutWithoutStaleFailure() async throws {
         let clock = Clock()
         var calls = 0

@@ -132,15 +132,23 @@ a matching candidate daemon on a private socket, validates 16 subscriber handsha
 create/destroy cycles, and 360 repeated captures. Chrome serves only a generated loopback fixture.
 The Viewer starts while only the populated session exists; physical-display placement and
 animated-phase FPS are required. Set `SPACEO_PERF_VIEWER_ONLY=1` for a focused static/animated/
-scrolling diagnostic that skips subscriber/load/capture/churn work. This still creates a virtual
+scrolling diagnostic that skips subscriber/load/capture/churn work. After inspecting a failed
+phase, `SPACEO_PERF_VIEWER_MOTION=animated` or `scrolling` can select one motion path; the default
+`both` runs both. Every selection keeps the static baseline and requires changing capture pixels
+and sustained Viewer frames for its motion phase. Provenance and summary record the requested
+Viewer modes; a focused pass does not cover the omitted mode. The selector is refused for
+daemon-only and native-probe workloads. This still creates a virtual
 display and launches Chrome and Viewer; all live authorization and cleanup rules still apply.
 Existing virtual displays cause preflight refusal. The run retains private logs and reports,
 uses controller leases only in memory, and verifies teardown/topology. On unverified cleanup,
 the supervisor suspends the process group for operator recovery; do not retry or resume it
 without that decision. The `--supervised-worker` argument is internal to this entry point.
 
-This is an experimental performance harness, not release qualification. Its corrected Viewer
-Chrome-animation workload has not passed; the native Metal diagnostic has passed. See the
+This is an experimental performance harness, not a substitute for release qualification.
+Source `942e460` passed its full combined Chrome/Viewer workload on Xcode 26.3 / Swift 6.2.4,
+including static, animated and scrolling phases, 404 captures, resource sampling, zero-byte
+daemon/Viewer leak scans and verified teardown. See the
+[1.0.4 source evidence](validation/2026-09-29-release-1.0.4.md) and the earlier
 [follow-up evidence and stopped soak](validation/2026-09-28-performance-followup.md).
 
 The browser fixture emits a bounded loopback heartbeat with only mode, document visibility and

@@ -52,7 +52,9 @@ public struct DaemonRestart {
 
     public init(send: @escaping (Request, TimeInterval) throws -> Response,
                 isAlive: @escaping () -> Bool,
-                now: @escaping () -> Date = Date.init,
+                now: @escaping () -> Date = {
+                    Date(timeIntervalSinceReferenceDate: Double(DispatchTime.now().uptimeNanoseconds) / 1_000_000_000)
+                },
                 sleep: @escaping (TimeInterval) -> Void,
                 progress: @escaping (String) -> Void) {
         self.send = send
@@ -68,10 +70,12 @@ public struct DaemonRestart {
         return sessions.filter { $0.runtimeAttached != false }.count
     }
 
-    func sessionCount() -> Int? {
+    func sessionCount(deadline: Date) -> Int? {
+        let remaining = deadline.timeIntervalSince(now())
+        guard remaining > 0 else { return nil }
         var list = Request(cmd: "session.list")
         list.operatorScope = true
-        return (try? send(list, 5)).flatMap(Self.liveSessionCount)
+        return (try? send(list, min(5, remaining))).flatMap(Self.liveSessionCount)
     }
 
     func stopRequest() -> Request {
@@ -88,19 +92,27 @@ public struct DaemonRestart {
         var lastCount: Int?
         while isAlive() {
             guard now() < deadline else { return false }
-            if reportSessions, let count = sessionCount(), count != lastCount {
+            if reportSessions, let count = sessionCount(deadline: deadline), count != lastCount {
                 lastCount = count
                 progress("\(count) live session(s) remaining…")
             }
-            sleep(pollInterval)
+            guard isAlive() else { return true }
+            let remaining = deadline.timeIntervalSince(now())
+            guard remaining > 0 else { return false }
+            sleep(min(pollInterval, remaining))
         }
         return true
     }
 
     public func run(mode: Mode, timeout: TimeInterval) -> Outcome {
+        guard timeout.isFinite, (1...3_600).contains(timeout),
+              pollInterval.isFinite, (0.01...60).contains(pollInterval) else {
+            return .refused(.failure(SpaceOError.badRequest(
+                "restart timeout must be from 1 through 3600 seconds and poll interval from 0.01 through 60 seconds")))
+        }
         let deadline = now().addingTimeInterval(timeout)
         if mode == .now {
-            return stopAndWait(deadline: now().addingTimeInterval(min(timeout, 120)),
+            return stopAndWait(deadline: min(deadline, now().addingTimeInterval(120)),
                                reason: "stopping the daemon now (--now)")
         }
 
@@ -109,7 +121,9 @@ public struct DaemonRestart {
         drain.timeout = min(timeout, 3_600)
         let drained: Response
         do {
-            drained = try send(drain, 30)
+            let remaining = deadline.timeIntervalSince(now())
+            guard remaining > 0 else { return .stillBusy("restart deadline expired; no drain was sent") }
+            drained = try send(drain, min(30, remaining))
         } catch {
             return .unreachable(error.localizedDescription)
         }
@@ -137,9 +151,9 @@ public struct DaemonRestart {
         var lastCount: Int?
         while true {
             guard isAlive() else { return .stopped("the old daemon exited on its own") }
-            if let count = sessionCount() {
+            if let count = sessionCount(deadline: deadline) {
                 if count == 0 {
-                    return stopAndWait(deadline: now().addingTimeInterval(min(timeout, 120)),
+                    return stopAndWait(deadline: min(deadline, now().addingTimeInterval(120)),
                                        reason: "no live sessions; stopping the old daemon")
                 }
                 if count != lastCount {
@@ -153,7 +167,7 @@ public struct DaemonRestart {
                     + "\(Int(timeout))s; nothing was stopped. Retry later, or pass --now to stop it and "
                     + "its sessions immediately.")
             }
-            sleep(max(pollInterval, 1))
+            sleep(min(max(pollInterval, 1), max(0, deadline.timeIntervalSince(now()))))
         }
     }
 
@@ -161,7 +175,11 @@ public struct DaemonRestart {
         progress(reason)
         let response: Response
         do {
-            response = try send(stopRequest(), 30)
+            let remaining = deadline.timeIntervalSince(now())
+            guard remaining > 0 else {
+                return .stillBusy("restart deadline expired before shutdown; no stop was sent")
+            }
+            response = try send(stopRequest(), min(30, remaining))
         } catch {
             return .unreachable(error.localizedDescription)
         }

@@ -52,17 +52,23 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 const matrix = fileURLToPath(new URL("../scripts/computer-use-check.mjs", import.meta.url));
 
+function quietHostEnvironment(root) {
+  // Stub only the read-only preflight; keep these MCP fixtures independent of the host.
+  writeFileSync(join(root, "python3"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  return { ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1", PATH: `${root}:${process.env.PATH}` };
+}
+
 test("matrix exits with failure when its MCP process cannot start or exits early", () => {
   const root = mkdtempSync(join(tmpdir(), "spaceo-matrix-test-"));
   try {
     for (const binary of [join(root, "missing"), "/usr/bin/false"]) {
       const run = spawnSync(process.execPath, [matrix, binary, "--suite=native"], {
-        encoding: "utf8", timeout: 5_000, env: { ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1" },
+        encoding: "utf8", timeout: 5_000, env: quietHostEnvironment(root),
       });
       assert.equal(run.error, undefined, "the harness must finish without an external timeout");
       assert.equal(run.status, 1);
       assert.match(run.stdout, /FAIL  harness error/);
-      assert.deepEqual(readdirSync(root), [], "all generated fixtures must be removed");
+      assert.deepEqual(readdirSync(root), ["python3"], "all generated fixtures must be removed");
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
@@ -85,7 +91,7 @@ createInterface({input: process.stdin}).on('line', line => {
 `, { mode: 0o700 });
     const run = spawnSync(process.execPath, [matrix, binary, "--suite=all", `--report=${report}`], {
       encoding: "utf8", timeout: 5_000, env: {
-        ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1", SPACEO_CU_CHROME_APP: root, SPACEO_CU_CURSOR_APP: root,
+        ...quietHostEnvironment(root), SPACEO_CU_CHROME_APP: root, SPACEO_CU_CURSOR_APP: root,
       },
     });
     assert.equal(run.error, undefined);

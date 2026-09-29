@@ -330,6 +330,7 @@ spaceo — give each agent its own screen, and leave the user's alone.
   spaceo help [command]                  this list, or one command's usage, options, and examples
   spaceo setup                           guided first-run: grants, daemon, self-test, MCP config
   spaceo doctor                          check host, permissions, daemon, MCP clients, Viewer, disk
+  spaceo doctor --probe-client-versions  also execute configured client commands with version
   spaceo version                         print the installed version
   spaceo completions zsh|bash|fish       shell completion script, generated from the command table
   spaceo schema --json                   versioned command vocabulary, without contacting a daemon

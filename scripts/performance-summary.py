@@ -25,6 +25,11 @@ def read(path):
 
 def summarize(root):
     summary = json.loads(read(root / "summary.json"))
+    viewer_modes = summary.get("requestedViewerModes")
+    if viewer_modes is not None and viewer_modes not in (
+            [], ["static", "animated"], ["static", "scrolling"],
+            ["static", "animated", "scrolling"]):
+        raise ValueError("invalid requested Viewer modes")
     phases = summary["phases"]
     offsets = json.loads(read(root / "sample-starts.json"))
     resources = {}
@@ -60,6 +65,7 @@ def summarize(root):
             p95Ms=round(values[max(0, math.ceil(len(values)*.95)-1)],3),
             p99Ms=round(values[max(0, math.ceil(len(values)*.99)-1)],3))
     result = dict(ok=summary["ok"], topologyRestored=summary["topologyRestored"],
+                  requestedViewerModes=viewer_modes,
                   elapsedSeconds=summary["elapsedSeconds"], resources=resources, latencies=latencies)
     health = root / "viewer-health.jsonl"
     if health.exists():

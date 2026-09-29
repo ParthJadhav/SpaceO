@@ -13,6 +13,7 @@ final class AXEditorPaneDiscoveryTests: XCTestCase {
         var panes: [Int: CGRect] = [:]
         var missingGeometry = Set<Int>()
         var errors = Set<String>()
+        var windowProviderStatus: AXError?
         var pageDelta = 0
         var windowPageDelta = 0
         var timeoutAccepted = true
@@ -30,6 +31,9 @@ final class AXEditorPaneDiscoveryTests: XCTestCase {
 
         func check(_ call: String) throws {
             calls.append(call)
+            if let windowProviderStatus, call == "windows" || call == "windowPage" {
+                throw AXWindowDiscovery.ProviderFailure(status: windowProviderStatus, operation: call)
+            }
             if errors.contains(call) { throw AXEditorPaneDiscovery.incomplete(call) }
         }
         func setMessagingTimeout(_ element: Int, seconds: Float) -> Bool {
@@ -126,6 +130,13 @@ final class AXEditorPaneDiscoveryTests: XCTestCase {
         XCTAssertEqual(Set(provider.visited), Set([1, 2, 3, 4]))
         XCTAssertEqual(provider.visited.count, 4)
         XCTAssertFalse(provider.calls.contains("children:4"))
+    }
+
+    func testWindowProviderErrorsKeepStructuredDiscoveryFailure() throws {
+        let provider = Provider()
+        provider.windowProviderStatus = .apiDisabled
+        assertStopped(.provider) { _ = try frames(provider) }
+        XCTAssertEqual(provider.calls, ["windows"])
     }
 
     func testSmallProxyDescendsAndCompleteEmptyLayoutPreservesRouting() throws {

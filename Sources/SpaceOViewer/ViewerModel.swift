@@ -956,10 +956,23 @@ final class ViewerModel {
     }
 
     deinit {
+        if let refreshTimer {
+            // The timer was installed on the main run loop; deinit need not run there.
+            Task { @MainActor in refreshTimer.invalidate() }
+        }
         startTask?.cancel()
         eventStreamMailbox?.stop()
         eventStreamReconnectTask?.cancel()
         eventSubscription?.cancel()
+        // ScreenCaptureKit may retain its output while capture runs. Releasing the model's
+        // reference is not a stop; transfer cleanup to a task that retains only the resources.
+        if let session = activeStream?.session {
+            let precedingTeardown = teardownTask
+            Task {
+                await precedingTeardown?.value
+                await session.stop()
+            }
+        }
     }
 
     // MARK: - Discovery
@@ -2028,7 +2041,12 @@ final class ViewerModel {
                         }
                     }
                 )
-                await self?.completeStart(
+                guard let self else {
+                    // A native start may complete after its owner was released/cancelled.
+                    await session.stop()
+                    return
+                }
+                await self.completeStart(
                     session,
                     generation: generation,
                     target: target

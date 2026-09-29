@@ -113,11 +113,25 @@ setInterval(()=>navigator.sendBeacon('/fixture-health',JSON.stringify({{mode,vis
     return markup
 
 
+def viewer_modes(environment):
+    motion = environment.get("SPACEO_PERF_VIEWER_MOTION", "both")
+    choices = {"both": ("static", "animated", "scrolling"),
+               "animated": ("static", "animated"), "scrolling": ("static", "scrolling")}
+    if motion not in choices:
+        raise ValueError("SPACEO_PERF_VIEWER_MOTION must be both, animated, or scrolling")
+    if "SPACEO_PERF_VIEWER_MOTION" in environment and (
+            environment.get("SPACEO_PERF_DAEMON_ONLY") == "1"
+            or environment.get("SPACEO_PERF_NATIVE_PROBE") == "1"):
+        raise ValueError("Viewer motion selection requires the Chromium Viewer workload")
+    return choices[motion]
+
+
 def main():
     if os.environ.get("SPACEO_LIVE_TESTS") != "1":
         raise SystemExit("requires SPACEO_LIVE_TESTS=1 on a reserved host")
     if len(sys.argv) != 2:
         raise SystemExit("usage: performance-live.py PRIVATE_REPORT_DIRECTORY")
+    modes = viewer_modes(os.environ)
     os.umask(0o077)
     out = Path(sys.argv[1]).resolve()
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -129,6 +143,11 @@ def main():
         raise SystemExit("build the CLI, Viewer bundle and process-resources sampler first")
     if os.environ.get("SPACEO_PERF_NATIVE_PROBE") == "1" and not (ROOT / ".build/performance-metal-probe").is_file():
         raise SystemExit("compile Tests/LiveFixtures/TranscriptProbe.swift as .build/performance-metal-probe first")
+    with (out / "host-health.json").open("xb") as health_log:
+        health = subprocess.run([sys.executable, str(ROOT / "scripts/host-health.py")],
+                                stdout=health_log, timeout=30)
+    if health.returncode != 0:
+        raise SystemExit("host is not quiet enough for live tests; see host-health.json")
     scratch = tempfile.TemporaryDirectory(prefix="spaceo-perf-live-")
     sock = str(Path(scratch.name) / "daemon.sock")
     environment = dict(os.environ, SPACEO_SOCKET=sock, SPACEO_LOG_FILE=str(out / "daemon.log"),
@@ -138,6 +157,7 @@ def main():
     if daemon_only and native_probe:
         raise SystemExit("choose either daemon-only or native-probe workload")
     viewer_only = native_probe or os.environ.get("SPACEO_PERF_VIEWER_ONLY") == "1"
+    requested_viewer_modes = list(modes) if not daemon_only and not native_probe else []
     started = time.monotonic()
     phases, operations, owned, subscribers, samplers = [], [], {}, [], []
     sample_starts = {}
@@ -242,6 +262,8 @@ def main():
         if health.get("daemon", {}).get("matchesCLI") is not True:
             raise RuntimeError("candidate daemon does not match CLI")
         (out / "provenance.json").write_text(json.dumps(dict(
+            viewerModes=requested_viewer_modes,
+            daemonOnly=daemon_only, nativeProbe=native_probe, viewerOnly=viewer_only,
             buildUUID=ping["daemon"]["executableBuildUUID"],
             viewerSHA256=executable_digest(viewer_binary),
             sha256=ping["daemon"]["executableSHA256"], version=ping["daemon"]["version"]), indent=2))
@@ -345,7 +367,7 @@ def main():
                     raise RuntimeError("native probe did not demonstrate Viewer frame delivery")
                 success = True
                 return
-            for mode in ("static", "animated", "scrolling"):
+            for mode in modes:
                 call("open.url", session="perf-0", controllerLeaseID=owned["perf-0"],
                      url="http://127.0.0.1:" + str(server.server_port) + "/?" + mode)
                 call("wait", session="perf-0", controllerLeaseID=owned["perf-0"],
@@ -373,6 +395,8 @@ def main():
                         del capture
                         pause(1.3)
                     (out / (mode + "-capture.json")).write_text(json.dumps(dict(changingPixels=digests[0] != digests[1])))
+                    if digests[0] == digests[1]:
+                        raise RuntimeError("browser diagnostic captures did not change")
                     if not any(row.get("streamRunning") and row.get("frameSinks", 0) > 0
                                and row.get("unoccludedWindows", 0) > 0
                                and (row.get("framesPerSecond") or 0) > 1 for row in health_rows):
@@ -476,6 +500,7 @@ def main():
             if cleanup_errors:
                 (out / "operations.json").write_text(json.dumps(operations, indent=2))
                 (out / "summary.json").write_text(json.dumps(dict(ok=False, topologyRestored=False,
+                    requestedViewerModes=requested_viewer_modes,
                     cleanupErrors=cleanup_errors, operations=len(operations), phases=phases,
                     elapsedSeconds=time.monotonic()-started), indent=2))
                 safety_stop()
@@ -492,6 +517,7 @@ def main():
             scratch.cleanup()
             (out / "operations.json").write_text(json.dumps(operations, indent=2))
             (out / "summary.json").write_text(json.dumps(dict(ok=success, topologyRestored=topology_restored,
+                requestedViewerModes=requested_viewer_modes,
                 samplerErrors=sampler_errors, operations=len(operations), phases=phases,
                 elapsedSeconds=time.monotonic()-started), indent=2))
             if sampler_errors:

@@ -395,12 +395,21 @@ BOOL SPOWindowBounds(uint32_t windowID, CGRect *outBounds) {
 }
 
 uint32_t SPOWindowIDForAXElement(AXUIElementRef element) {
-    SPOLoad();
-    if (!SPOCapabilityAvailable(SPOCapabilityAXWindowID)) return 0;
-    if (!p_AXUIElementGetWindow || !element) return 0;
     uint32_t wid = 0;
-    if (p_AXUIElementGetWindow(element, &wid) != kAXErrorSuccess) return 0;
-    return wid;
+    return SPOGetWindowIDForAXElement(element, &wid) == kAXErrorSuccess ? wid : 0;
+}
+
+AXError SPOGetWindowIDForAXElement(AXUIElementRef element, uint32_t *outWindowID) {
+    if (outWindowID) *outWindowID = 0;
+    if (!element || !outWindowID) return kAXErrorIllegalArgument;
+    SPOLoad();
+    if (!SPOCapabilityAvailable(SPOCapabilityAXWindowID) || !p_AXUIElementGetWindow) {
+        return kAXErrorNotImplemented;
+    }
+    uint32_t wid = 0;
+    AXError status = p_AXUIElementGetWindow(element, &wid);
+    if (status == kAXErrorSuccess) *outWindowID = wid;
+    return status;
 }
 
 #pragma mark - Per-process event delivery

@@ -193,6 +193,7 @@ public enum Capture {
         guard let target = content.windows.first(where: { $0.windowID == window.windowID }) else {
             throw SpaceOError.captureFailed("window \(window.windowID) is not shareable")
         }
+        try validateWindowCaptureOwner(window, ownerPID: target.owningApplication.map { pid_t($0.processID) })
         let filter = SCContentFilter(desktopIndependentWindow: target)
         let config = SCStreamConfiguration()
         let dimensions = try boundedDimensions(
@@ -215,6 +216,15 @@ public enum Capture {
             originX: target.frame.origin.x,
             originY: target.frame.origin.y,
             windowID: window.windowID))
+    }
+
+    /// Window IDs can be recycled while the shareable-content request is outstanding. Check
+    /// ownership in the same snapshot used to construct the filter, including SDK-only callers
+    /// that do not have SessionManager's later geometry and process validation.
+    static func validateWindowCaptureOwner(_ window: WindowRef, ownerPID: pid_t?) throws {
+        guard window.windowID != 0, window.pid > 0, ownerPID == window.pid else {
+            throw SpaceOError.captureFailed("window ownership changed or is unavailable; discover the window again")
+        }
     }
 
     /// Resolve the exclusion list against the same shareable-content snapshot used to construct

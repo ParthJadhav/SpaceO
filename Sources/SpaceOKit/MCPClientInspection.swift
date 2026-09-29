@@ -50,7 +50,8 @@ public struct MCPClientStatus: Equatable, Sendable {
     }
 }
 
-/// Reads which `spaceo` binary each MCP client launches, without modifying anything.
+/// Reads which `spaceo` binary each MCP client launches. Callers choose whether to execute
+/// external version probes; a configured wrapper or unrelated executable may have side effects.
 ///
 /// MCP tools come from the binary the client launches, not from the daemon, so an upgraded daemon
 /// does not give a client new tools while its config still names an old copy. This is the check
@@ -79,10 +80,7 @@ public enum MCPClientInspection {
 
     /// Bounded read of a regular file; nil for anything missing, oversized, or not UTF-8.
     public static func boundedRead(_ url: URL) -> String? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeRegular,
-              let size = attributes[.size] as? NSNumber, size.intValue <= maximumConfigBytes,
-              let data = try? Data(contentsOf: url, options: [.uncached]) else { return nil }
+        guard let data = try? BoundedRegularFile.read(url, maximumBytes: maximumConfigBytes) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -161,17 +159,14 @@ public enum MCPClientInspection {
     /// uses; only basic strings (the form the writer emits) are understood.
     static func tomlRegistration(toml: String, source: String) -> MCPClientRegistration? {
         let lines = toml.components(separatedBy: "\n")
-        guard let range = MCPClientConfig.tomlTableRange(lines: lines) else { return nil }
+        guard let range = try? MCPClientConfig.tomlTableRange(lines: lines),
+              let assignments = try? TOMLTableScanner.assignments(lines: lines[range].dropFirst()) else { return nil }
         var command: String?
         var arguments: [String] = []
-        for line in lines[range].dropFirst() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let equals = trimmed.firstIndex(of: "=") else { continue }
-            let key = trimmed[..<equals].trimmingCharacters(in: .whitespaces)
-            let value = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-            if key == "command" {
+        for (key, value) in assignments {
+            if key == ["command"] {
                 command = tomlBasicString(value)
-            } else if key == "args", let data = value.data(using: .utf8),
+            } else if key == ["args"], let data = value.data(using: .utf8),
                       let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [Any] {
                 // The writer emits `["mcp"]`, which is also a JSON array.
                 arguments = Array(parsed.compactMap { $0 as? String }.prefix(16))
@@ -260,13 +255,15 @@ public enum MCPClientInspection {
         return nil
     }
 
-    /// Pure status for one registration. `probe` runs `<path> version` and returns its version.
+    /// Status for one registration using an explicitly supplied version provider. Passive callers
+    /// disable external probes and supply the loaded version for `cliPath` without executing it.
     public static func status(
         for registration: MCPClientRegistration,
         cliVersion: String,
         cliPath: String,
         resolve: (String) -> String?,
-        probe: (String) -> String?
+        probe: (String) -> String?,
+        allowExternalVersionProbe: Bool = true
     ) -> MCPClientStatus {
         var status = MCPClientStatus(client: registration.client, registration: registration)
         let register = "`spaceo setup --client \(registration.client.rawValue)`"
@@ -277,6 +274,15 @@ public enum MCPClientInspection {
             return status
         }
         status.resolvedPath = path
+        guard allowExternalVersionProbe || path == cliPath else {
+            status.problem = "external command was not executed by this read-only check"
+            status.remedy = "use `spaceo doctor --probe-client-versions` to execute configured commands "
+                + "with `version`, or re-register this build with \(register)"
+            if registration.arguments.first != "mcp" {
+                status.problem = "configured arguments do not start with mcp; external command was not executed"
+            }
+            return status
+        }
         guard let version = probe(path) else {
             status.problem = "`\(path) version` did not answer"
             status.remedy = "check \(path) runs, or re-register this build with \(register)"
@@ -299,13 +305,15 @@ public enum MCPClientInspection {
     }
 
     /// Statuses for every client, one line per registration plus a not-configured line for
-    /// clients with none. Probes each distinct path once.
+    /// clients with none. Probes each permitted distinct path once. The injected-provider API
+    /// preserves its existing probing default; read-only doctor disables external probes.
     public static func statuses(
         registrations: [MCPClientRegistration],
         cliVersion: String,
         cliPath: String,
         resolve: (String) -> String?,
-        probe: (String) -> String?
+        probe: (String) -> String?,
+        allowExternalVersionProbe: Bool = true
     ) -> [MCPClientStatus] {
         var cache: [String: String?] = [:]
         let cachedProbe: (String) -> String? = { path in
@@ -323,7 +331,8 @@ public enum MCPClientInspection {
             }
             for entry in entries {
                 result.append(status(for: entry, cliVersion: cliVersion, cliPath: cliPath,
-                                     resolve: resolve, probe: cachedProbe))
+                                     resolve: resolve, probe: cachedProbe,
+                                     allowExternalVersionProbe: allowExternalVersionProbe))
             }
         }
         return result
@@ -332,25 +341,48 @@ public enum MCPClientInspection {
     /// Runs `<path> version` with a hard deadline and bounded output. Never throws; nil means
     /// "could not tell".
     public static func probeVersion(path: String, timeout: TimeInterval = 3) -> String? {
+        guard timeout.isFinite, timeout > 0 else { return nil }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(min(timeout, 10)))
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = ["version"]
         let pipe = Pipe()
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+        }
+        let descriptor = pipe.fileHandleForReading.fileDescriptor
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(min(max(timeout, 0.1), 10))
-        while process.isRunning, Date() < deadline { usleep(20_000) }
-        if process.isRunning {
-            process.terminate()
-            try? pipe.fileHandleForReading.close()
-            return nil
+        try? pipe.fileHandleForWriting.close()
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: maximumVersionOutputBytes + 1)
+        var reachedEOF = false
+        // Drain while the process runs: waiting first can fill the pipe, and a descendant
+        // can retain stdout after its parent exits. Neither may bypass the same deadline.
+        while ContinuousClock.now < deadline {
+            if !reachedEOF {
+                let count = Darwin.read(descriptor, &buffer, buffer.count)
+                if count > 0 {
+                    guard count <= maximumVersionOutputBytes - data.count else { return nil }
+                    data.append(contentsOf: buffer.prefix(count))
+                    continue
+                }
+                if count == 0 { reachedEOF = true }
+                else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { return nil }
+            }
+            if reachedEOF && !process.isRunning {
+                guard process.terminationStatus == 0 else { return nil }
+                return parseVersionOutput(String(decoding: data, as: UTF8.self))
+            }
+            usleep(1_000)
         }
-        let data = pipe.fileHandleForReading.readData(ofLength: maximumVersionOutputBytes)
-        try? pipe.fileHandleForReading.close()
-        guard process.terminationStatus == 0 else { return nil }
-        return parseVersionOutput(String(decoding: data, as: UTF8.self))
+        return nil
     }
 }
 

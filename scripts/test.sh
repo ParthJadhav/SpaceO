@@ -18,6 +18,7 @@ run_safe() {
     cd "$REPOSITORY_ROOT"
     python3 "$REPOSITORY_ROOT/Tests/PublicPrivacyTests.py"
     python3 "$REPOSITORY_ROOT/Tests/WorkflowPrivacyTests.py"
+    python3 "$REPOSITORY_ROOT/Tests/HostHealthTests.py"
     python3 "$REPOSITORY_ROOT/Tests/PerformanceFixtureTests.py"
     python3 "$REPOSITORY_ROOT/Tests/PerformanceReportTests.py"
     python3 "$REPOSITORY_ROOT/scripts/check-public-privacy.py"
@@ -64,6 +65,7 @@ run_live() {
     fi
 
     cd "$REPOSITORY_ROOT"
+    python3 "$SCRIPT_DIR/host-health.py" || fail "host is not quiet enough for live tests; see docs/LIVE_TESTS.md"
     # SwiftPM captures XCTest output and starts it in another process group. Supervise XCTest
     # itself so case-start messages are immediate and SIGSTOP reaches the process doing IPC.
     if (( ! skip_build )); then

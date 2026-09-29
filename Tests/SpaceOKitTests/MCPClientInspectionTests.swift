@@ -159,6 +159,39 @@ final class MCPClientInspectionTests: XCTestCase {
         XCTAssertEqual(probes, 1)
     }
 
+    func testPassiveInspectionDoesNotInvokeExternalProgramsEvenWhenNamedSpaceO() {
+        let registrations = ["/bin/unrelated", "/other/spaceo"].map {
+            MCPClientRegistration(client: .claudeCode, scope: "user", source: "/fixture",
+                                  command: $0, arguments: ["mcp"])
+        }
+        let statuses = MCPClientInspection.statuses(registrations: registrations,
+            cliVersion: "1.0.0", cliPath: "/current/spaceo", resolve: { $0 },
+            probe: { _ in XCTFail("passive inspection must not execute external commands"); return nil },
+            allowExternalVersionProbe: false)
+        for status in statuses where status.registration != nil {
+            XCTAssertNil(status.version)
+            XCTAssertNil(status.matchesCLI)
+            XCTAssertTrue(status.problem?.contains("not executed") == true)
+            XCTAssertTrue(status.remedy?.contains("--probe-client-versions") == true)
+        }
+    }
+
+    func testPassiveInspectionCanUseKnownCurrentVersionAndReportsInvalidArguments() {
+        let registration = MCPClientRegistration(client: .codex, scope: "config", source: "/fixture",
+            command: "/current/spaceo", arguments: ["mcp"])
+        let current = MCPClientInspection.status(for: registration, cliVersion: "1.0.0",
+            cliPath: "/current/spaceo", resolve: { $0 }, probe: { _ in "1.0.0" },
+            allowExternalVersionProbe: false)
+        XCTAssertEqual(current.matchesCLI, true)
+        var invalid = registration
+        invalid.command = "/other/wrapper"
+        invalid.arguments = ["daemon"]
+        let external = MCPClientInspection.status(for: invalid, cliVersion: "1.0.0",
+            cliPath: "/current/spaceo", resolve: { $0 }, probe: { _ in XCTFail("no external probe"); return nil },
+            allowExternalVersionProbe: false)
+        XCTAssertTrue(external.problem?.contains("do not start with mcp") == true)
+    }
+
     /// Doctor's probe runs a real, harmless binary: `/bin/echo` prints text shaped like
     /// `spaceo version` output.
     func testProbeParsesARealProcessAndTimesOut() throws {
@@ -178,6 +211,27 @@ final class MCPClientInspectionTests: XCTestCase {
         XCTAssertNil(MCPClientInspection.probeVersion(path: slow.path, timeout: 0.3))
         XCTAssertLessThan(Date().timeIntervalSince(started), 3, "the probe is bounded")
         XCTAssertNil(MCPClientInspection.probeVersion(path: "/nonexistent/spaceo"))
+    }
+
+    func testProbeBoundsInheritedPipeAndRejectsExcessOutput() throws {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spaceo-probe-pipe-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        try "#!/bin/sh\nsleep 2 &\necho 'spaceo 9.8.7'\nexit 0\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        let started = ContinuousClock.now
+        XCTAssertNil(MCPClientInspection.probeVersion(path: script.path, timeout: 0.1))
+        XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+        try ("#!/bin/sh\necho 'spaceo 9.8.7'\nprintf '%s' '" + String(repeating: "x", count: 5_000) + "'\n")
+            .write(to: script, atomically: true, encoding: .utf8)
+        XCTAssertNil(MCPClientInspection.probeVersion(path: script.path))
+    }
+
+    func testProbeRejectsInvalidTimeoutBeforeLaunching() {
+        for timeout in [Double.nan, .infinity, -.infinity, 0, -1] {
+            XCTAssertNil(MCPClientInspection.probeVersion(path: "/bin/echo", timeout: timeout))
+        }
     }
 
     // MARK: - Claude Code registration

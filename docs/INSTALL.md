@@ -28,7 +28,7 @@ verification command below. Only install an artifact that passes all publisher, 
 notarization checks. See the [release policy](RELEASE_POLICY.md).
 
 ```bash
-SPACEO_VERSION="1.0.3"
+SPACEO_VERSION="1.0.4"
 ```
 
 ## Quick install

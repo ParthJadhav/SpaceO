@@ -158,6 +158,16 @@ skip_line="$(grep -nE '^[[:space:]]*try XCTSkipUnless\(' <<<"$suite_setup" | hea
 
 STUB_BIN="$TEST_ROOT/bin"
 mkdir -p "$STUB_BIN"
+export SPACEO_TEST_REAL_PYTHON="$(command -v python3)"
+cat >"$STUB_BIN/python3" <<'STUB'
+#!/usr/bin/env bash
+if [[ "${1:-}" == */host-health.py ]]; then
+    echo '{"admitted":true,"testFixture":true}'
+    exit "${STUB_HOST_HEALTH_EXIT:-0}"
+fi
+exec "$SPACEO_TEST_REAL_PYTHON" "$@"
+STUB
+chmod +x "$STUB_BIN/python3"
 cat >"$STUB_BIN/swift" <<'STUB'
 #!/usr/bin/env bash
 [[ "${1:-}" == "build" ]] || { echo "stub swift: unexpected invocation: $*" >&2; exit 99; }
@@ -192,6 +202,13 @@ run_test_sh_live() {
         PATH="$STUB_BIN:$PATH" SPACEO_LIVE_TESTS=1 SWIFT="$STUB_BIN/swift" SPACEO_LIVE_LOG="$TEST_ROOT/live.log" \
         bash "$REPOSITORY_ROOT/scripts/test.sh" live "$@" 2>&1
 }
+
+# A failed health check must not start XCTest or create a display owner.
+if STUB_HOST_HEALTH_EXIT=1 run_test_sh_live "$TEST_ROOT/all-skipped.log" 0 >"$TEST_ROOT/health-refusal.log"; then
+    fail "live tests accepted a failed host-health check"
+fi
+[[ ! -e "$TEST_ROOT/invocation.txt" ]] || fail "host-health refusal launched XCTest"
+grep -Fq "host is not quiet enough" "$TEST_ROOT/health-refusal.log" || fail "missing host-health refusal"
 
 # A run where every test skipped must fail even though the compiler reported success.
 if output="$(run_test_sh_live "$TEST_ROOT/all-skipped.log" 0 --require-full)"; then

@@ -6,6 +6,61 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-09-29
+
+- Correct retained-window owner lookup to use the single-window Core Graphics API. Missing,
+  mismatched, or invalid owner data still refuses capture and movement instead of guessing.
+
+- Stop Viewer capture when its model is released, including capture startup that completes
+  after the owner disappears. Release the model's repeating refresh timer as well.
+
+- Live XCTest, MCP matrix, and performance runs now refuse to start during memory pressure,
+  active swapping, sustained ColorSync CPU activity, or unavailable host-health counters.
+  A bounded, read-only preflight reports numeric evidence before any workload starts.
+
+- Include the launch phase in Accessibility traversal failures while preserving their stop
+  reason, so readiness failures can be distinguished from pre- and post-reveal placement.
+
+- Confirm placed applications are revealed using a fresh, bounded Accessibility visibility
+  read. Cached launch state can no longer skip unhiding and leave browser rendering frozen.
+  New managed Chrome windows start inset within their tile to accommodate reveal-time placement.
+  After reveal, wait up to two seconds for complete AX window discovery before final placement.
+
+- Refuse single-window capture when ScreenCaptureKit reports a different or unknown owning
+  process, so a recycled window ID cannot silently select another process’s window.
+
+- Keep default doctor MCP inspection passive. Use `doctor --probe-client-versions` to explicitly
+  execute configured commands with `version`; unprobed external versions remain unknown.
+
+- Bound executable fingerprint reads to 64 MiB of regular-file data. Pipes, oversized files,
+  and unreadable paths now report unknown identity instead of blocking or reading indefinitely.
+
+- Allow a focused Chromium Viewer animation or scrolling diagnostic while preserving the static
+  baseline and recording omitted coverage in performance reports.
+
+- Require changing capture pixels in animated and scrolling live performance checks, in
+  addition to Viewer frame delivery, so stale screenshots cannot pass those workloads.
+
+- Preserve macOS error codes from Accessibility window-ID lookup and retry only busy-app
+  responses within the existing shared budget. Stale, missing, and duplicate identities still
+  refuse discovery rather than producing a partial window list.
+- Bound daemon startup-lock contention to three seconds and reject non-file lock paths, so a
+  suspended competing starter cannot hang another startup indefinitely. Shutdown cancels a
+  pending start before it can publish a stranded socket.
+- Preserve multiline instructions and nested arrays when updating Codex TOML registration;
+  recognize quoted table keys and refuse ambiguous or unfinished configuration. Doctor ignores
+  command examples embedded inside multiline values.
+- Bound doctor version-probe output and pipe reads under one monotonic timeout, including when
+  a child process keeps stdout open after the configured command exits.
+
+- Bound setup and doctor configuration reads on the opened file, including files that grow
+  during a read. Refuse pipes, oversized files, dangling links, and malformed JSON server
+  collections without treating existing settings as an empty configuration.
+- Charge every busy Accessibility retry to the original deadline and call budget, honor
+  cancellation between retries, and reject window lists whose count changes during discovery.
+- Keep daemon drain, legacy polling, shutdown requests, and polling sleeps within one restart
+  deadline. Do not send a late shutdown request after the wait expires.
+
 - Remove the self-hosted `Live WindowServer tests` workflow. Live qualification runs locally
   only; CI and release jobs stay on GitHub-hosted runners.
 
