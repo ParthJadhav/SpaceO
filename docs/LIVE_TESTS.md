@@ -53,7 +53,22 @@ whatever holds focus. Use a reserved machine and a dedicated login. Preserve unr
 display topology. Do not switch users or change displays during a run. Stop and inspect failed
 or interrupted runs; do not automatically repeat them.
 
-Check the host first:
+The XCTest wrapper, MCP matrix, and performance workload run a read-only
+`python3 scripts/host-health.py` admission check before starting their workload. It samples
+memory pressure, swap-counter changes, and the two ColorSync services for five seconds.
+Admission requires normal memory pressure, no swap activity in the interval, and combined
+ColorSync CPU below 50% of one core. These conservative test thresholds are not a macOS health
+diagnosis. Missing counters, a service restart, or a diagnostic timeout refuse admission.
+Reports contain numeric counters and reason codes, not process lists or content.
+
+A refusal requires inspection and recovery, not a retry loop. If the user reports slowdown,
+pause live work even when this narrow check passes. Verify zero sessions and original topology,
+then stop an idle test daemon normally. Preserve unrelated applications, evidence, and display
+preferences; never kill WindowServer or a display owner to reclaim memory. An idle leak scan
+(`leaks --noContent --nostacks PID`) is only a point-in-time check; use the existing bounded
+process sampler and performance summaries for retained-memory trends after host recovery.
+
+Check the remaining host capabilities:
 
 ```sh
 swift run spaceo doctor

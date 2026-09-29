@@ -143,6 +143,11 @@ def main():
         raise SystemExit("build the CLI, Viewer bundle and process-resources sampler first")
     if os.environ.get("SPACEO_PERF_NATIVE_PROBE") == "1" and not (ROOT / ".build/performance-metal-probe").is_file():
         raise SystemExit("compile Tests/LiveFixtures/TranscriptProbe.swift as .build/performance-metal-probe first")
+    with (out / "host-health.json").open("xb") as health_log:
+        health = subprocess.run([sys.executable, str(ROOT / "scripts/host-health.py")],
+                                stdout=health_log, timeout=30)
+    if health.returncode != 0:
+        raise SystemExit("host is not quiet enough for live tests; see host-health.json")
     scratch = tempfile.TemporaryDirectory(prefix="spaceo-perf-live-")
     sock = str(Path(scratch.name) / "daemon.sock")
     environment = dict(os.environ, SPACEO_SOCKET=sock, SPACEO_LOG_FILE=str(out / "daemon.log"),

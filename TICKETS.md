@@ -80,6 +80,21 @@ Status definitions:
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
+### Host slowdown after sustained live testing
+
+- Status: Open; live work paused pending recovery
+- September 29: user-reported slowdown persisted as a resource concern after test cleanup.
+  Zero sessions/virtual displays remained; idle daemon leak scan reported zero leaked bytes.
+  Normal memory pressure and zero sampled swap activity did not explain sustained ~100% combined
+  CPU in the two system ColorSync services. The idle SpaceO daemon was stopped normally.
+- A read-only host-health gate now refuses XCTest, MCP, and performance workload admission for
+  memory pressure, active swap, busy ColorSync services, or unavailable counters. No system
+  services or display preferences were reset. Current privileges cannot sample those root services.
+- Acceptance: verify recovered host responsiveness and quiet counters before resuming live work;
+  retain daemon/Viewer footprint trends and leak evidence from a current-source bounded workload.
+  An idle zero-leak result does not close workload memory qualification.
+- Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
+
 ### Performance soak: Chromium window identity becomes incomplete
 
 - Status: Open
@@ -102,6 +117,9 @@ Status definitions:
   during later window-list/screenshot commands. A bounded post-reveal readiness poll improves
   launch sequencing but does not close the general read failure. A separate latency probe's
   three reads all succeeded within 250 ms; larger production IPC limits are not yet justified.
+  A subsequent content-free call trace reproduced 36 failures, including 34 without overlapping
+  bounded AX work. Watcher contention alone does not explain that reproduction; no global AX
+  lock or timeout increase was added. Cleanup passed; the general read failure remains open.
 - Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
   live soak with successful captures and verified teardown; do not count the stopped run as passing.
 

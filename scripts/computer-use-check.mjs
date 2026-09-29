@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { arch, platform, release, tmpdir } from "node:os";
 import { toolResult, imagesChanged, isolationStatus } from "./computer-use-evidence.mjs";
 
@@ -54,6 +55,14 @@ const cursorApp = process.env.SPACEO_CU_CURSOR_APP ?? "/Applications/Cursor.app"
 
 if (requireFull && suiteArg !== "all") {
   console.error(`--require-full demands the full matrix; --suite=${suiteArg} cannot satisfy it.`);
+  process.exit(1);
+}
+
+try {
+  execFileSync("python3", [fileURLToPath(new URL("./host-health.py", import.meta.url))],
+    { stdio: ["ignore", "inherit", "inherit"], timeout: 30_000 });
+} catch {
+  console.error("host is not quiet enough for live tests; see docs/LIVE_TESTS.md");
   process.exit(1);
 }
 

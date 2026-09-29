@@ -6,6 +6,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Live XCTest, MCP matrix, and performance runs now refuse to start during memory pressure,
+  active swapping, sustained ColorSync CPU activity, or unavailable host-health counters.
+  A bounded, read-only preflight reports numeric evidence before any workload starts.
+
 - Include the launch phase in Accessibility traversal failures while preserving their stop
   reason, so readiness failures can be distinguished from pre- and post-reveal placement.
 

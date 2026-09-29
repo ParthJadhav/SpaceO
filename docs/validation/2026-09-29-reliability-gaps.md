@@ -603,3 +603,84 @@ the source-matching default daemon was restored with ready safety, drive/capture
 sessions, and the original physical topology. No production IPC limit was changed. The earlier
 1,677-test deterministic verification still covers the final source; final changes here only
 record the observed results, and `git diff --check` passed.
+
+
+## AX overlap diagnostic
+
+A temporary instrumentation patch on source `4ac6827` recorded entry/exit times and thread IDs
+for bounded AX calls, plus window-count statuses. The patch, binary hash, trace, and derived
+numeric timing report are retained privately in `.artifacts/ax-overlap-4ac6827/`; the patch was
+reverted before restoring the production build. No AX content or window titles were traced.
+Apple documents per-object messaging timeouts as independent even for equal AX objects
+([AXUIElementSetMessagingTimeout](https://developer.apple.com/documentation/applicationservices/1459345-axuielementsetmessagingtimeout)),
+so the watcher's separately created handles do not themselves establish a timeout-setting race.
+
+The supervised native-only matrix reproduced the document-window identification failure after
+launch: six checks passed, one failed, none skipped/blocked, four tool calls, 40.661 seconds.
+The failed list-window call took 849 ms. Cleanup retired the pool and verified unchanged physical
+topology; the wrapper verified zero sessions and ready safety before stopping its private daemon.
+
+Of 56 traced window-count calls, 20 succeeded and 36 returned `-25204`. Sixteen failures returned
+in less than one millisecond and 20 took at least 250 ms. Only two failed calls overlapped another
+instrumented bounded AX call; 34 failed without such overlap. All count calls ran off the main
+thread. Successful reads took at most approximately 128 ms. This does not prove the provider's
+root cause, and the tracing itself can affect scheduling, but it argues against explaining this
+reproduction solely as watcher/foreground contention. No global AX lock, timeout increase, or
+containment suppression was added. The run remains a source diagnostic, not complete matrix or
+release qualification.
+
+
+## Host slowdown, memory review, and live admission
+
+After the user reported slowdown, live work was paused. The physical topology was unchanged,
+with zero sessions, virtual displays, orphan displays, test Viewers, or TextEdit processes.
+The freshly restored idle daemon used approximately 31–39 MiB RSS. `leaks --noContent --nostacks`
+reported zero leaks / zero leaked bytes for that daemon; this is a short idle-process observation,
+not a whole-workload leak guarantee. The daemon was subsequently stopped normally and remains
+off while the host's slowdown is investigated. The user's unrelated applications were preserved.
+
+Memory pressure was normal (`kern.memorystatus_vm_pressure_level = 1`), with approximately
+2,436 MiB of existing swap and no swap-ins or swap-outs during the measured ten-second CPU
+window. Disk had approximately 169 GiB available and no recorded thermal/performance warning
+was reported by `pmset`. The two system ColorSync services sustained about one CPU core combined,
+including after SpaceO shutdown. This is a concrete resource concern, not proof of the slowdown's
+root cause or of the intermittent AX errors. System-service stack sampling was unavailable with
+current privileges; a noninteractive administrator attempt also failed. No system service,
+WindowServer, display preference, or safety journal was reset. Host recovery is not yet verified.
+Private evidence is in `.artifacts/host-health-20260929/`.
+
+The prior successful 400-capture source workload on `84f153f` peaked near 31.9 MiB daemon physical
+footprint and returned to about 21.0 MiB after teardown. This scopes earlier retained-memory
+evidence; it is neither a current-source long soak nor evidence about ColorSync's internal state. The
+successful production-motion run on `63c515e` also ended with daemon footprint near 14.4 MiB.
+Its Viewer rose from about 17.3 MiB during startup to 77.7 MiB peak, then ended the scrolling
+phase around 76.4 MiB. That short warmup/plateau pattern does not establish a leak; longer
+current-source Viewer sampling remains required once the host recovers.
+
+Added a bounded, read-only `scripts/host-health.py` preflight to all three supported live workload
+entry points (XCTest wrapper, MCP matrix, performance harness). It refuses before workload start
+for non-normal memory pressure, swap activity, combined ColorSync CPU of at least 50% of one
+core, or unknown/unstable counters. These are conservative admission thresholds, not macOS
+health diagnoses. It records only numeric counters and reason codes. Diagnostic helper output
+is limited to 1 MiB and three seconds per command; timed-out helpers own no displays and are
+reaped. No runtime service is automatically restarted, no admission bypass was added, and normal
+display lifecycle/cleanup gates remain required.
+
+The actual read-only preflight refused this host with `colorsync_busy`: 99.95% CPU across a
+5.043-second sample, normal pressure at both ends, and zero swap deltas. Live testing remains
+paused pending host recovery. Deterministic regression coverage checks old versus current swap,
+busy services, pressure, counter resets/restarts, incomplete input, bounded helper failure, and
+refusal before either MCP or the performance daemon starts. The shell fixture verifies XCTest
+is not invoked after a failed host check.
+
+
+Final verification passed: `make verify-release` (1,677 Swift tests, supporting checks including
+six new host-health tests, and the 34-tool MCP smoke check), `Tests/LiveTestGateTests.sh`,
+`Tests/ReleaseSecurityTests.sh`, and a release build with warnings as errors. The rebuilt ad-hoc
+Viewer passed strict/deep codesign verification. The first full check exposed two MCP fixtures
+that were invoking real host admission; they now stub that read-only boundary, retaining their
+original failure/cleanup assertions and deterministic behavior. The corrected full check passed.
+`git diff --check` passed. Final read-only topology verification found no running SpaceO daemon,
+virtual displays, or orphans, with ready safety and the original physical topology. Remaining
+ColorSync activity and user-perceived recovery are unresolved; no live run followed the slowdown
+report, and no leak-free long-workload or release-qualification claim is made.
