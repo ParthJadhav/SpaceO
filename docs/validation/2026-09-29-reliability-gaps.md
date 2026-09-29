@@ -421,3 +421,43 @@ The wrapper verified zero sessions, original topology, and ready safety before s
 daemon. The matching default daemon was restored with drive/capture grants and zero sessions.
 This source matrix does not establish animated Chromium rendering, process-incarnation identity
 from PID alone, or pinned-toolchain/signed-candidate release qualification.
+
+
+## Frame-pipeline trace: undrawn-frame throttling
+
+Two source `f5f7b93` diagnostics used the reserved-host supervisor, a private Chrome fixture,
+and the existing capture/cleanup harness. An eight-second CDP trace selected `viz,gpu,cc`
+categories, capped incoming messages at 4 MiB and total events at 100,000, and required trace
+completion without reported data loss. It retained only counts for allowed compositor-event
+names and synthetic page numeric state. Raw trace payloads, event arguments, screenshots,
+page content, and target identifiers were not retained. Exact helpers/hashes and structured
+results are private in `.artifacts/frame-trace-f5f7b93/` and
+`.artifacts/frame-decisions-f5f7b93/`. No production code or launch flags changed.
+
+The first trace completed with 5,442 events, including 480 `CVDisplayLinkCallback` and 480
+`ExternalBeginFrameSourceMac::OnDisplayLinkCallback` events, but only seven renderer begin-frame,
+prepare-to-draw, and frame-ack events. The visible fixture's animation counter advanced from
+27 to 34. Native captures stayed identical before, during, and after tracing. Counts are trace
+event occurrences across the private Chrome instance, not a per-display proof or presentation
+count. The result contradicts a complete absence of browser display-link callbacks in this run.
+
+Inspection of the installed Chrome version's
+[frame-sink decision code](https://raw.githubusercontent.com/chromium/chromium/154.0.8037.58/components/viz/service/frame_sinks/compositor_frame_sink_support.cc)
+identified fixed reason codes that distinguish requested throttling, client unresponsiveness,
+and undrawn-frame buildup. A second instrumented trace counted only these explicitly allowed
+reason/boolean pairs. It completed with 5,885 events and no overflow or reported data loss:
+481 display-link callbacks, eight renderer begin-frame/draw cycles, 473
+`ThrottleUndrawnFrames:false` decisions, and eight `SendFrameTiming:true` decisions. The visible
+fixture advanced from 27 to 35 animation callbacks and scrollY 216 to 280; native pixels still
+did not change. This establishes undrawn-frame throttling for the observed interval, not its
+underlying cause. Disabling that throttle would not by itself prove that pixels are presented.
+
+Both attempts failed the unchanged-pixel assertion, after 106.977 and 108.709 seconds
+respectively, and verified normal cleanup with no sampler errors and original physical topology.
+After each run the matching default daemon was restored; doctor confirmed ready safety,
+drive/capture grants, and zero sessions. The intermittent startup identity failure did not
+recur in these attempts. These focused source diagnostics are not passing release evidence.
+
+After recording both traces, `make verify-release` passed with 1,673 Swift tests, supporting
+checks, and the 34-tool MCP smoke test. `git diff --check` passed. The final changes are audit
+and backlog updates only; neither an experimental switch nor a renderer workaround was added.

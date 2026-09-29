@@ -63,6 +63,10 @@ Status definitions:
   before, during, and afterward while the visible fixture’s animation counter advanced. A
   separate Chrome timer-source experiment also failed animation capture and sustained Viewer
   delivery; its temporary launch switch was removed. Both cleanups restored physical topology.
+- Source `f5f7b93`: bounded compositor traces recorded about 60 display-link callbacks per
+  second. A follow-up trace counted 473 `ThrottleUndrawnFrames` decisions versus eight sent
+  frame-timing updates in eight seconds, while native pixels remained unchanged. Undrawn-frame
+  throttling is established for this run; why those frames remain undrawn is still open.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
