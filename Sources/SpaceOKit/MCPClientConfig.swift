@@ -80,12 +80,20 @@ public struct MCPClientConfig {
 
     /// The current contents of a client config: nil only when no file exists. A file that exists
     /// but cannot be read as UTF-8 throws, because treating it as absent would overwrite it.
-    public static func readExisting(at url: URL, fileManager: FileManager = .default) throws -> String? {
-        guard fileManager.fileExists(atPath: url.path) else { return nil }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+    public static func readExisting(at url: URL, fileManager _: FileManager = .default) throws -> String? {
+        do {
+            let data = try BoundedRegularFile.read(url, maximumBytes: maximumConfigBytes)
+            guard let text = String(data: data, encoding: .utf8) else {
+                throw MCPClientConfigError.unreadable(url.path)
+            }
+            return text
+        } catch BoundedRegularFile.ReadError.missing {
+            return nil
+        } catch BoundedRegularFile.ReadError.tooLarge(let bytes) {
+            throw MCPClientConfigError.tooLarge(bytes)
+        } catch {
             throw MCPClientConfigError.unreadable(url.path)
         }
-        return text
     }
 
     /// New file contents with the `spaceo` entry set to `executablePath mcp`.
@@ -122,6 +130,9 @@ public struct MCPClientConfig {
                 throw MCPClientConfigError.malformedJSON("top level is not an object")
             }
             root = dictionary
+        }
+        if let existingServers = root["mcpServers"], !(existingServers is [String: Any]) {
+            throw MCPClientConfigError.malformedJSON("mcpServers must be an object; not overwriting it")
         }
         var servers = root["mcpServers"] as? [String: Any] ?? [:]
         servers[serverName] = ["command": executablePath, "args": ["mcp"]]

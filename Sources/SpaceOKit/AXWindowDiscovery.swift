@@ -11,22 +11,18 @@ protocol AXWindowDiscoveryProviding: AXTraversalProviding {
 extension SystemAXTraversalProvider: AXWindowDiscoveryProviding {
     func windowCount(_ app: AXUIElement) throws -> Int {
         var count: CFIndex = 0
-        let status = AXWindowDiscovery.retryingBusy {
-            AXUIElementGetAttributeValueCount(app, kAXWindowsAttribute as CFString, &count)
-        }
+        let status = AXUIElementGetAttributeValueCount(app, kAXWindowsAttribute as CFString, &count)
         guard status == .success, count >= 0 else {
-            throw AXWindowDiscovery.incomplete("window count is unavailable (AXError \(status.rawValue))")
+            throw AXWindowDiscovery.ProviderFailure(status: status, operation: "window count")
         }
         return count
     }
 
     func windowElements(_ app: AXUIElement, start: Int, count: Int) throws -> [AXUIElement] {
         var values: CFArray?
-        let status = AXWindowDiscovery.retryingBusy {
-            AXUIElementCopyAttributeValues(app, kAXWindowsAttribute as CFString, start, count, &values)
-        }
+        let status = AXUIElementCopyAttributeValues(app, kAXWindowsAttribute as CFString, start, count, &values)
         guard status == .success, let elements = values as? [AXUIElement] else {
-            throw AXWindowDiscovery.incomplete("window page is unavailable (AXError \(status.rawValue))")
+            throw AXWindowDiscovery.ProviderFailure(status: status, operation: "window page")
         }
         return elements
     }
@@ -41,20 +37,32 @@ enum AXWindowDiscovery {
         AXTraversalStopped(reason: .provider, detail: "incomplete window discovery: " + detail)
     }
 
-    /// `kAXErrorCannotComplete` is how an application that is launching, or busy running a modal
-    /// panel, answers a messaging request. It is a transient refusal, not an answer: retry a
-    /// bounded number of times before reporting discovery as incomplete.
-    static func retryingBusy(attempts: Int = 3, pauseMicroseconds: useconds_t = 40_000,
-                             pause: (useconds_t) -> Void = { usleep($0) },
-                             _ call: () -> AXError) -> AXError {
-        var status = call()
-        var remaining = attempts - 1
-        while status == .cannotComplete, remaining > 0 {
-            pause(pauseMicroseconds)
-            status = call()
-            remaining -= 1
+    struct ProviderFailure: Error {
+        let status: AXError
+        let operation: String
+    }
+
+    /// Busy apps can recover, but every retry is a separate IPC: charge it to the shared call
+    /// budget and recompute its timeout. A retry must not reuse an expired messaging timeout.
+    static func boundedProviderCall<P: AXTraversalProviding, T>(
+        _ app: P.Element, provider: P, budget: AXTraversalBudget,
+        pause: (useconds_t) -> Void = { usleep($0) }, _ call: () throws -> T
+    ) throws -> T {
+        for attempt in 0..<3 {
+            do {
+                return try AXTraversal.boundedCall(app, provider: provider, budget: budget, call)
+            } catch let failure as ProviderFailure {
+                // A thrown IPC result still consumes time, and cancellation wins over retries.
+                try budget.check()
+                guard failure.status == .cannotComplete, attempt < 2 else {
+                    throw incomplete("\(failure.operation) is unavailable (AXError \(failure.status.rawValue))")
+                }
+                let microseconds = min(UInt64(40_000), budget.remainingNanoseconds / 1_000)
+                if microseconds > 0 { pause(useconds_t(microseconds)) }
+            }
         }
-        return status
+        // The last failed attempt always throws above.
+        throw incomplete("provider retries exhausted")
     }
 
     static func limits(remaining: TimeInterval?) throws -> AXTraversalLimits {
@@ -77,7 +85,7 @@ enum AXWindowDiscovery {
     private static func checkedCount<P: AXWindowDiscoveryProviding>(
         app: P.Element, provider: P, budget: AXTraversalBudget
     ) throws -> Int {
-        let count = try AXTraversal.boundedCall(app, provider: provider, budget: budget) {
+        let count = try boundedProviderCall(app, provider: provider, budget: budget) {
             try provider.windowCount(app)
         }
         guard count >= 0 else { throw incomplete("negative window count") }
@@ -96,7 +104,7 @@ enum AXWindowDiscovery {
         var start = 0
         while start < count {
             let size = min(budget.limits.childPageSize, count - start)
-            let page = try AXTraversal.boundedCall(app, provider: provider, budget: budget) {
+            let page = try boundedProviderCall(app, provider: provider, budget: budget) {
                 try provider.windowElements(app, start: start, count: size)
             }
             guard page.count == size else { throw incomplete("window list changed during paging") }
@@ -139,7 +147,7 @@ enum AXWindowDiscovery {
         var start = 0
         while start < count {
             let size = min(budget.limits.childPageSize, count - start)
-            let page = try AXTraversal.boundedCall(app, provider: provider, budget: budget) {
+            let page = try boundedProviderCall(app, provider: provider, budget: budget) {
                 try provider.windowElements(app, start: start, count: size)
             }
             guard page.count == size else { throw incomplete("window list changed during paging") }
@@ -186,6 +194,12 @@ enum AXWindowDiscovery {
                 }
             }
             start += page.count
+        }
+        // AXWindows is not an atomic snapshot. An app can add or remove windows after the
+        // initial count (even while the last page's geometry is read). A full-sized page alone
+        // does not prove completeness; never publish that stale prefix as the complete set.
+        guard try checkedCount(app: app, provider: provider, budget: budget) == count else {
+            throw incomplete("window list changed during discovery")
         }
         return Result(windows: windows, elements: elements)
     }

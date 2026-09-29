@@ -79,10 +79,7 @@ public enum MCPClientInspection {
 
     /// Bounded read of a regular file; nil for anything missing, oversized, or not UTF-8.
     public static func boundedRead(_ url: URL) -> String? {
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              attributes[.type] as? FileAttributeType == .typeRegular,
-              let size = attributes[.size] as? NSNumber, size.intValue <= maximumConfigBytes,
-              let data = try? Data(contentsOf: url, options: [.uncached]) else { return nil }
+        guard let data = try? BoundedRegularFile.read(url, maximumBytes: maximumConfigBytes) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

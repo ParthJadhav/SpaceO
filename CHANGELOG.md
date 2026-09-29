@@ -6,6 +6,14 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Bound setup and doctor configuration reads on the opened file, including files that grow
+  during a read. Refuse pipes, oversized files, dangling links, and malformed JSON server
+  collections without treating existing settings as an empty configuration.
+- Charge every busy Accessibility retry to the original deadline and call budget, honor
+  cancellation between retries, and reject window lists whose count changes during discovery.
+- Keep daemon drain, legacy polling, shutdown requests, and polling sleeps within one restart
+  deadline. Do not send a late shutdown request after the wait expires.
+
 - Remove the self-hosted `Live WindowServer tests` workflow. Live qualification runs locally
   only; CI and release jobs stay on GitHub-hosted runners.
 

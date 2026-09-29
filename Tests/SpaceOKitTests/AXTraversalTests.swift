@@ -75,7 +75,7 @@ final class AXTraversalTests: XCTestCase {
         XCTAssertEqual(windows.map(\.windowID), Array(1...70).map { CGWindowID($0) })
         XCTAssertEqual(provider.pageRequests.map(\.maxValues), [32, 32, 6])
         XCTAssertEqual(windows.last?.title, "Node 70")
-        XCTAssertEqual(provider.providerCallCount, 144)
+        XCTAssertEqual(provider.providerCallCount, 145)
         XCTAssertEqual(Set(provider.timeoutElements), Set(0...70))
         XCTAssertTrue(provider.timeouts.allSatisfy { $0 > 0 && $0 <= 0.25 })
     }
@@ -160,7 +160,7 @@ final class AXTraversalTests: XCTestCase {
         XCTAssertEqual(windows.count, 70)
         XCTAssertTrue(windows.allSatisfy { $0.title.isEmpty })
         XCTAssertTrue(provider.textRequests.isEmpty)
-        XCTAssertEqual(provider.providerCallCount, 74, "one count, three pages, and 70 identities; no 70 title calls")
+        XCTAssertEqual(provider.providerCallCount, 75, "two counts, three pages, and 70 identities; no title calls")
         XCTAssertLessThan(budget.allocatedBytes, 32_000)
     }
 
@@ -175,7 +175,7 @@ final class AXTraversalTests: XCTestCase {
             XCTAssertEqual(result.windows.count, 70)
             XCTAssertEqual(result.elements.count, retain ? 70 : 0)
             if retain { XCTAssertEqual(result.elements[70], 70) }
-            XCTAssertEqual(provider.providerCallCount, 144)
+            XCTAssertEqual(provider.providerCallCount, 145)
             XCTAssertEqual(provider.pageRequests.map(\.maxValues), [32, 32, 6])
         }
     }
@@ -214,11 +214,112 @@ final class AXTraversalTests: XCTestCase {
             XCTAssertEqual(watcher.refusedCount, 0)
             XCTAssertEqual(discoveries, 1)
             XCTAssertEqual(handles, Array(1...70))
-            XCTAssertEqual(provider.providerCallCount, includeTitles ? 144 : 74)
+            XCTAssertEqual(provider.providerCallCount, includeTitles ? 145 : 75)
             XCTAssertEqual(provider.pageRequests.map(\.maxValues), [32, 32, 6])
             XCTAssertEqual(provider.textRequests.count, includeTitles ? 70 : 0)
             XCTAssertEqual(titles, includeTitles ? (1...70).map { "Node \($0)" } : [])
             XCTAssertLessThan(allocatedBytes, 32_000)
+        }
+    }
+
+    func testBusyWindowProviderRetriesChargeEachCallAndRefreshTimeout() throws {
+        let provider = FakeAXProvider()
+        let clock = TestMonotonicClock()
+        let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 0.2),
+                                           now: { clock.value }, isCancelled: { false })
+        var calls = 0
+        let value: Int = try AXWindowDiscovery.boundedProviderCall(0, provider: provider,
+            budget: budget, pause: { clock.advance(by: UInt64($0) * 1_000) }) {
+                calls += 1
+                if calls < 3 {
+                    throw AXWindowDiscovery.ProviderFailure(status: .cannotComplete, operation: "window count")
+                }
+                return 7
+            }
+        XCTAssertEqual(value, 7)
+        XCTAssertEqual(budget.axCalls, 3)
+        XCTAssertEqual(provider.timeouts.count, 3)
+        for (actual, expected) in zip(provider.timeouts, [Float(0.2), 0.16, 0.12]) {
+            XCTAssertEqual(actual, expected, accuracy: 0.00001)
+        }
+    }
+
+    func testWindowProviderRetryStopsAtDeadlineCallBudgetAndCancellation() throws {
+        for mode in ["deadline", "calls", "cancelled"] {
+            let provider = FakeAXProvider()
+            let clock = TestMonotonicClock()
+            var cancelled = false
+            var limits = try AXWindowDiscovery.limits(remaining: 0.025)
+            if mode == "calls" { limits.maxAXCalls = 1 }
+            let budget = try AXTraversalBudget(limits: limits, now: { clock.value },
+                                               isCancelled: { cancelled })
+            var calls = 0
+            XCTAssertThrowsError(try AXWindowDiscovery.boundedProviderCall(0, provider: provider,
+                budget: budget, pause: { duration in
+                    XCTAssertLessThanOrEqual(duration, 25_000)
+                    if mode == "deadline" { clock.advance(by: UInt64(duration) * 1_000) }
+                }) { () -> Int in
+                    calls += 1
+                    if mode == "cancelled" { cancelled = true }
+                    throw AXWindowDiscovery.ProviderFailure(status: .cannotComplete, operation: "window page")
+                }) {
+                    let expected: AXTraversalStopReason = mode == "deadline" ? .deadline
+                        : mode == "calls" ? .axCalls : .cancelled
+                    XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, expected)
+                }
+            XCTAssertEqual(calls, 1)
+            XCTAssertEqual(budget.axCalls, 1)
+        }
+    }
+
+    func testWindowProviderRetriesOnlyTransientFailuresAndNeverBeyondThreeCalls() throws {
+        for status in [AXError.cannotComplete, .apiDisabled] {
+            let provider = FakeAXProvider()
+            let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                               now: { 0 }, isCancelled: { false })
+            var calls = 0
+            var pauses = 0
+            XCTAssertThrowsError(try AXWindowDiscovery.boundedProviderCall(0, provider: provider,
+                budget: budget, pause: { _ in pauses += 1 }) { () -> Int in
+                    calls += 1
+                    throw AXWindowDiscovery.ProviderFailure(status: status, operation: "window count")
+                }) {
+                    XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                }
+            XCTAssertEqual(calls, status == .cannotComplete ? 3 : 1)
+            XCTAssertEqual(pauses, status == .cannotComplete ? 2 : 0)
+        }
+    }
+
+    func testWindowDiscoveryRejectsGrowthAndShrinkageAfterPaging() throws {
+        for finalCount in [0, 2] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 1
+            let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                               now: { 0 }, isCancelled: { false })
+            XCTAssertThrowsError(try AXWindowDiscovery.discover(of: 42, app: 0,
+                provider: provider, budget: budget, liveBounds: { _ in
+                    provider.childCounts[0] = finalCount
+                    return CGRect(x: 0, y: 0, width: 20, height: 20)
+                }, retainingElements: true)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.detail,
+                    "incomplete window discovery: window list changed during discovery")
+            }
+        }
+    }
+
+    func testWindowDiscoveryRejectsUnavailableFinalCount() throws {
+        let provider = FakeAXProvider()
+        provider.childCounts[0] = 1
+        let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                           now: { 0 }, isCancelled: { false })
+        XCTAssertThrowsError(try AXWindowDiscovery.windows(of: 42, app: 0,
+            provider: provider, budget: budget, liveBounds: { _ in
+                provider.discoveryCountFails = true
+                return CGRect(x: 0, y: 0, width: 20, height: 20)
+            })) {
+            XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
         }
     }
 

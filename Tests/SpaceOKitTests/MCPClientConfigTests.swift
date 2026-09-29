@@ -189,6 +189,18 @@ final class MCPClientConfigTests: XCTestCase {
             try MCPClientConfig.merged(existing: "{nope", client: .claudeDesktop, executablePath: exe))
     }
 
+    func testJSONRefusesToDiscardMalformedServerCollections() {
+        for value in ["null", "[]", "[\"keep me\"]", "\"keep me\"", "1", "true"] {
+            for client in [MCPClient.cursor, .claudeDesktop] {
+                XCTAssertThrowsError(try MCPClientConfig.merged(
+                    existing: "{\"mcpServers\":\(value)}", client: client, executablePath: exe)) {
+                    XCTAssertEqual($0 as? MCPClientConfigError,
+                        .malformedJSON("mcpServers must be an object; not overwriting it"))
+                }
+            }
+        }
+    }
+
     func testOversizedConfigIsRefused() {
         let huge = String(repeating: "#", count: MCPClientConfig.maximumConfigBytes + 1)
         XCTAssertThrowsError(

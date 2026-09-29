@@ -9,6 +9,8 @@ final class DaemonRestartTests: XCTestCase {
     /// "exits" once a stop is acknowledged or the scripted drain completes.
     private final class FakeDaemon {
         var sent: [Request] = []
+        var timeouts: [TimeInterval] = []
+        var sleeps: [TimeInterval] = []
         var alive = true
         var clock = Date(timeIntervalSince1970: 0)
         var progress: [String] = []
@@ -16,13 +18,17 @@ final class DaemonRestartTests: XCTestCase {
 
         func restart() -> DaemonRestart {
             var restart = DaemonRestart(
-                send: { [unowned self] request, _ in
+                send: { [unowned self] request, timeout in
                     self.sent.append(request)
+                    self.timeouts.append(timeout)
                     return self.handler(request, self)
                 },
                 isAlive: { [unowned self] in self.alive },
                 now: { [unowned self] in self.clock },
-                sleep: { [unowned self] seconds in self.clock.addTimeInterval(seconds) },
+                sleep: { [unowned self] seconds in
+                    self.sleeps.append(seconds)
+                    self.clock.addTimeInterval(seconds)
+                },
                 progress: { [unowned self] in self.progress.append($0) })
             restart.pollInterval = 1
             return restart
@@ -160,6 +166,78 @@ final class DaemonRestartTests: XCTestCase {
             return XCTFail("expected stillBusy")
         }
         XCTAssertTrue(message.contains("has not exited yet"))
+    }
+
+    func testRestartRefusesInvalidLimitsBeforeSendingAnything() {
+        for value in [Double.nan, .infinity, -.infinity, 0, -1, 3_601] {
+            let daemon = FakeDaemon()
+            guard case .refused = daemon.restart().run(mode: .whenIdle, timeout: value) else {
+                return XCTFail("invalid timeout accepted")
+            }
+            XCTAssertTrue(daemon.sent.isEmpty)
+        }
+        for value in [Double.nan, .infinity, 0, -1, 61] {
+            let daemon = FakeDaemon()
+            var restart = daemon.restart()
+            restart.pollInterval = value
+            guard case .refused = restart.run(mode: .now, timeout: 10) else {
+                return XCTFail("invalid polling interval accepted")
+            }
+            XCTAssertTrue(daemon.sent.isEmpty)
+        }
+    }
+
+    func testDrainPollingAndSleepUseOnlyRemainingDeadline() {
+        let daemon = FakeDaemon()
+        daemon.handler = { request, fake in
+            if request.cmd == "daemon.drain" {
+                fake.clock.addTimeInterval(0.25)
+                return .success("draining")
+            }
+            fake.clock.addTimeInterval(0.5)
+            return Self.sessions(1)
+        }
+        guard case .stillBusy = daemon.restart().run(mode: .whenIdle, timeout: 1) else {
+            return XCTFail("expected a bounded wait")
+        }
+        XCTAssertEqual(daemon.timeouts, [1, 0.75])
+        XCTAssertEqual(daemon.sleeps, [0.25])
+        XCTAssertEqual(daemon.clock.timeIntervalSince1970, 1)
+    }
+
+    func testLateLegacyIdleResponseCannotTriggerStop() {
+        let daemon = FakeDaemon()
+        daemon.handler = { request, fake in
+            if request.cmd == "daemon.drain" { return Self.legacyRefusal("daemon.drain") }
+            fake.clock.addTimeInterval(2)
+            return Self.sessions(0)
+        }
+        guard case .stillBusy(let message) = daemon.restart().run(mode: .whenIdle, timeout: 1) else {
+            return XCTFail("late idle result cannot renew the shutdown budget")
+        }
+        XCTAssertTrue(message.contains("no stop was sent"))
+        XCTAssertEqual(daemon.commands, ["daemon.drain", "session.list"])
+        XCTAssertEqual(daemon.timeouts, [1, 1])
+    }
+
+    func testLegacyStopSharesOriginalDeadline() {
+        let daemon = FakeDaemon()
+        daemon.handler = { request, fake in
+            switch request.cmd {
+            case "daemon.drain": return Self.legacyRefusal("daemon.drain")
+            case "session.list":
+                fake.clock.addTimeInterval(0.75)
+                return Self.sessions(0)
+            default: return .success("stopping")
+            }
+        }
+        guard case .stillBusy = daemon.restart().run(mode: .whenIdle, timeout: 1) else {
+            return XCTFail("acknowledged shutdown still has to exit before the deadline")
+        }
+        XCTAssertEqual(daemon.commands, ["daemon.drain", "session.list", "daemon.stop"])
+        XCTAssertEqual(daemon.timeouts, [1, 1, 0.25])
+        XCTAssertEqual(daemon.sleeps, [0.25])
+        XCTAssertEqual(daemon.clock.timeIntervalSince1970, 1)
     }
 
     func testTransportFailureIsUnreachable() {

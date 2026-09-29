@@ -18,6 +18,15 @@ Status definitions:
 
 ## Active milestone
 
+### September 29 reliability gap audit
+
+- Implemented: descriptor-bounded configuration reads, refusal to discard malformed JSON
+  `mcpServers` collections, shared Accessibility retry budgets, window-count revalidation,
+  and a shared daemon restart deadline.
+- Evidence and remaining limits: [reliability gap audit](docs/validation/2026-09-29-reliability-gaps.md).
+- These fixes do not close the Chromium identity soak finding below. Missing or repeated
+  identities still fail closed, and the underlying provider/lifetime cause needs live diagnosis.
+
 ### Performance soak: Chromium window identity becomes incomplete
 
 - Status: Open
