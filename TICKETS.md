@@ -2,13 +2,13 @@
 
 ## Product direction
 
-SpaceO permits virtual-display creation and input control without product-enforced allowlists,
-caps, incident lockouts, or acknowledgement gates. Runtime prerequisites and structural validity
-remain: the operating system must expose the API being called, dimensions must be positive,
-finite, integral and representable by the platform type, and failed platform operations are
-reported.
+SpaceO provides background display and input control for its qualified native and Chromium
+scope. Runtime capabilities, structural validation, controller ownership, input limits, display
+creation budgets, and persistent lifecycle failure latches remain enforced. Failed or unknown
+platform operations are reported without claiming delivery or isolation. Managed Electron
+launches remain refused until attention isolation is proven. See [display safety](docs/DISPLAY_SAFETY.md).
 
-Current milestone: **Unrestricted creation and control stabilization**
+Current milestone: **Reliable background control and qualification**
 
 Status definitions:
 
@@ -26,6 +26,10 @@ Status definitions:
 - Evidence and remaining limits: [reliability gap audit](docs/validation/2026-09-29-reliability-gaps.md).
 - These fixes do not close the Chromium identity soak finding below. Missing or repeated
   identities still fail closed, and the underlying provider/lifetime cause needs live diagnosis.
+- Follow-up implementation: preserve window-ID provider errors with bounded busy retries,
+  bound and cancel startup-lock waits, scan Codex TOML boundaries without confusing instructions or
+  array contents with tables, and bound doctor version-probe pipes. Verification is tracked in
+  the same audit record.
 
 ### Performance soak: Chromium window identity becomes incomplete
 

@@ -6,6 +6,18 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Preserve macOS error codes from Accessibility window-ID lookup and retry only busy-app
+  responses within the existing shared budget. Stale, missing, and duplicate identities still
+  refuse discovery rather than producing a partial window list.
+- Bound daemon startup-lock contention to three seconds and reject non-file lock paths, so a
+  suspended competing starter cannot hang another startup indefinitely. Shutdown cancels a
+  pending start before it can publish a stranded socket.
+- Preserve multiline instructions and nested arrays when updating Codex TOML registration;
+  recognize quoted table keys and refuse ambiguous or unfinished configuration. Doctor ignores
+  command examples embedded inside multiline values.
+- Bound doctor version-probe output and pipe reads under one monotonic timeout, including when
+  a child process keeps stdout open after the configured command exits.
+
 - Bound setup and doctor configuration reads on the opened file, including files that grow
   during a read. Refuse pipes, oversized files, dangling links, and malformed JSON server
   collections without treating existing settings as an empty configuration.

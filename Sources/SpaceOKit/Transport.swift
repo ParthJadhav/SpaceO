@@ -53,6 +53,7 @@ public enum Transport {
         private var listenFD: Int32 = -1
         private var thread: Thread?
         private var stopping = false
+        private var starting = false
         private var ownsSocket = false
         /// Bumped by every `start()`, so a `stop()` that lands after a restart cannot drop the
         /// successor listener's connections.
@@ -74,6 +75,7 @@ public enum Transport {
         /// The live listening descriptor, or -1. Tests use it to kill the listener the way the
         /// kernel would; production has no reason to read it.
         var listeningDescriptorForTesting: Int32 { stateLock.withLock { listenFD } }
+        var startupInProgressForTesting: Bool { stateLock.withLock { starting } }
         private var socketDevice: dev_t?
         private var socketInode: ino_t?
         private let stateLock = NSLock()
@@ -114,28 +116,29 @@ public enum Transport {
                 throw TransportError.socketFailed("socket path too long: \(path)")
             }
             let mayStart = stateLock.withLock {
-                guard listenFD < 0, self.thread == nil, !ownsSocket else { return false }
+                guard listenFD < 0, self.thread == nil, !ownsSocket, !starting else { return false }
+                starting = true
                 stopping = false
                 return true
             }
             guard mayStart else { throw TransportError.alreadyRunning(path) }
+            defer { stateLock.withLock { starting = false } }
 
             // Serialise stale-socket cleanup and bind. Without this lock, two MCP clients
             // auto-starting together can each unlink the other's live socket and strand a daemon.
             let lockPath = path + ".lock"
-            let lockFD = Darwin.open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW,
+            let lockFD = Darwin.open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK,
                                      S_IRUSR | S_IWUSR)
             guard lockFD >= 0 else {
                 throw TransportError.socketFailed("open startup lock: \(errno)")
             }
-            guard flock(lockFD, LOCK_EX) == 0 else {
-                close(lockFD)
-                throw TransportError.socketFailed("lock startup file: \(errno)")
+            defer { close(lockFD) }
+            var lockInfo = stat()
+            guard fstat(lockFD, &lockInfo) == 0, lockInfo.st_mode & S_IFMT == S_IFREG else {
+                throw TransportError.socketFailed("startup lock must be a regular file")
             }
-            defer {
-                _ = flock(lockFD, LOCK_UN)
-                close(lockFD)
-            }
+            try Self.acquireStartupLock(lockFD, isCancelled: { self.stateLock.withLock { self.stopping } })
+            defer { _ = flock(lockFD, LOCK_UN) }
 
             var existing = stat()
             if lstat(path, &existing) == 0 {
@@ -206,15 +209,52 @@ public enum Transport {
             }
             let thread = Thread { [weak self] in self?.acceptLoop() }
             thread.name = "spaceo.daemon.accept"
-            stateLock.withLock {
+            let published = stateLock.withLock { () -> Bool in
+                guard !stopping else { return false }
                 listenFD = fd
                 ownsSocket = true
                 socketDevice = identity.st_dev
                 socketInode = identity.st_ino
                 self.thread = thread
                 generation &+= 1
+                return true
+            }
+            guard published else {
+                close(fd)
+                var current = stat()
+                if lstat(path, &current) == 0,
+                   current.st_dev == identity.st_dev, current.st_ino == identity.st_ino {
+                    unlink(path)
+                }
+                throw TransportError.socketFailed("startup cancelled by stop")
             }
             thread.start()
+        }
+
+        /// A suspended competing starter must not hang this daemon indefinitely. Keep the
+        /// opened descriptor and existing socket untouched unless the exclusive lock is held.
+        static func acquireStartupLock(
+            _ descriptor: Int32, timeoutNanoseconds: UInt64 = 3_000_000_000,
+            now: () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+            pause: (useconds_t) -> Void = { usleep($0) },
+            isCancelled: () -> Bool = { false }
+        ) throws {
+            let (end, overflow) = now().addingReportingOverflow(timeoutNanoseconds)
+            let deadline = overflow ? UInt64.max : end
+            var firstAttempt = true
+            while firstAttempt || now() < deadline {
+                firstAttempt = false
+                guard !isCancelled() else { throw TransportError.socketFailed("startup cancelled by stop") }
+                if flock(descriptor, LOCK_EX | LOCK_NB) == 0 { return }
+                let failure = errno
+                guard failure == EWOULDBLOCK || failure == EAGAIN || failure == EINTR else {
+                    throw TransportError.socketFailed("lock startup file: \(failure)")
+                }
+                let current = now()
+                guard current < deadline else { break }
+                pause(useconds_t(min(10_000, max(1, (deadline - current) / 1_000))))
+            }
+            throw TransportError.busy("startup lock acquisition timed out; retry after the other starter finishes")
         }
 
         /// Accept failures that describe the environment rather than the listener.

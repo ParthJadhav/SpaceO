@@ -180,6 +180,27 @@ final class MCPClientInspectionTests: XCTestCase {
         XCTAssertNil(MCPClientInspection.probeVersion(path: "/nonexistent/spaceo"))
     }
 
+    func testProbeBoundsInheritedPipeAndRejectsExcessOutput() throws {
+        let script = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spaceo-probe-pipe-\(UUID().uuidString).sh")
+        defer { try? FileManager.default.removeItem(at: script) }
+        try "#!/bin/sh\nsleep 2 &\necho 'spaceo 9.8.7'\nexit 0\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: script.path)
+        let started = ContinuousClock.now
+        XCTAssertNil(MCPClientInspection.probeVersion(path: script.path, timeout: 0.1))
+        XCTAssertLessThan(started.duration(to: .now), .seconds(1))
+        try ("#!/bin/sh\necho 'spaceo 9.8.7'\nprintf '%s' '" + String(repeating: "x", count: 5_000) + "'\n")
+            .write(to: script, atomically: true, encoding: .utf8)
+        XCTAssertNil(MCPClientInspection.probeVersion(path: script.path))
+    }
+
+    func testProbeRejectsInvalidTimeoutBeforeLaunching() {
+        for timeout in [Double.nan, .infinity, -.infinity, 0, -1] {
+            XCTAssertNil(MCPClientInspection.probeVersion(path: "/bin/echo", timeout: timeout))
+        }
+    }
+
     // MARK: - Claude Code registration
 
     func testClaudeIsResolvedFromPATHBeforeFallbacks() {

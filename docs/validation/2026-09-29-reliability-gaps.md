@@ -102,3 +102,39 @@ and capture permissions. No host installation or release publication was perform
 The older product backlog contains stale per-ticket “Open” labels for work its later status
 sections report implemented. This audit uses current source and newer validation records;
 historical descriptions alone are not evidence of missing features.
+
+## Follow-up source hardening
+
+The next review found further startup, identity, and configuration defects:
+
+1. The private window-ID wrapper discarded all AX error codes. A busy provider and a stale
+   element were both reported as zero. The compatibility wrapper still returns zero, while
+   discovery now uses a status-preserving wrapper. Only `cannotComplete` retries, using the
+   shared deadline/call budget from the first pass. No unresolved or duplicate ID is accepted.
+   This enables a later identity failure to retain its actual AX error without retaining window
+   content. It does not establish the cause of the earlier soak failure.
+2. Daemon startup used a blocking `flock`. A competing starter suspended while holding that
+   lock could hang another startup indefinitely. Nonblocking acquisition now has a three-second
+   monotonic deadline and returns a retryable busy error without changing the existing socket.
+   FIFO/directory lock paths are refused without replacing them. Concurrent starts on one server
+   are refused, and shutdown cancels a pending start before it publishes a stranded socket.
+3. The Codex registration writer treated any header-looking line as a table, including text
+   inside multiline instructions, and mistook nested array rows for subsequent tables. A
+   bounded lexical scanner now recognizes string/array context and bare/quoted table keys,
+   preserves unrelated bytes, and refuses unfinished/duplicate/ambiguous registration forms.
+   It follows the [TOML 1.0 string/key/table rules](https://toml.io/en/v1.0.0), but is intentionally
+   a boundary scanner rather than a complete TOML validator. Inline/dotted registrations that
+   cannot be safely rewritten receive an explicit error instead of duplicate table output.
+4. Doctor's command extraction could read a fake `command = ...` from multiline example text.
+   It now uses only top-level assignments within the registration table.
+
+5. Doctor waited for a version process to exit before a blocking stdout read. A descendant
+   retaining the pipe could bypass its timeout. Nonblocking reads now share one monotonic
+   deadline with process completion, drain output during execution, and reject output over
+   4 KiB. Nonfinite or nonpositive timeouts are refused before launching.
+
+Targeted evidence: 78 identity/discovery/readiness tests, six startup-lock tests (including
+stop during startup), 40 TOML/configuration/inspection tests, and 17 inspection tests including
+new inherited-pipe and excessive-output cases passed. Follow-up `make verify-release` passed:
+1,665 deterministic Swift tests, supporting Python/shell/JavaScript checks, and the 34-tool
+MCP smoke check. `git diff --check` passed. Live follow-up evidence is pending.

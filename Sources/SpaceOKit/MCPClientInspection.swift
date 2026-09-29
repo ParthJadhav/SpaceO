@@ -158,17 +158,14 @@ public enum MCPClientInspection {
     /// uses; only basic strings (the form the writer emits) are understood.
     static func tomlRegistration(toml: String, source: String) -> MCPClientRegistration? {
         let lines = toml.components(separatedBy: "\n")
-        guard let range = MCPClientConfig.tomlTableRange(lines: lines) else { return nil }
+        guard let range = try? MCPClientConfig.tomlTableRange(lines: lines),
+              let assignments = try? TOMLTableScanner.assignments(lines: lines[range].dropFirst()) else { return nil }
         var command: String?
         var arguments: [String] = []
-        for line in lines[range].dropFirst() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard let equals = trimmed.firstIndex(of: "=") else { continue }
-            let key = trimmed[..<equals].trimmingCharacters(in: .whitespaces)
-            let value = trimmed[trimmed.index(after: equals)...].trimmingCharacters(in: .whitespaces)
-            if key == "command" {
+        for (key, value) in assignments {
+            if key == ["command"] {
                 command = tomlBasicString(value)
-            } else if key == "args", let data = value.data(using: .utf8),
+            } else if key == ["args"], let data = value.data(using: .utf8),
                       let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [Any] {
                 // The writer emits `["mcp"]`, which is also a JSON array.
                 arguments = Array(parsed.compactMap { $0 as? String }.prefix(16))
@@ -329,25 +326,48 @@ public enum MCPClientInspection {
     /// Runs `<path> version` with a hard deadline and bounded output. Never throws; nil means
     /// "could not tell".
     public static func probeVersion(path: String, timeout: TimeInterval = 3) -> String? {
+        guard timeout.isFinite, timeout > 0 else { return nil }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(min(timeout, 10)))
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = ["version"]
         let pipe = Pipe()
+        defer {
+            try? pipe.fileHandleForReading.close()
+            try? pipe.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+        }
+        let descriptor = pipe.fileHandleForReading.fileDescriptor
+        let flags = fcntl(descriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { return nil }
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
-        let deadline = Date().addingTimeInterval(min(max(timeout, 0.1), 10))
-        while process.isRunning, Date() < deadline { usleep(20_000) }
-        if process.isRunning {
-            process.terminate()
-            try? pipe.fileHandleForReading.close()
-            return nil
+        try? pipe.fileHandleForWriting.close()
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: maximumVersionOutputBytes + 1)
+        var reachedEOF = false
+        // Drain while the process runs: waiting first can fill the pipe, and a descendant
+        // can retain stdout after its parent exits. Neither may bypass the same deadline.
+        while ContinuousClock.now < deadline {
+            if !reachedEOF {
+                let count = Darwin.read(descriptor, &buffer, buffer.count)
+                if count > 0 {
+                    guard count <= maximumVersionOutputBytes - data.count else { return nil }
+                    data.append(contentsOf: buffer.prefix(count))
+                    continue
+                }
+                if count == 0 { reachedEOF = true }
+                else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR { return nil }
+            }
+            if reachedEOF && !process.isRunning {
+                guard process.terminationStatus == 0 else { return nil }
+                return parseVersionOutput(String(decoding: data, as: UTF8.self))
+            }
+            usleep(1_000)
         }
-        let data = pipe.fileHandleForReading.readData(ofLength: maximumVersionOutputBytes)
-        try? pipe.fileHandleForReading.close()
-        guard process.terminationStatus == 0 else { return nil }
-        return parseVersionOutput(String(decoding: data, as: UTF8.self))
+        return nil
     }
 }
 

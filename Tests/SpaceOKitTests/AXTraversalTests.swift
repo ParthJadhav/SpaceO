@@ -336,6 +336,42 @@ final class AXTraversalTests: XCTestCase {
         }
     }
 
+    func testWindowDiscoveryPreservesIdentityProviderErrors() throws {
+        for status in [AXError.invalidUIElement, .apiDisabled, .notImplemented] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 1
+            provider.identityStatuses = [status]
+            XCTAssertThrowsError(try discover(provider)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.detail,
+                    "incomplete window discovery: window identity is unavailable (AXError \(status.rawValue))")
+            }
+            XCTAssertEqual(provider.providerCallCount, 3, "permanent identity failures are not retried")
+            XCTAssertTrue(provider.textRequests.isEmpty)
+        }
+    }
+
+    func testWindowDiscoveryRecoversBusyIdentityWithoutPublishingZero() throws {
+        let provider = FakeAXProvider()
+        provider.childCounts[0] = 1
+        provider.identityStatuses = [.cannotComplete, .success]
+        XCTAssertEqual(try discover(provider).map(\.windowID), [1])
+        XCTAssertEqual(provider.providerCallCount, 6,
+            "count, page, two identity calls, title, and final count")
+    }
+
+    func testReadinessCannotTreatAnIdentityProviderErrorAsAnEmptyWindowList() throws {
+        let provider = FakeAXProvider()
+        provider.childCounts[0] = 1
+        provider.identityStatuses = [.invalidUIElement]
+        let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                           now: { 0 }, isCancelled: { false })
+        XCTAssertThrowsError(try AXWindowDiscovery.hasIdentifiedWindow(app: 0,
+            provider: provider, budget: budget)) {
+            XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+        }
+    }
+
     func testWaitRemainderBoundsTraversalAndEveryProviderCall() throws {
         let provider = FakeAXProvider()
         let clock = TestMonotonicClock()
@@ -942,6 +978,16 @@ private final class FakeAXProvider: AXWindowDiscoveryProviding {
     var discoveryPageFails = false
     var discoveryShortPage = false
     var forcedWindowID: CGWindowID?
+    var identityStatuses: [AXError] = []
+
+    func identifiedWindowID(_ element: Int) throws -> CGWindowID {
+        let id = windowID(element)
+        let status = identityStatuses.isEmpty ? AXError.success : identityStatuses.removeFirst()
+        guard status == .success else {
+            throw AXWindowDiscovery.ProviderFailure(status: status, operation: "window identity")
+        }
+        return id
+    }
 
     func windowCount(_ app: Int) throws -> Int {
         if discoveryCountFails { throw AXWindowDiscovery.incomplete("fixture count failure") }

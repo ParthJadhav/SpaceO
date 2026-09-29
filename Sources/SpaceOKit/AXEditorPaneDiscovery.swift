@@ -130,8 +130,8 @@ enum AXEditorPaneDiscovery {
         }
 
         try collect(window, depth: 0)
-        let finalID = try AXTraversal.boundedCall(window, provider: provider, budget: budget) {
-            provider.windowID(window)
+        let finalID = try AXWindowDiscovery.boundedProviderCall(window, provider: provider, budget: budget) {
+            try provider.identifiedWindowID(window)
         }
         guard finalID == windowID else { throw incomplete("the window changed during discovery") }
         return found
@@ -156,8 +156,8 @@ enum AXEditorPaneDiscovery {
             }
             guard page.count == size else { throw incomplete("window list changed during paging") }
             for element in page {
-                let id = try AXTraversal.boundedCall(element, provider: provider, budget: budget) {
-                    provider.windowID(element)
+                let id = try AXWindowDiscovery.boundedProviderCall(element, provider: provider, budget: budget) {
+                    try provider.identifiedWindowID(element)
                 }
                 if id == windowID { return element }
             }

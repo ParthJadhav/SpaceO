@@ -1,14 +1,29 @@
 import Foundation
 import ApplicationServices
 import CoreGraphics
+import SpaceOPrivate
 
 /// Unlike the best-effort AX helpers, discovery must distinguish an empty list from failure.
 protocol AXWindowDiscoveryProviding: AXTraversalProviding {
     func windowCount(_ app: Element) throws -> Int
     func windowElements(_ app: Element, start: Int, count: Int) throws -> [Element]
+    func identifiedWindowID(_ element: Element) throws -> CGWindowID
+}
+
+extension AXWindowDiscoveryProviding {
+    func identifiedWindowID(_ element: Element) throws -> CGWindowID { windowID(element) }
 }
 
 extension SystemAXTraversalProvider: AXWindowDiscoveryProviding {
+    func identifiedWindowID(_ element: AXUIElement) throws -> CGWindowID {
+        var id: CGWindowID = 0
+        let status = SPOGetWindowIDForAXElement(element, &id)
+        guard status == .success else {
+            throw AXWindowDiscovery.ProviderFailure(status: status, operation: "window identity")
+        }
+        return id
+    }
+
     func windowCount(_ app: AXUIElement) throws -> Int {
         var count: CFIndex = 0
         let status = AXUIElementGetAttributeValueCount(app, kAXWindowsAttribute as CFString, &count)
@@ -111,8 +126,8 @@ enum AXWindowDiscovery {
             try budget.consumeAllocation(page.count * MemoryLayout<P.Element>.stride)
             for element in page {
                 try budget.consumeNode()
-                let id = try AXTraversal.boundedCall(element, provider: provider, budget: budget) {
-                    provider.windowID(element)
+                let id = try boundedProviderCall(element, provider: provider, budget: budget) {
+                    try provider.identifiedWindowID(element)
                 }
                 if id != 0 { return true }
             }
@@ -154,8 +169,8 @@ enum AXWindowDiscovery {
             try budget.consumeAllocation(page.count * MemoryLayout<P.Element>.stride)
             for element in page {
                 try budget.consumeNode()
-                let id = try AXTraversal.boundedCall(element, provider: provider, budget: budget) {
-                    provider.windowID(element)
+                let id = try boundedProviderCall(element, provider: provider, budget: budget) {
+                    try provider.identifiedWindowID(element)
                 }
                 guard id != 0 else {
                     throw incomplete("window identity is unavailable")

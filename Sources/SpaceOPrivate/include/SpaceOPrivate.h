@@ -129,6 +129,11 @@ BOOL SPOWindowBounds(uint32_t windowID, CGRect *outBounds);
 /// CGWindowID behind an accessibility element, or 0.
 uint32_t SPOWindowIDForAXElement(AXUIElementRef element);
 
+/// Preserve the provider status for callers that must distinguish a busy app from a stale
+/// element. The output is zero on every failure; a successful zero still means unresolved.
+AXError SPOGetWindowIDForAXElement(AXUIElementRef _Nullable element,
+                                  uint32_t *_Nullable outWindowID);
+
 #pragma mark - Per-process event delivery
 
 /// Post through the resolved per-PID event symbol.
