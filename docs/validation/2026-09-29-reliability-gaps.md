@@ -781,3 +781,23 @@ The release Viewer bundle was rebuilt and passed strict/deep codesign verificati
 `git diff --check` passed. The first focused run exposed a test fixture supplying a Swift
 `Int32` rather than the Core Graphics dictionary's numeric representation; the fixture now
 checks bridged CFNumber values and an `Int` boundary value, and the corrected run passed.
+
+The corrected source was committed as `efc51f4`. Its next combined workload was refused by
+host admission before starting a daemon, Viewer, or display: normal memory pressure and 13.49%
+ColorSync CPU, but eight swap-ins during the five-second sample. The separately waiting leak
+observer was stopped without scanning any process. A subsequent read-only 30-second inspection
+still found 680 swap-ins, zero swap-outs, normal pressure, and 11.48% ColorSync CPU. This does not
+identify a leak or establish that compilation caused the activity. Approximately 978 MiB of
+swap remained allocated on this 24 GiB host; unrelated background applications were preserved.
+
+No admission threshold was weakened and no further live workload was attempted. Final doctor
+inspection confirmed ready safety, physical display 1 only, and no SpaceO or orphan display.
+The stopped worker and sampler from recovery had exited. A separate installed default daemon
+had appeared: version 1.1.1, not matching this checkout's CLI; its operator session listing was
+empty. It was not started by these private test wrappers and was preserved. Doctor exited 1
+for the build mismatch, not a verified all-clear for that separate daemon. The user was asked
+whether another task was active; fresh display work remains paused. Private
+evidence is in `.artifacts/owner-lookup-efc51f4/`. The lookup fix's full combined live soak and
+Viewer leak scan remain unverified; the passing MCP/workload leak evidence earlier in this
+record belongs to `3e1306b`, not this changed source. Pinned-toolchain and exact signed-candidate
+release qualification also remain outstanding.

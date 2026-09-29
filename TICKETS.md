@@ -82,7 +82,7 @@ Status definitions:
 
 ### Host slowdown after sustained live testing
 
-- Status: Open; host admission recovered, workload memory follow-up incomplete
+- Status: Open; live work paused for swap activity, workload memory follow-up incomplete
 - September 29: user-reported slowdown persisted as a resource concern after test cleanup.
   Zero sessions/virtual displays remained; idle daemon leak scan reported zero leaked bytes.
   Normal memory pressure and zero sampled swap activity did not explain sustained ~100% combined
@@ -102,6 +102,10 @@ Status definitions:
   30.02 MiB. The combined Viewer soak remains incomplete: one attempt stopped for confirmed
   human control, and a newly reserved attempt exposed the owner-lookup defect below. Normal
   recovery restored physical topology; no system services were killed or reset.
+- After correcting that defect in `efc51f4`, admission refused a new workload for swap-ins
+  before creating any daemon/display. A longer inspection still found swap activity with normal
+  pressure and low ColorSync CPU. The current-source combined soak and Viewer leak scan remain
+  pending; no threshold was relaxed to run them.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
 ### Performance soak: Chromium window identity becomes incomplete
