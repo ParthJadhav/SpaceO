@@ -48,6 +48,11 @@ Status definitions:
   own screenshot request exceeded four seconds while native pixels remained unchanged. No
   CDP image comparison or root-cause claim follows this timeout. Both attempts cleaned up
   normally; see the pixel-boundary section of the audit.
+- Source `5d4a0e7`: an instrumented launch succeeded and the eight-second CDP screencast
+  completed its start/stop commands but emitted zero frames. Native pixels stayed unchanged
+  before, during, and afterward while the visible fixture’s animation counter advanced. A
+  separate Chrome timer-source experiment also failed animation capture and sustained Viewer
+  delivery; its temporary launch switch was removed. Both cleanups restored physical topology.
 - Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
   change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).

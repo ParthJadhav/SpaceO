@@ -335,3 +335,55 @@ not release qualification. Both Chromium motion and intermittent identity findin
 After recording the diagnostic, `make verify-release` passed again: 1,670 Swift tests,
 supporting checks, and the 34-tool MCP smoke check. `git diff --check` passed. A final doctor
 check still reported a matching daemon, ready safety, and no SpaceO or orphaned displays.
+
+
+## Instrumented launch and completed screencast comparison
+
+Source `5d4a0e7` was tested with a separate read-only launch observer and the previously prepared
+screencast diagnostic. The observer selected only a Chrome PID whose command line contained the
+private profile prefix for this diagnostic daemon, then checked process launch identity. Its
+public-API observations contained only hidden/active flags, ownership/role counts, and status
+codes; no titles or AX content were retained. The helper used bounded window pages and AX
+messaging timeouts and was stopped after launch completion. Source, binary, and harness hashes
+are retained in owner-only `.artifacts/observed-screencast-5d4a0e7/`.
+
+Chrome launched successfully this time. The observer's one retained startup sample reported
+inactive, not hidden, no native windows yet, and AX count error `-25204`. That early sample does
+not explain the previous `-25201` failure or establish persistent app visibility after launch.
+No window-identity fallback or retry-policy change was made.
+
+On the scrolling fixture, `Runtime.evaluate`, `Page.startScreencast`, a second evaluation, and
+`Page.stopScreencast` all completed. The eight-second screencast interval emitted **zero frames**.
+The fixture remained `visible`; its requestAnimationFrame counter advanced from 26 to 34 and
+scrollY from 208 to 272. Native capture pairs were identical before, during, and after the probe,
+and did not change across it. Thus a successfully requested screencast did not restore frame
+production in this run. This does not identify the root cause or prove the browser never renders.
+The full attempt failed its original capture assertion after 105.676 seconds, with no sampler
+errors and verified cleanup/topology. The matching default daemon was restored with ready safety,
+drive/capture grants, and zero sessions.
+
+## Isolated Chrome timer-source experiment
+
+The installed Chrome is `154.0.8037.58`. Its matching upstream
+[frame-source implementation](https://raw.githubusercontent.com/chromium/chromium/154.0.8037.58/components/viz/service/frame_sinks/external_begin_frame_source_mac.cc)
+provides the debugging feature `ForceMacVSyncTimerForDebugging`, which selects its timer path
+instead of the display-link object. This supplied a specific frame-scheduling hypothesis after
+the screencast result; it was not treated as an established fix.
+
+A temporary one-line AppLauncher patch added only
+`--enable-features=ForceMacVSyncTimerForDebugging` to the managed private Chrome launch. The exact
+patch hash, optimized executable hash, admission, and ad-hoc Viewer signature verification were
+retained in `.artifacts/timer-diagnostic-5d4a0e7/`. The ordinary supervised Viewer-only workload
+requested static, animated, and scrolling coverage. Chrome launch and the static phase succeeded,
+but animation capture pixels were identical and sustained Viewer FPS stayed zero. The harness
+stopped before scrolling. Feature internals were not traced, so the negative result does not
+exclude every display-link failure; it shows that this launch-switch experiment did not recover
+capture. The attempt failed after 95.264 seconds with no sampler errors, verified cleanup, and
+restored physical topology. The switch was removed rather than shipped, and the original source
+was rebuilt. These source diagnostics do not qualify a release candidate.
+
+After removing the experimental switch, the optimized CLI and ad-hoc Viewer were rebuilt;
+the Viewer passed strict/deep signature verification. The restored default daemon matched the
+CLI with ready safety, drive/capture grants, zero sessions, and the original physical topology.
+`make verify-release` then passed with 1,670 Swift tests, supporting checks, and the 34-tool MCP
+smoke check; `git diff --check` passed. Only audit/backlog records changed in the final worktree.
