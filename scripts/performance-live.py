@@ -373,6 +373,8 @@ def main():
                         del capture
                         pause(1.3)
                     (out / (mode + "-capture.json")).write_text(json.dumps(dict(changingPixels=digests[0] != digests[1])))
+                    if digests[0] == digests[1]:
+                        raise RuntimeError("browser diagnostic captures did not change")
                     if not any(row.get("streamRunning") and row.get("frameSinks", 0) > 0
                                and row.get("unoccludedWindows", 0) > 0
                                and (row.get("framesPerSecond") or 0) > 1 for row in health_rows):

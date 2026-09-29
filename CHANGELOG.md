@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Require changing capture pixels in animated and scrolling live performance checks, in
+  addition to Viewer frame delivery, so stale screenshots cannot pass those workloads.
+
 - Preserve macOS error codes from Accessibility window-ID lookup and retry only busy-app
   responses within the existing shared budget. Stale, missing, and duplicate identities still
   refuse discovery rather than producing a partial window list.

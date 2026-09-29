@@ -158,3 +158,36 @@ MCP smoke check. `git diff --check` passed.
 Private evidence: `.artifacts/source-live-688e4f1c-20260929T101220Z/`. These remain source
 diagnostics on the unpinned toolchain. The intermittent AX identity fault did not reproduce;
 the animation failure is a separate unresolved problem. No release was published.
+
+
+### Inspected occlusion hypothesis
+
+After inspecting the failed run and verifying physical-only cleanup, a distinct source experiment
+added `--disable-backgrounding-occluded-windows` only to SpaceO's private Chromium launch.
+Chromium's [switch definition](https://raw.githubusercontent.com/chromium/chromium/main/content/public/common/content_switches.cc)
+and [visibility implementation](https://raw.githubusercontent.com/chromium/chromium/main/content/browser/web_contents/web_contents_impl.cc)
+identify it as a test override for occluded visibility. This was a hypothesis, not a supported fix.
+The experiment's base commit and exact patch digest are retained privately.
+
+The experiment also failed: identical animated capture digests, no sustained Viewer frames,
+and no scrolling coverage. Cleanup restored physical-only topology and ready safety in 95.49
+seconds. **The production flag was removed.** No Chrome rendering-policy change is retained,
+and neither failed animation diagnostic closes the original identity issue or qualifies a release.
+The failed experiment is retained under `occlusion-experiment/` within the same private evidence
+directory; it must not be retried as if it were passing validation.
+
+One harness defect was independently corrected: animated/scrolling capture digests were recorded
+but identical images did not themselves fail the test. These workloads now require changing
+capture pixels in addition to sustained Viewer delivery. The experiment exercised that new
+failure path. Five fixture tests and six report tests passed.
+
+
+Final verification after removing the experimental flag and retaining the harness assertion:
+`make verify-release` passed again (1,665 Swift tests, supporting checks, 34-tool MCP smoke),
+`git diff --check` passed, and the rebuilt ad-hoc Viewer passed strict/deep signature verification.
+The final CLI SHA-256 equals the binary used by the passing 36-check matrix. The default daemon
+was restored from its original source path and matches that binary, with drive/capture grants,
+zero sessions, ready display safety, and unchanged physical-only topology. No installation,
+release publication, or security-setting change occurred. The overall hardening goal remains
+active; the open animation, intermittent identity, Electron, and release-qualification gaps are
+not represented as complete.

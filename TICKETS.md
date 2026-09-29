@@ -31,6 +31,17 @@ Status definitions:
   array contents with tables, and bound doctor version-probe pipes. Verification is tracked in
   the same audit record.
 
+### Chromium animation remains stale in physical-display Viewer
+
+- Status: Open
+- September 29 source `688e4f1`: native workflow and all 36 MCP checks passed, but the
+  focused animation workload reproduced unchanged capture pixels and zero sustained Viewer FPS.
+  A separately inspected occlusion-switch experiment also failed and its production flag was
+  removed. Both attempts cleaned up normally; neither is passing qualification evidence.
+- Acceptance: diagnose the rendering/capture boundary, prove animated and scrolling pixels
+  change with sustained physical-Viewer delivery, and verify cleanup and attention isolation.
+- Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
+
 ### Performance soak: Chromium window identity becomes incomplete
 
 - Status: Open
