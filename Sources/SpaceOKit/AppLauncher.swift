@@ -253,6 +253,7 @@ public enum AppLauncher {
             electronControl: electronControl,
             temporaryControlRoot: temporaryControlRoot)
 
+        var launchPhase = LaunchPhase.materialization
         do {
             // This callback is the WAL commit boundary. It runs immediately after SpaceO has an
             // exact process identity, before DevTools discovery, window waits, placement, or any
@@ -261,6 +262,7 @@ public enum AppLauncher {
             try await onMaterialized(app)
             try Task.checkCancellation()
 
+            launchPhase = .containment
             return try await withStartupContainment(install: {
                 guard chromium else { return {} }
                 // A Chromium derivative may ignore --no-startup-window. Install both AX
@@ -271,6 +273,7 @@ public enum AppLauncher {
                 return { watcher.stop() }
             }, operation: {
                 if let profile = temporaryProfile {
+                    launchPhase = .browserReadiness
                     let startupBudget = try DevToolsDeadline(timeout: min(timeout, 10))
                     guard let port = try await waitForDevToolsPort(in: profile,
                         timeout: try startupBudget.remaining(), validate: {
@@ -294,6 +297,7 @@ public enum AppLauncher {
                 // and TextEdit's separate-instance launch never reports hidden at all. Do not burn
                 // slow browser/controller readiness windows while an ordinary first window could be
                 // sitting on the user's display. Detect it at high frequency and place it first.
+                launchPhase = .windowReadiness
                 if allowNoWindows, try !WindowPlacement.hasWindows(of: app.pid) {
                     try Task.checkCancellation()
                     guard app.identity.isAlive else { throw SpaceOError.applicationExited("launched process exited") }
@@ -306,6 +310,7 @@ public enum AppLauncher {
                     timeout: timeout,
                     pollNanoseconds: 25_000_000)
                 try Task.checkCancellation()
+                launchPhase = .initialPlacement
                 _ = try WindowPlacement.placeAll(of: app.pid, into: region)
 
                 // Chromium already has startup containment. Cover native restore prompts before
@@ -322,8 +327,10 @@ public enum AppLauncher {
                 try await Task.sleep(nanoseconds: 300_000_000)
                 try Task.checkCancellation()
                 revealWatcher?.sweep()
+                launchPhase = .settledPlacement
                 _ = try WindowPlacement.placeAll(of: app.pid, into: region)
 
+                launchPhase = .reveal
                 try await reveal(name: app.name, validate: {
                     guard app.identity.isAlive else {
                         throw SpaceOError.applicationExited("launched process exited")
@@ -341,13 +348,14 @@ public enum AppLauncher {
                 try await Task.sleep(nanoseconds: 150_000_000)
                 try Task.checkCancellation()
                 revealWatcher?.sweep()
+                launchPhase = .revealedPlacement
                 let placed = try WindowPlacement.placeAll(of: app.pid, into: region)
                 try Task.checkCancellation()
                 return (app, placed)
             })
         } catch {
             await LaunchFailureCleanup.run(app)
-            throw launchFailure(error, application: app.name)
+            throw launchFailure(error, application: app.name, phase: launchPhase)
         }
     }
 
@@ -364,7 +372,21 @@ public enum AppLauncher {
         return try await operation()
     }
 
-    static func launchFailure(_ error: Error, application: String) -> Error {
+    enum LaunchPhase: String, CaseIterable {
+        case materialization, containment
+        case browserReadiness = "browser readiness"
+        case windowReadiness = "window readiness"
+        case initialPlacement = "initial placement"
+        case settledPlacement = "settled placement"
+        case reveal
+        case revealedPlacement = "post-reveal placement"
+    }
+
+    static func launchFailure(_ error: Error, application: String, phase: LaunchPhase? = nil) -> Error {
+        if let stopped = error as? AXTraversalStopped, let phase {
+            return AXTraversalStopped(reason: stopped.reason,
+                detail: "launch \(phase.rawValue): \(stopped.detail)")
+        }
         guard error is DevToolsDeadline.Exceeded else { return error }
         return SpaceOError.launchFailed(
             "\(application) timed out preparing its private DevTools endpoint or background page")

@@ -24,6 +24,19 @@ final class LaunchPollingTests: XCTestCase {
         return url
     }
 
+    func testLaunchAXFailureNamesPhaseWithoutChangingStopReason() throws {
+        for phase in AppLauncher.LaunchPhase.allCases {
+            for reason: AXTraversalStopReason in [.provider, .deadline, .cancelled] {
+                let original = AXTraversalStopped(reason: reason, detail: "window count unavailable")
+                let error = AppLauncher.launchFailure(original, application: "not included", phase: phase)
+                let stopped = try XCTUnwrap(error as? AXTraversalStopped)
+                XCTAssertEqual(stopped.reason, reason)
+                XCTAssertEqual(stopped.detail, "launch \(phase.rawValue): window count unavailable")
+                XCTAssertFalse(stopped.detail.contains("not included"))
+            }
+        }
+    }
+
     func testChromiumStartupDeadlineHasActionableLaunchError() {
         let error = AppLauncher.launchFailure(DevToolsDeadline.Exceeded(), application: "Test Browser")
         guard case let SpaceOError.launchFailed(message) = error else {

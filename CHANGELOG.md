@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Include the launch phase in Accessibility traversal failures while preserving their stop
+  reason, so readiness failures can be distinguished from pre- and post-reveal placement.
+
 - Confirm placed applications are revealed using a fresh, bounded Accessibility visibility
   read. Cached launch state can no longer skip unhiding and leave browser rendering frozen.
   New managed Chrome windows start inset within their tile to accommodate reveal-time placement.

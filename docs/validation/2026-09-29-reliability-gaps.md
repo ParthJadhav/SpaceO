@@ -536,3 +536,18 @@ sessions. The current production fix has passed deterministic verification, but 
 animated/scrolling workload and post-fix isolation matrix remain outstanding. The explicit
 helper experiment demonstrates a recoverable hidden-window cause; it does not substitute for
 these production-path acceptance checks. Both open Chromium findings remain tracked.
+
+
+## Launch-phase attribution for AX failures
+
+The `3e85de4` window-count failure lacked enough context to identify the failed placement pass.
+The launcher now retains a fixed phase label through materialization, containment, browser and
+window readiness, initial/settled placement, reveal, and post-reveal placement. When an AX
+traversal error escapes, its existing reason and detail are preserved with that phase prefix.
+Cancellation errors and unrelated error types retain their existing mapping. No extra retries,
+application content, window titles, or user-supplied phase labels are introduced. Regression
+coverage checks every phase across provider, deadline, and cancellation stop reasons.
+
+Fifteen focused launch tests passed. Full `make verify-release` passed with 1,677 Swift tests,
+supporting checks, and the 34-tool MCP smoke check. The rebuilt ad-hoc Viewer passed strict/deep
+signature verification and `git diff --check` passed before the next instrumented source run.
