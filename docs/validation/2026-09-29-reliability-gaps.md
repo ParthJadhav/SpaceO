@@ -412,3 +412,12 @@ These tests use synthetic values and do not access WindowServer or capture image
 smoke check. The rebuilt ad-hoc Viewer passed strict/deep signature verification and
 `git diff --check` passed. A focused live matrix follows separately; these deterministic
 checks do not by themselves qualify the new capture behavior on a release candidate.
+
+The supervised full MCP matrix on source `8215cf7` passed all 36 checks, with zero failed,
+blocked, or skipped steps and 44 tool calls in 80.128 seconds. This includes real native and
+Chromium screenshot paths with the new snapshot-owner guard, as well as the existing isolation
+and display-retirement checks. The private evidence is `.artifacts/window-owner-8215cf7/`.
+The wrapper verified zero sessions, original topology, and ready safety before stopping its
+daemon. The matching default daemon was restored with drive/capture grants and zero sessions.
+This source matrix does not establish animated Chromium rendering, process-incarnation identity
+from PID alone, or pinned-toolchain/signed-candidate release qualification.
