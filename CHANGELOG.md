@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Stop Viewer capture when its model is released, including capture startup that completes
+  after the owner disappears. Release the model's repeating refresh timer as well.
+
 - Live XCTest, MCP matrix, and performance runs now refuse to start during memory pressure,
   active swapping, sustained ColorSync CPU activity, or unavailable host-health counters.
   A bounded, read-only preflight reports numeric evidence before any workload starts.

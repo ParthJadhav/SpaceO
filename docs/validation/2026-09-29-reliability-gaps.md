@@ -684,3 +684,28 @@ original failure/cleanup assertions and deterministic behavior. The corrected fu
 virtual displays, or orphans, with ready safety and the original physical topology. Remaining
 ColorSync activity and user-perceived recovery are unresolved; no live run followed the slowdown
 report, and no leak-free long-workload or release-qualification claim is made.
+
+## Viewer capture ownership after model release
+
+Offline inspection found two missing cleanup paths in `ViewerModel`: deinitialization cancelled
+startup but did not stop an already-installed capture session, and successful startup used
+optional chaining to install the result without stopping it when the weak model owner was gone.
+Native completion can outlive cancellation, so dropping the returned reference is insufficient
+as an explicit lifecycle contract even when a concrete provider also checks cancellation.
+
+Two fake-stream regressions reproduced the missing stop calls before the fix, without creating
+displays, launching applications, or using ScreenCaptureKit. They assert that the model actually
+deallocates and that its active or late-returned session receives exactly one stop. The fix
+transfers active cleanup to an asynchronous task retaining only the session and preceding
+teardown barrier; a late start with no model now explicitly stops its result. Deinitialization
+also schedules invalidation of the model's repeating refresh timer on the main actor, matching
+the installing thread as required by [Apple's Timer documentation](https://developer.apple.com/documentation/foundation/timer/invalidate%28%29).
+All 23 focused stream-lifecycle tests pass.
+This is deterministic ownership evidence, not proof of an observed native allocation leak or
+an explanation for system ColorSync activity. Live tests remain paused pending host recovery.
+
+
+Verification passed with `make verify-release`: 1,679 Swift tests, supporting checks, and the
+34-tool MCP smoke check. The final 23-test stream-lifecycle run passed without new warnings;
+the final release Viewer was rebuilt and passed strict/deep codesign verification. No live
+capture was started. `git diff --check` passed before commit.

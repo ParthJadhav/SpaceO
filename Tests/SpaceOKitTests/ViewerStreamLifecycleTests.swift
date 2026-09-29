@@ -7,6 +7,38 @@ import XCTest
 @MainActor
 final class ViewerStreamLifecycleTests: XCTestCase {
 
+    func testModelDeallocationStopsItsActiveCapture() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7)
+        var model: ViewerModel? = makeModel(engine: engine, displays: [display])
+        weak var releasedModel: ViewerModel?
+        releasedModel = model
+        model?.selectedID = display.id
+        try await waitForPendingStarts(engine, count: 1)
+        let session = try await engine.completeFirstStart()
+        try await waitForState(model!, .live)
+
+        model = nil
+        XCTAssertNil(releasedModel)
+        try await waitUntil { session.stopCount == 1 }
+    }
+
+    func testCaptureCompletingAfterModelDeallocationIsStopped() async throws {
+        let engine = FakeViewerStreamEngine()
+        let display = makeDisplay(id: 7)
+        var model: ViewerModel? = makeModel(engine: engine, displays: [display])
+        weak var releasedModel: ViewerModel?
+        releasedModel = model
+        model?.selectedID = display.id
+        try await waitForPendingStarts(engine, count: 1)
+
+        model = nil
+        XCTAssertNil(releasedModel, "startup must not keep its owner alive")
+        // This provider deliberately completes despite cancellation, like a native callback.
+        let session = try await engine.completeFirstStart()
+        try await waitUntil { session.stopCount == 1 }
+    }
+
     func testCaptureFollowsFirstAndLastFrameConsumer() async throws {
         let engine = FakeViewerStreamEngine()
         let display = makeDisplay(id: 7)

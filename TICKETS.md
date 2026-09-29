@@ -93,6 +93,10 @@ Status definitions:
 - Acceptance: verify recovered host responsiveness and quiet counters before resuming live work;
   retain daemon/Viewer footprint trends and leak evidence from a current-source bounded workload.
   An idle zero-leak result does not close workload memory qualification.
+- Offline ownership review found missing Viewer capture stops on model deallocation and late
+  startup completion after owner deallocation. Both paths now explicitly stop capture, with
+  deterministic regressions that failed before the fix. This does not establish the slowdown's
+  cause or close the current-source live memory follow-up.
 - Evidence: [reliability audit](docs/validation/2026-09-29-reliability-gaps.md).
 
 ### Performance soak: Chromium window identity becomes incomplete
