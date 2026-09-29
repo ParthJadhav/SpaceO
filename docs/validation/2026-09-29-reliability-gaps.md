@@ -301,3 +301,8 @@ coverage. Final `make verify-release` passed with 1,670 Swift tests, supporting 
 the 34-tool MCP smoke test. The built CLI help and machine-readable schema include the option,
 and the rebuilt ad-hoc Viewer passed strict/deep signature verification. `git diff --check`
 passed. This change does not resolve the motion-rendering gap.
+
+The idle default daemon was restarted on verified source `9f0713c`. Doctor confirmed the
+matching executable, drive/capture grants, ready safety, zero sessions, and unchanged
+physical-only topology. Private passive-doctor postflight evidence retains the result.
+No applications or virtual displays were created for this restoration.
