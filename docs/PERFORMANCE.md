@@ -132,7 +132,12 @@ a matching candidate daemon on a private socket, validates 16 subscriber handsha
 create/destroy cycles, and 360 repeated captures. Chrome serves only a generated loopback fixture.
 The Viewer starts while only the populated session exists; physical-display placement and
 animated-phase FPS are required. Set `SPACEO_PERF_VIEWER_ONLY=1` for a focused static/animated/
-scrolling diagnostic that skips subscriber/load/capture/churn work. This still creates a virtual
+scrolling diagnostic that skips subscriber/load/capture/churn work. After inspecting a failed
+phase, `SPACEO_PERF_VIEWER_MOTION=animated` or `scrolling` can select one motion path; the default
+`both` runs both. Every selection keeps the static baseline and requires changing capture pixels
+and sustained Viewer frames for its motion phase. Provenance and summary record the requested
+Viewer modes; a focused pass does not cover the omitted mode. The selector is refused for
+daemon-only and native-probe workloads. This still creates a virtual
 display and launches Chrome and Viewer; all live authorization and cleanup rules still apply.
 Existing virtual displays cause preflight refusal. The run retains private logs and reports,
 uses controller leases only in memory, and verifies teardown/topology. On unverified cleanup,

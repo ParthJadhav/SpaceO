@@ -191,3 +191,18 @@ zero sessions, ready display safety, and unchanged physical-only topology. No in
 release publication, or security-setting change occurred. The overall hardening goal remains
 active; the open animation, intermittent identity, Electron, and release-qualification gaps are
 not represented as complete.
+
+
+## Focused motion diagnosis
+
+The animation-first harness prevented any scrolling evidence after an animated-phase failure.
+The harness now accepts a validated `SPACEO_PERF_VIEWER_MOTION` selection (`both`, `animated`, or
+`scrolling`), always retaining the static baseline. Selection is refused for incompatible
+native/daemon-only workloads before live admission. Provenance, raw summary, and derived summary
+carry requested Viewer modes; older evidence reports unknown coverage rather than assuming full
+coverage. Seven fixture and seven report tests pass, including selection refusal and preservation
+of focused coverage. This is diagnostic coverage, not a workaround for frozen pixels.
+
+Verification: `make verify-release` passed (1,665 Swift tests and 34-tool MCP smoke). The
+seven fixture and seven report tests passed after the summary-coverage addition, and
+`git diff --check` passed. Focused live scrolling evidence remains pending.

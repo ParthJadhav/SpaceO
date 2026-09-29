@@ -51,6 +51,16 @@ class Reports(unittest.TestCase):
         self.write('sample-starts.json', {'../private':0})
         with self.assertRaises(ValueError): report.summarize(self.root)
 
+    def test_focused_coverage_survives_summary_and_legacy_coverage_is_unknown(self):
+        self.assertIsNone(report.summarize(self.root)['requestedViewerModes'])
+        summary = json.loads((self.root / 'summary.json').read_text())
+        summary['requestedViewerModes'] = ['static', 'scrolling']
+        self.write('summary.json', summary)
+        self.assertEqual(report.summarize(self.root)['requestedViewerModes'], ['static', 'scrolling'])
+        summary['requestedViewerModes'] = ['animated', 'unknown']
+        self.write('summary.json', summary)
+        with self.assertRaises(ValueError): report.summarize(self.root)
+
     def test_fixture_progress_is_separate_from_viewer_delivery(self):
         self.write('fixture-health.json', [
             dict(mode='animated',visibility='hidden',frames=0),

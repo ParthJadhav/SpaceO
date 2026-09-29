@@ -37,6 +37,19 @@ process.stdout.write(JSON.stringify({animation:box.style.animation,scrolls,rows:
 '''
 
 class Fixture(unittest.TestCase):
+    def test_focused_motion_keeps_static_baseline_and_explicit_coverage(self):
+        self.assertEqual(live.viewer_modes({}), ("static", "animated", "scrolling"))
+        for mode in ("animated", "scrolling"):
+            self.assertEqual(live.viewer_modes({"SPACEO_PERF_VIEWER_MOTION": mode}), ("static", mode))
+
+    def test_invalid_or_inapplicable_motion_is_refused_before_live_work(self):
+        for mode in ("", "static", "animated,scrolling", "unknown"):
+            with self.assertRaises(ValueError):
+                live.viewer_modes({"SPACEO_PERF_VIEWER_MOTION": mode})
+        for workload in ("SPACEO_PERF_DAEMON_ONLY", "SPACEO_PERF_NATIVE_PROBE"):
+            with self.assertRaises(ValueError):
+                live.viewer_modes({"SPACEO_PERF_VIEWER_MOTION": "scrolling", workload: "1"})
+
     def test_safety_stop_does_not_depend_on_logging(self):
         class Suspended(Exception): pass
         with patch.object(live.os, 'write', side_effect=OSError('closed log')), \

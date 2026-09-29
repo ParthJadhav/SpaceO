@@ -6,6 +6,9 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Allow a focused Chromium Viewer animation or scrolling diagnostic while preserving the static
+  baseline and recording omitted coverage in performance reports.
+
 - Require changing capture pixels in animated and scrolling live performance checks, in
   addition to Viewer frame delivery, so stale screenshots cannot pass those workloads.
 
