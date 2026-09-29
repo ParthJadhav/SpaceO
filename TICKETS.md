@@ -35,6 +35,11 @@ Status definitions:
   operator-approved recovery. Normal daemon shutdown then succeeded, with physical topology
   restored. Preserve fail-closed discovery while investigating provider/window lifetime behavior.
 - Evidence: [performance follow-up](docs/validation/2026-09-28-performance-followup.md).
+- September 29: source checkpoint `84f153f` passed all 16 live cases, all 36 MCP matrix checks,
+  and a 400-capture daemon-only static-page workload with verified cleanup. The identity fault
+  did not reproduce; its cause and animated/Viewer reproduction remain unresolved. See the
+  [reliability audit](docs/validation/2026-09-29-reliability-gaps.md). This is source evidence on
+  Xcode 27.0/Swift 6.4, not pinned-toolchain or signed-candidate release qualification.
 - Acceptance: deterministic coverage for the diagnosed cause and a newly authorized supervised
   live soak with successful captures and verified teardown; do not count the stopped run as passing.
 
