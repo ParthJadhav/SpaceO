@@ -6,6 +6,12 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-09-30
+
+Owner-directed release of display-safety safeguards. The WindowServer/ColorSync freeze remains
+unresolved and this version has no new live qualification. See the
+[release notes](docs/RELEASE_NOTES_1.0.5.md) for validation limits and supported scope.
+
 - Monitor host health during production display use. Memory pressure, active swapping, busy
   ColorSync, recent WindowServer incidents, or stale/unavailable observations stop further
   display work and retain owners; failure persists across restarts. Daemon metadata and doctor

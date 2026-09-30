@@ -147,8 +147,9 @@ lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md
 The current source monitors host health during display use and keeps one idle display for
 reuse. Explicit `spaceo pool trim --operator` retires idle displays without ending active
 sessions. New display creation is capped at 4/minute, 12/ten minutes and 32/rolling day.
-These source safeguards still require dedicated-host qualification; they do not establish
-that the WindowServer/ColorSync freeze is fixed or clear the 1.0.4 release hold.
+Version 1.0.5 ships these safeguards by owner direction with an explicit qualification exception.
+The WindowServer/ColorSync freeze remains unresolved, and 1.0.5 has no new live qualification.
+Version 1.0.4 remains unpublished; see the [1.0.5 release notes](docs/RELEASE_NOTES_1.0.5.md).
 
 **Or drive an app yourself from the CLI**
 

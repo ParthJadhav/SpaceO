@@ -146,14 +146,26 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
+Version `1.0.5` is being prepared as an **owner-directed release with a qualification
+exception**. After reviewing the implemented safeguards, 1,701-test verification summary, and
+the explicit statement that the macOS root cause remained unresolved and installation/release
+were held pending another test Mac, the release owner instructed: **"do a release"**.
+That instruction is recorded as GO to construct and publish 1.0.5 with those limitations
+disclosed, conditional on the ordinary source, signing, notarization and distribution checks.
+This exception covers the missing new live/artifact behavior qualification and the open
+RA-057 display-safety finding. It does not turn either into a pass or resolve the incident.
+No new stress test is authorized on the affected Mac. All runtime refusal, signing, immutable
+tag and protected-environment controls remain intact. The exception applies only to 1.0.5;
+future releases retain the default gates above. See the [1.0.5 notes](RELEASE_NOTES_1.0.5.md).
+
 Version `1.0.4` is **on hold and unpublished** after the
 [September 29 freeze investigation](validation/2026-09-29-freeze-investigation.md).
 Its signed candidate was constructed, but the waiting publication workflow was canceled.
 The tag is immutable; passing test assertions did not establish a healthy host, and neither a
 restart nor a quiet counter sample supplies the missing qualification.
 
-Freeze-prevention source changes require qualification on a separately reserved test Mac before
-the hold can be lifted. Do not resume stress or display-churn tests on the affected daily-use Mac.
+Complete freeze-prevention qualification still requires a separately reserved test Mac.
+Do not resume stress or display-churn tests on the affected daily-use Mac.
 Retain preflight and postflight health results plus bounded system-service timeout evidence for
 the entire XCTest, MCP and performance workload. A functional pass with unhealthy or unavailable
 system evidence fails qualification. The source hardening does not qualify the existing 1.0.4
