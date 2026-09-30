@@ -502,6 +502,9 @@ func doctorPayload(report: DoctorReport, ok: Bool, capabilities: Capabilities,
         daemonPayload["displaySafety"] = daemonRuntime.displaySafety.flatMap {
             try? JSONSerialization.jsonObject(with: Wire.encoder.encode($0))
         } ?? NSNull()
+        daemonPayload["hostHealth"] = daemonRuntime.hostHealth.flatMap {
+            try? JSONSerialization.jsonObject(with: Wire.encoder.encode($0))
+        } ?? NSNull()
     }
     var readinessPayload = ((try? JSONSerialization.jsonObject(with: Wire.encoder.encode(report.readiness))) as? [String: Any]) ?? [:]
     if let safety = report.effectiveDisplaySafety, !safety.allowsCreation {

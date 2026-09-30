@@ -68,9 +68,10 @@ public actor SessionManager {
     let waitRuntime: WaitRuntime
     var isShuttingDown = false
     private var idleDisplayRetirement: Task<Void, Never>?
-    /// Debounce rapid create/destroy churn, but never keep an unused monitor for the daemon's
-    /// lifetime. The grace is injectable only through internal initializers so deterministic
-    /// tests do not need to sleep for fifteen seconds.
+    /// Keep one reusable idle framebuffer; retire excess idle displays after a short grace.
+    /// Explicit operator cleanup still retires every empty display.
+    private let retainedIdleDisplayCount: Int
+    let hostHealthCheck: @Sendable () throws -> Void
     private let idleDisplayGraceNanoseconds: UInt64
     private static let defaultIdleDisplayGraceNanoseconds: UInt64 = 15_000_000_000
     private var displayLifecycleFailures: Set<CGDirectDisplayID> = []
@@ -126,6 +127,8 @@ public actor SessionManager {
         self.livePersistence = nil
         self.recoveryCoordinator = nil
         self.onlineDisplayIDs = { Stage.onlineDisplayIDs() }
+        self.retainedIdleDisplayCount = 1
+        self.hostHealthCheck = { try Stage.checkActiveHostHealth() }
         self.idleDisplayGraceNanoseconds = Self.defaultIdleDisplayGraceNanoseconds
         self.janitorEnabled = runJanitor
         guard runJanitor else { return }
@@ -167,6 +170,8 @@ public actor SessionManager {
         self.recoveryCoordinator = recoveryCoordinator
         self.counter = max(0, (ledger?.nextAutomaticSessionNumber ?? 1) - 1)
         self.onlineDisplayIDs = { Stage.onlineDisplayIDs() }
+        self.retainedIdleDisplayCount = 1
+        self.hostHealthCheck = { try Stage.checkActiveHostHealth() }
         self.idleDisplayGraceNanoseconds = Self.defaultIdleDisplayGraceNanoseconds
         self.janitorEnabled = runJanitor
         guard runJanitor else { return }
@@ -185,6 +190,8 @@ public actor SessionManager {
             Stage.onlineDisplayIDs()
         },
         idleDisplayGraceNanoseconds: UInt64 = SessionManager.defaultIdleDisplayGraceNanoseconds,
+        retainedIdleDisplayCount: Int = 1,
+        hostHealthCheck: @escaping @Sendable () throws -> Void = {},
         sessionLauncher: any SessionLaunching = LiveSessionLauncher(),
         recordingRootDirectory: URL? = nil,
         recordingFrameCapture: RecordingFrameCapture = RecordingFrameCapture(),
@@ -211,6 +218,8 @@ public actor SessionManager {
         self.recoveryCoordinator = nil
         self.onlineDisplayIDs = onlineDisplayIDs
         self.idleDisplayGraceNanoseconds = idleDisplayGraceNanoseconds
+        self.retainedIdleDisplayCount = max(0, min(retainedIdleDisplayCount, 1))
+        self.hostHealthCheck = hostHealthCheck
         self.janitorEnabled = runJanitor
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
@@ -230,6 +239,8 @@ public actor SessionManager {
             Stage.onlineDisplayIDs()
         },
         idleDisplayGraceNanoseconds: UInt64 = SessionManager.defaultIdleDisplayGraceNanoseconds,
+        retainedIdleDisplayCount: Int = 1,
+        hostHealthCheck: @escaping @Sendable () throws -> Void = {},
         livePersistence: LiveSessionPersistence,
         recoveryCoordinator: SessionRecoveryCoordinator? = nil,
         sessionLauncher: any SessionLaunching = LiveSessionLauncher(),
@@ -260,6 +271,8 @@ public actor SessionManager {
         self.counter = max(0, (ledger?.nextAutomaticSessionNumber ?? 1) - 1)
         self.onlineDisplayIDs = onlineDisplayIDs
         self.idleDisplayGraceNanoseconds = idleDisplayGraceNanoseconds
+        self.retainedIdleDisplayCount = max(0, min(retainedIdleDisplayCount, 1))
+        self.hostHealthCheck = hostHealthCheck
         self.janitorEnabled = runJanitor
         guard runJanitor else { return }
         Task { [weak self] in await self?.startJanitor() }
@@ -366,6 +379,7 @@ public actor SessionManager {
         reapedApps: Int,
         reclaimableSessionIDs: [String]
     ) {
+        if pool.displayCount > 0 { try hostHealthCheck() }
         var reapedApps = 0
         var reclaimableSessionIDs: [String] = []
         // Detached records have no WindowServer authority. Their separate recovery engine only
@@ -468,6 +482,7 @@ public actor SessionManager {
         orphanGraceSeconds: TimeInterval? = nil,
         exclusive: CGSize?? = nil
     ) throws -> AgentSession {
+        try hostHealthCheck()
         let latestLedger = try livePersistence?.load()
         let durableSessionIDs = Set(latestLedger?.sessions.map(\.id) ?? [])
         let namedID: String?
@@ -977,6 +992,7 @@ public actor SessionManager {
         quitApps: Bool,
         reason: String
     ) throws -> (report: TeardownReport, summary: DestroySummary?) {
+        try hostHealthCheck()
         let started = Date()
         let canonical = try Self.canonicalSessionID(id)
         guard let session = sessions[canonical] else {
@@ -1053,6 +1069,7 @@ public actor SessionManager {
     }
 
     func destroyAllNow(quitApps: Bool, reason: String = "operator") throws -> TeardownReport {
+        if pool.displayCount > 0 { try hostHealthCheck() }
         idleDisplayRetirement?.cancel()
         idleDisplayRetirement = nil
         var report = TeardownReport()
@@ -1087,10 +1104,9 @@ public actor SessionManager {
     }
 
     private func retireIdleDisplays() {
-        // The debounce above absorbs immediate session churn. Once the grace expires, every
-        // empty framebuffer must leave the user's display graph: an unused monitor is still a
-        // visible system setting, consumes WindowServer memory, and can alter app placement.
-        displayLifecycleFailures.formUnion(pool.retireEmptyDisplays())
+        // A failed health check retains owners instead of triggering more graph changes.
+        guard (try? hostHealthCheck()) != nil else { return }
+        displayLifecycleFailures.formUnion(pool.retireEmptyDisplays(keeping: retainedIdleDisplayCount))
         idleDisplayRetirement = nil
     }
 
@@ -1117,7 +1133,18 @@ public actor SessionManager {
 
     private func infosNow() throws -> [SessionInfo] {
         var infos: [SessionInfo] = []
+        let healthy = (try? hostHealthCheck()) != nil
         for session in sessions.values.sorted(by: { $0.createdAt < $1.createdAt }) {
+            if !healthy {
+                if let snapshot = destroyingSessionSnapshots[session.id] {
+                    infos.append(snapshot)
+                } else if !destroyingSessionIDs.contains(session.id) {
+                    var info = SessionInfo(session, includeLiveGeometry: false)
+                    info.lifecycleReason = "host_health_blocked"
+                    infos.append(info)
+                }
+                continue
+            }
             // A destroying session is already represented by its durable cleanup-pending
             // record. Do not race its mutable app/window ledger merely to include a transient
             // live row while teardown runs on a worker.
@@ -1189,7 +1216,15 @@ public actor SessionManager {
         }
     }
 
+    func requireHostHealth(for request: Request) throws {
+        let passive: Set<String> = ["ping", "pool", "session.list", "logging.status", "logging.enable", "logging.disable"]
+        if passive.contains(request.cmd) { return }
+        if request.cmd == "daemon.stop", pool.displayCount == 0 { return }
+        try hostHealthCheck()
+    }
+
     func preflightEvidence(_ request: Request) throws {
+        try requireHostHealth(for: request)
         if request.cmd == "screenshot", request.memory == true, request.output != nil {
             throw SpaceOError.badRequest("memory capture and output export are mutually exclusive")
         }
@@ -1294,6 +1329,7 @@ public actor SessionManager {
 
     func enrich(_ response: inout Response, request: Request, elapsed: Double,
                 includeSessionMetadata: Bool = true, recordingFrames: RecordingFrames? = nil) {
+        guard (try? hostHealthCheck()) != nil else { return }
         let candidate = (response.session?.id ?? request.session).flatMap { sessions[$0] }
             ?? (sessions.count == 1 ? sessions.values.first : nil)
             ?? (request.session == nil ? leaseImpliedSession(request.controllerLeaseID) : nil)
@@ -1393,6 +1429,8 @@ public actor SessionManager {
             commandLease.finish()
             throw SpaceOError.daemonStopping
         }
+
+        try requireHostHealth(for: request)
 
         // Detached-record cleanup has its own serialized recovery coordinator. Keep that less
         // common path on the existing command boundary; this fast path is for a live session.
@@ -2096,6 +2134,20 @@ public actor SessionManager {
                                                 perDisplay: pool.sessionsPerDisplay,
                                                 usage: usage,
                                                 budget: pool.budget)
+            return response
+
+        case "pool.trim":
+            guard request.operatorScope == true else {
+                throw SpaceOError.badRequest("pool.trim changes the shared display pool; pass --operator")
+            }
+            let failed = pool.retireEmptyDisplays()
+            displayLifecycleFailures.formUnion(failed)
+            guard failed.isEmpty else {
+                throw SpaceOError.stageCreationFailed("idle display removal was not confirmed; retain the daemon and inspect display safety")
+            }
+            var response = Response.success("retired idle displays; active sessions retained")
+            response.displays = pool.report()
+            response.usage = pool.usage()
             return response
 
         case "pool.configure":

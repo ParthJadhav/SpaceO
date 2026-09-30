@@ -403,6 +403,7 @@ public final class AgentSession: @unchecked Sendable {
     /// A manager command holds this lease until its response is fully assembled. Direct destroy
     /// calls then wait too, rather than racing the manager merely because they bypass its actor.
     func beginOperation() throws -> SessionLifecycle.Lease {
+        try stage.requireAllocationReady()
         guard let lease = lifecycle.beginOperation() else {
             throw SpaceOError.unknownSession(id)
         }
@@ -1860,6 +1861,9 @@ public final class AgentSession: @unchecked Sendable {
         force: Bool = true,
         timeout: TimeInterval = 6
     ) -> TeardownReport {
+        guard (try? stage.requireHostHealth()) != nil else {
+            return TeardownReport(stillAttachedDisplayIDs: [stage.displayID], pendingSessionIDs: [id])
+        }
         teardownLock.lock()
         defer { teardownLock.unlock() }
 

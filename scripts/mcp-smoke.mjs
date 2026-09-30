@@ -97,7 +97,7 @@ try {
 
   const listed = await request("tools/list");
   const tools = listed.result?.tools ?? [];
-  assert(tools.length === 34, `expected 34 tools, got ${tools.length}`);
+  assert(tools.length === 35, `expected 35 tools, got ${tools.length}`);
   assert(
     new Set(tools.map((tool) => tool.name)).size === tools.length,
     "tool names are not unique",
@@ -299,7 +299,7 @@ try {
   }
 
   console.log(
-    "MCP smoke passed: protocol, 34 tools, validation, mutation safety, and clean exit",
+    "MCP smoke passed: protocol, 35 tools, validation, mutation safety, and clean exit",
   );
 } finally {
   if (!server.killed) server.kill("SIGTERM");

@@ -6,6 +6,14 @@ import XCTest
 /// must translate exactly to the daemon command it stands for and refuse malformed shapes here,
 /// before a round trip, with a message that names the alternative.
 final class MCPToolTranslationTests: XCTestCase {
+    func testPoolTrimRequiresExplicitOperatorScope() throws {
+        let request = try MCPServer.toolRequest(name: "spaceo_pool_trim", arguments: ["operator": true])
+        XCTAssertEqual(request.cmd, "pool.trim")
+        XCTAssertEqual(request.operatorScope, true)
+        for args: [String: Any] in [[:], ["operator": false], ["operator": "true"], ["operator": true, "all": true]] {
+            XCTAssertThrowsError(try MCPServer.toolRequest(name: "spaceo_pool_trim", arguments: args))
+        }
+    }
 
     func testSchemaResourceMatchesToolDiscovery() throws {
         let text = try XCTUnwrap(MCPServer.toolSchemaResourceText)
@@ -17,7 +25,7 @@ final class MCPToolTranslationTests: XCTestCase {
 
     func testToolCatalogueIsExactlyTheAdvertisedSet() throws {
         let names = MCPServer.toolSchemas.compactMap { $0["name"] as? String }
-        XCTAssertEqual(names.count, 34)
+        XCTAssertEqual(names.count, 35)
         XCTAssertEqual(Set(names).count, names.count, "tool names must be unique")
         for tool in [
             "spaceo_open_url", "spaceo_wait_for", "spaceo_find", "spaceo_read_text", "spaceo_run_steps",

@@ -13,10 +13,10 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
 - A per-user file lock admits one SpaceO display-owning process for that process's lifetime.
   Daemon, XCTest, and library users of Stage share the same journal. It does not coordinate old
   binaries, other users, third-party virtual-display software, or direct users of private APIs.
-- A persistent budget allows at most **4 creation attempts per minute and 12 per ten minutes**.
-  Budget refusals report the actual remaining wait across both windows.
+- A persistent budget allows at most **4 creation attempts per minute, 12 per ten minutes,
+  and 32 per rolling day**. Budget refusals report the actual remaining wait across all windows.
   CLI/MCP limits report the effective `maximumCreationsPerMinute` and the persistent
-  `maximumCreationsPerTenMinutes`; stricter pool limits still apply.
+  `maximumCreationsPerTenMinutes` and `maximumCreationsPerDay`; stricter pool limits still apply.
   Attempts, including failures, count before creation; changing pools or restarting the process
   cannot reset the window. `SPACEO_UNRESTRICTED_RESOURCES` does not lift this safety budget.
 - Before a mutation, the journal records it as pending. Success clears pending only after
@@ -53,6 +53,24 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
 - Display identities remain randomized. Persistent identity churn is a plausible contributor
   to ColorSync work, but blindly restoring stable IDs reintroduces a documented stale-display
   failure. The creation budget and existing pool reuse reduce exposure without that regression.
+- The daemon keeps at most one idle display after a 15-second grace, reusing it for later tasks.
+  Exact width and height must match an exclusive request. Idle displays still consume framebuffer
+  memory and appear in macOS display settings. Explicit `spaceo pool trim --operator` (or MCP
+  `spaceo_pool_trim` with `operator: true`) retires only idle displays under the allocation lock;
+  full shutdown retires every display when health and cleanup can be verified.
+- Production Stage use starts a native read-only health monitor before its first display creation.
+  It requires two observations about five seconds apart, normal memory pressure, no new swap,
+  combined ColorSync CPU below 50%, and no recent WindowServer diagnostic reports (this boot or
+  at least 24 hours). These are conservative admission thresholds, not macOS diagnostic criteria.
+  Observations continue every five seconds; a separate watchdog trips on a sampler exceeding
+  three seconds or a passing result older than ten seconds. There is one sampler, no replacement
+  worker, no automatic reset, and no acceptance of a late result after refusal.
+  Active commands, reuse, janitor work, and retirement refuse after failure. The daemon retains
+  display owners instead of exiting or attempting more graph changes. Cached diagnostics remain
+  available; daemon replies and doctor JSON include `hostHealth` without report contents.
+  This does not stop input or OS calls already in flight. A process killed externally still loses
+  its displays. An older daemon must be replaced through the normal verified upgrade procedure
+  before it gains these protections; building the source does not change the running host.
 
 These bounds are application containment. They cannot cancel a call already inside Apple code, guarantee display preservation when an owner exits, or measure ColorSync's
 internal backlog. Process exit still releases its virtual displays. General diagnostic queries

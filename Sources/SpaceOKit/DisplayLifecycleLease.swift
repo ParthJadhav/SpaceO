@@ -20,9 +20,11 @@ public struct DisplaySafetyStatus: Codable, Sendable, Equatable {
 final class DisplayLifecycleLease: @unchecked Sendable {
     static let maximumCreationsPerMinute = 4
     static let maximumCreationsPerTenMinutes = 12
+    static let maximumCreationsPerDay = 32
     private static let inspectionWorker = DisplayLifecycleCoordinator()
     private struct Journal: Codable {
         var attempts: [TimeInterval] = []
+        var dayAttempts: [TimeInterval]?
         var pending = false
         var liveTestPending: Bool?
         var failure: String?
@@ -98,6 +100,9 @@ final class DisplayLifecycleLease: @unchecked Sendable {
               journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
             return .init(state: .unknown, reason: "lifecycle journal is unreadable; inspection is required")
         }
+        guard validDayHistory(journal) else {
+            return .init(state: .unknown, reason: "invalid daily lifecycle history")
+        }
         if let failure = journal.failure {
             return .init(state: .blocked, reason: String(failure.prefix(512)))
         }
@@ -135,7 +140,8 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                 do { journal = try JSONDecoder().decode(Journal.self, from: Data(bytes.prefix(count))) }
                 catch { throw refused("lifecycle journal is unreadable; inspection is required") }
                 guard journal.attempts.count <= Self.maximumCreationsPerTenMinutes,
-                      journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+                      journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }),
+                      Self.validDayHistory(journal) else {
                     throw refused("invalid lifecycle history")
                 }
             }
@@ -152,30 +158,44 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             try requireHealthy()
             if creation {
                 let time = now.timeIntervalSince1970
+                guard time.isFinite, time >= 0 else { throw refused("invalid creation time") }
+                // Seed an older journal with the history it retained; never invent past evidence.
+                var day = journal.dayAttempts ?? journal.attempts
                 // Clock rollback cannot erase history or produce an unlimited admission window.
-                guard journal.attempts.allSatisfy({ $0 <= time }) else {
+                guard journal.attempts.allSatisfy({ $0 <= time }), day.allSatisfy({ $0 <= time }) else {
                     throw refused("clock moved backwards; creation history must age out")
                 }
                 journal.attempts.removeAll { time - $0 >= 600 }
+                day.removeAll { time - $0 >= 86_400 }
+                day.sort()
                 let minute = journal.attempts.filter { time - $0 < 60 }.sorted()
                 let tenMinutes = journal.attempts.sorted()
                 let minuteCap = Self.maximumCreationsPerMinute
                 let tenMinuteCap = Self.maximumCreationsPerTenMinutes
+                let dayCap = Self.maximumCreationsPerDay
                 let minuteWait = minute.count >= minuteCap ? minute[minute.count - minuteCap] + 60 - time : 0
                 let tenMinuteWait = tenMinutes.count >= tenMinuteCap ? tenMinutes[tenMinutes.count - tenMinuteCap] + 600 - time : 0
-                let retryAfter = max(minuteWait, tenMinuteWait)
+                let dayWait = day.count >= dayCap ? day[day.count - dayCap] + 86_400 - time : 0
+                let retryAfter = max(minuteWait, tenMinuteWait, dayWait)
                 guard retryAfter <= 0 else {
                     throw SpaceOError.resourceLimit(
                         kind: .creationRate,
                         detail: "display safety limit: at most \(minuteCap) creation attempts per minute "
-                            + "and \(tenMinuteCap) per ten minutes across SpaceO processes",
+                            + "\(tenMinuteCap) per ten minutes and \(dayCap) per day across SpaceO processes; reuse idle displays",
                         retryAfter: retryAfter)
                 }
                 journal.attempts.append(time)
+                day.append(time)
+                journal.dayAttempts = day
             }
             journal.pending = true
             try save()
         }
+    }
+
+    private static func validDayHistory(_ journal: Journal) -> Bool {
+        guard let day = journal.dayAttempts else { return true }
+        return day.count <= maximumCreationsPerDay && day.allSatisfy { $0.isFinite && $0 >= 0 }
     }
 
     /// Persist admission before any case can fail, including cases that never create a Stage.

@@ -1127,6 +1127,10 @@ public enum MCPServer {
 
             tool("spaceo_pool_status",
                  "Show agent displays, how many sessions each holds, and spare capacity."),
+            tool("spaceo_pool_trim",
+                 "Retire idle displays only. Active sessions remain. Use for explicit operator cleanup; normal tasks should keep the reusable display.",
+                 ["operator": ["type": "boolean", "description": "Must be true to confirm shared-pool operator scope."]],
+                 required: ["operator"]),
         ]
     }()
 
@@ -2099,6 +2103,7 @@ public enum MCPServer {
         case "spaceo_session_resume": allowed = ["session"]
         case "spaceo_session_heartbeat": allowed = ["session"]
         case "spaceo_session_list", "spaceo_pool_status": allowed = []
+        case "spaceo_pool_trim": allowed = ["operator"]
         case "spaceo_session_destroy": allowed = ["session", "all"]
         case "spaceo_open_app": allowed = ["session", "app", "files", "new_instance", "mute_audio"]
         case "spaceo_open_url": allowed = ["session", "window", "url", "new_tab", "timeout", "mute_audio"]
@@ -2696,6 +2701,12 @@ public enum MCPServer {
             request.cmd = "verify"
         case "spaceo_pool_status":
             request.cmd = "pool"
+        case "spaceo_pool_trim":
+            guard try flag("operator") == true else {
+                throw MCPInputError.invalid("pool trim requires operator=true")
+            }
+            request.cmd = "pool.trim"
+            request.operatorScope = true
         default:
             // Exhaustive validation above keeps this unreachable.
             throw MCPInputError.invalid("unknown tool '\(MCPDiagnostic.name(name))'")

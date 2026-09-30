@@ -70,9 +70,18 @@ before display work, and after verified cleanup. Its wrapper provides the requir
 requires a final passing health sample even if all case assertions pass. A health refusal after
 verified cleanup fails the run without suspending a safely retired display owner.
 
+All three harnesses require a final passing health check. The helper also counts WindowServer
+and ColorSync timeout messages from a bounded unified-log query: the preceding five minutes
+for admission, and the entire workload interval for final evidence (`--since` epoch seconds).
+Only the count is emitted. Unavailable, malformed, oversized or timed-out log evidence refuses
+qualification. Per-case checks cannot replace this whole-run evidence. Pool cleanup explicitly
+uses `pool trim --operator` because the daemon normally retains one reusable idle display.
+
 The [September 29 freeze investigation](validation/2026-09-29-freeze-investigation.md) places
 further live qualification and 1.0.4 publication on hold. Passing current counters cannot clear
 that incident or the system errors found during earlier passing workloads.
+The affected Mac remains excluded from further live stress testing; use a separately reserved
+test Mac for the next candidate qualification after reviewing the incident and workload.
 
 A refusal requires inspection and recovery, not a retry loop. If the user reports slowdown,
 pause live work even when this narrow check passes. Verify zero sessions and original topology,

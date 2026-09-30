@@ -114,3 +114,41 @@ are not altered or described as qualified. No further live display work is autho
 quiet sample alone: investigate the system failure and review host recovery and workload scope
 before a new reserved-host qualification. Do not reset ColorSync, delete profiles, kill
 WindowServer, or clear safety state as a substitute for that investigation.
+
+## September 30 source prevention changes
+
+The native production path now establishes host health before Stage creation and continuously
+samples content-free memory, swap, ColorSync CPU and WindowServer diagnostic metadata. One
+sampler and a separate watchdog refuse unhealthy, unknown or stale observations. Refusal trips
+the existing persistent lifecycle circuit and retains display owners. Commands, automatic
+cleanup, window-watcher sweeps and wake revalidation stop admitting further work. Inventory
+remains available without refreshing window Spaces or claiming live geometry while blocked.
+Calls already inside macOS remain outside the guard's ability to cancel.
+
+The daemon now keeps one idle display for reuse, trims excess idle displays after the existing
+grace, and requires exact dimensions when reusing an exclusive display. CLI/MCP idle-only trim
+provides explicit cleanup without ending active sessions. A 32-attempt rolling daily creation
+budget persists across restarts, alongside the shorter budgets. Fresh randomized identities
+remain in place; stale fixed identities are not restored and existing profiles are untouched.
+The daily limit bounds churn, not cumulative lifetime profile count or Apple's internal work.
+
+All live harnesses now require final system-health evidence. A bounded unified-log query counts
+WindowServer/ColorSync timeout messages during the entire workload; a matching timeout or
+unavailable evidence fails qualification. The query emits no log content. A two-second read-only
+format check on this Mac returned valid evidence with zero matching messages; it is not live
+qualification or evidence of recovery.
+
+No display creation, app launch, synthesized input, host installation, safety-state reset or
+publication was performed for these changes. The affected Mac stays excluded from live stress
+testing. Root-cause resolution and qualification of a newly built candidate on a separately
+reserved test Mac remain required. Neither the immutable 1.0.4 tag nor its signed artifact
+contains this follow-up.
+
+Final offline verification passed `make verify-release`: **1,701 Swift tests**, supporting
+Python/shell/JavaScript checks, and the **35-tool MCP smoke test**. Release-security and live-gate
+fixtures, the warnings-as-errors release build, public-file privacy checks, and `git diff --check`
+also passed. Swift compilation used two jobs with the retained Xcode 26.3/Swift 6.2.4 toolchain.
+Private logs are retained under `.artifacts/freeze-prevention-2026-09-30/`. These results cover
+the guard's refusal, stale/stuck sampler and late-result behavior, bounded helper/metadata reads,
+idle reuse and trim, blocked inventory, and daily-budget restart persistence. They contain no
+new claim of system recovery, live compatibility, or leak-free operation on the affected host.

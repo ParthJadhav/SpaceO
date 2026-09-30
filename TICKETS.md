@@ -87,6 +87,11 @@ Status definitions:
 ### Host slowdown after sustained live testing
 
 - Status: Open, release blocking — forced restart and WindowServer/ColorSync stall; bounded application memory observations retained
+- September 30 source hardening: production host-health watchdog and sticky refusal, owner
+  retention, one reusable idle display, exact-dimension reuse, explicit idle-only trim, and
+  32 creation attempts per rolling day. All live harnesses require final system health and
+  timeout-log evidence. Deterministic verification cannot close the system incident; dedicated
+  host qualification and the initiating ColorSync cause remain open.
 - September 29 late follow-up: the owner forced a 23:03 restart after a freeze. The earlier
   20:28 watchdog had 75 WindowServer threads waiting through ColorSync. System sync timeouts
   also occurred during the later passing workloads. Source assertions do not qualify 1.0.4;

@@ -6,8 +6,7 @@ import CoreGraphics
 ///
 /// A virtual display costs the WindowServer a full framebuffer to composite, so one display per
 /// agent does not scale. The pool packs `sessionsPerDisplay` sessions onto each display and
-/// normally retires a display once its last tenant leaves. The daemon may retain an empty one
-/// for a short grace period so rapid session churn reuses a stable framebuffer.
+/// can retain an empty display so successive tasks reuse a stable framebuffer.
 public final class DisplayPool {
 
     /// A tile reservation. The frame is derived from the stage's live bounds rather than
@@ -31,11 +30,13 @@ public final class DisplayPool {
         /// accounting must not depend on a WindowServer round trip that can fail or lag —
         /// the cost was incurred when we asked for the pixels.
         let pixels: Int
+        let size: CGSize
         var taken: Set<Int> = []
-        init(stage: Stage, capacity: Int, pixels: Int) {
+        init(stage: Stage, capacity: Int, size: CGSize) {
             self.stage = stage
             self.capacity = capacity
-            self.pixels = pixels
+            self.size = size
+            self.pixels = Int(size.width) * Int(size.height)
         }
         var isFull: Bool { taken.count >= capacity }
         var isEmpty: Bool { taken.isEmpty }
@@ -121,6 +122,7 @@ public final class DisplayPool {
         // already been invalidated. Never hand that unusable tile to a new session.
         if let existing = displays.first(where: { !$0.isFull && $0.stage.isValid }),
            let index = existing.free {
+            try existing.stage.requireAllocationReady()
             try budget.admitSession(usage: usageLocked())
             existing.taken.insert(index)
             return Slot(stage: existing.stage, index: index, capacity: existing.capacity)
@@ -143,7 +145,7 @@ public final class DisplayPool {
 
         let occupancy = Occupancy(stage: stage,
                                   capacity: sessionsPerDisplay,
-                                  pixels: Int(dimensions.width) * Int(dimensions.height))
+                                  size: CGSize(width: Int(dimensions.width), height: Int(dimensions.height)))
         occupancy.taken.insert(0)
         displays.append(occupancy)
         return Slot(stage: stage, index: 0, capacity: occupancy.capacity)
@@ -166,10 +168,11 @@ public final class DisplayPool {
         // An empty single-session display of the same size, kept warm after its last session
         // ended, is exactly what was asked for. Building another one instead let a create/destroy
         // loop exhaust the display budget with idle framebuffers before the grace retired them.
-        let pixels = Int(dimensions.width) * Int(dimensions.height)
+        let validatedSize = CGSize(width: Int(dimensions.width), height: Int(dimensions.height))
         if let idle = displays.first(where: {
-            $0.isEmpty && $0.capacity == 1 && $0.pixels == pixels && $0.stage.isValid
+            $0.isEmpty && $0.capacity == 1 && $0.size == validatedSize && $0.stage.isValid
         }) {
+            try idle.stage.requireAllocationReady()
             idle.taken.insert(0)
             return Slot(stage: idle.stage, index: 0, capacity: 1)
         }
@@ -182,7 +185,7 @@ public final class DisplayPool {
         try stage.requireAllocationReady()
         AgentActivity.claim(spaces: stage.retirementSpaces)
         let occupancy = Occupancy(stage: stage, capacity: 1,
-                                  pixels: Int(dimensions.width) * Int(dimensions.height))
+                                  size: validatedSize)
         occupancy.taken.insert(0)
         displays.append(occupancy)
         return Slot(stage: stage, index: 0, capacity: 1)

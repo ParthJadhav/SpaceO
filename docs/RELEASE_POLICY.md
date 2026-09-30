@@ -152,6 +152,13 @@ Its signed candidate was constructed, but the waiting publication workflow was c
 The tag is immutable; passing test assertions did not establish a healthy host, and neither a
 restart nor a quiet counter sample supplies the missing qualification.
 
+Freeze-prevention source changes require qualification on a separately reserved test Mac before
+the hold can be lifted. Do not resume stress or display-churn tests on the affected daily-use Mac.
+Retain preflight and postflight health results plus bounded system-service timeout evidence for
+the entire XCTest, MCP and performance workload. A functional pass with unhealthy or unavailable
+system evidence fails qualification. The source hardening does not qualify the existing 1.0.4
+artifact, and the immutable candidate/tag must not be moved to include it.
+
 Version `1.0.3` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3)
 by explicit release-owner direction after the qualification gaps were reported. The owner made a
 release-specific exception for incomplete physical Viewer pointer evidence and the unresolved

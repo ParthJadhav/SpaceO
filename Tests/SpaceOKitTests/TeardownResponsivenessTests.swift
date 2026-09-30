@@ -81,6 +81,7 @@ final class TeardownResponsivenessTests: XCTestCase {
             pool: pool,
             runJanitor: false,
             idleDisplayGraceNanoseconds: 0,
+            retainedIdleDisplayCount: 0,
             sessionFactory: { id, slot in
                 if id == "slow" {
                     return try AgentSession(

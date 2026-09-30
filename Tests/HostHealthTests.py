@@ -14,6 +14,21 @@ spec.loader.exec_module(health)
 
 
 class HostHealthTests(unittest.TestCase):
+    def test_system_timeout_check_is_bounded_content_free_and_fail_closed(self):
+        with mock.patch.object(health, 'read_command', return_value='[{"eventMessage":"private timeout content"}]') as read:
+            self.assertEqual(health.windowserver_timeouts(100, 200), 1)
+            command = read.call_args.args[0]
+            self.assertEqual(command[:4], ['/usr/bin/log', 'show', '--style', 'json'])
+            self.assertIn('--start', command)
+            self.assertIn('--end', command)
+        for value in ['{}', 'null', '[{}]', 'bad json']:
+            with mock.patch.object(health, 'read_command', return_value=value):
+                with self.assertRaises(ValueError): health.windowserver_timeouts(100, 200)
+        with mock.patch.object(health, 'read_command', return_value='[]'):
+            self.assertEqual(health.windowserver_timeouts(100, 200), 0)
+            for since in [float('nan'), 201, -100000]:
+                with self.assertRaises(ValueError): health.windowserver_timeouts(since, 200)
+
     def samples(self):
         a = dict(at=1, pressure=1, swap=dict(Swapins=100, Swapouts=200),
                  services={name: (i+1, 10.) for i, name in enumerate(health.SERVICES)})

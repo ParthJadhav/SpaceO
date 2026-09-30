@@ -87,6 +87,13 @@ reboot, per-case XCTest health checks, and a mandatory wrapper postflight. These
 containment changes, not a fix for the system stall. Raw evidence stays private; see the
 [investigation and causal limits](docs/validation/2026-09-29-freeze-investigation.md).
 
+September 30 source hardening adds a native production health monitor with a separate watchdog,
+sticky refusal and owner retention, one reusable idle display, exact geometry reuse, explicit
+idle-only cleanup, and a persistent 32-per-day creation budget. Qualification also checks bounded
+system timeout log evidence across each workload. These contain further exposure; the ColorSync
+root cause, existing accumulated profiles, and safety on a dedicated qualification Mac remain
+unverified. RA-057 and publication stay open/on hold.
+
 ### RA-055 — September 25 ColorSync/WindowServer stall and display-driver panic
 
 Current qualification update: the [September 28 1.0.1 record](docs/validation/2026-09-28-privacy-release.md)

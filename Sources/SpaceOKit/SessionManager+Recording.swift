@@ -42,6 +42,7 @@ extension SessionManager {
 
     private func captureRecordingFrame(_ session: AgentSession) async -> RecordingFrameEvidence {
         do {
+            try hostHealthCheck()
             try Task.checkCancellation()
             // Evidence collection must not itself mutate pause state or the command outcome.
             guard isolationPreflight()?.verdict != .breached else {

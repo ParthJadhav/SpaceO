@@ -350,8 +350,8 @@ public struct SessionInfo: Codable, Sendable {
     /// apps. Zero means reclamation is due on the janitor's next pass.
     public var graceRemainingSeconds: Double?
 
-    public init(_ session: AgentSession) {
-        let bounds = session.frame
+    public init(_ session: AgentSession, includeLiveGeometry: Bool = true) {
+        let bounds = includeLiveGeometry ? session.frame : .zero
         let controller = session.controllerSnapshot()
         self.id = session.id
         self.generation = session.generation
@@ -368,10 +368,10 @@ public struct SessionInfo: Codable, Sendable {
         self.tileIndex = session.slot.index
         self.tileCapacity = session.slot.capacity
         self.exclusiveDisplay = session.hasExclusiveDisplay
-        self.spaces = session.stage.spaces
-        self.hasOwnSpace = session.stage.hasOwnSpace
+        self.spaces = includeLiveGeometry ? session.stage.spaces : []
+        self.hasOwnSpace = includeLiveGeometry && session.stage.hasOwnSpace
         self.apps = session.apps.map(AppInfo.init)
-        self.windows = session.windows.map { WindowInfo($0, session: session) }
+        self.windows = includeLiveGeometry ? session.windows.map { WindowInfo($0, session: session) } : []
         self.createdAt = session.createdAt
         self.teardownPending = session.teardownPending
         self.runtimeAttached = true
@@ -790,6 +790,7 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     /// Persistent per-user lifecycle cap, including the unrestricted resource mode.
     /// Nil when decoding an older daemon that did not report the ten-minute window.
     public var maximumCreationsPerTenMinutes: Int?
+    public var maximumCreationsPerDay: Int?
     public var minimumTileWidth: Int
     public var minimumTileHeight: Int
     public var maximumDisplayEdge: Int
@@ -805,6 +806,7 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
         maximumCreationsPerMinute = min(budget.maximumCreationsPerMinute,
                                         DisplayLifecycleLease.maximumCreationsPerMinute)
         maximumCreationsPerTenMinutes = DisplayLifecycleLease.maximumCreationsPerTenMinutes
+        maximumCreationsPerDay = DisplayLifecycleLease.maximumCreationsPerDay
         minimumTileWidth = Int(budget.minimumTileSize.width)
         minimumTileHeight = Int(budget.minimumTileSize.height)
         maximumDisplayEdge = budget.maximumDisplayEdge
@@ -1243,6 +1245,7 @@ public struct DaemonRuntimeInfo: Codable, Sendable, Equatable {
     public var draining: Bool?
     /// Current lifecycle circuit/journal state; absent on older daemons.
     public var displaySafety: DisplaySafetyStatus?
+    public var hostHealth: DisplayHostHealthReport?
     /// True when a LaunchAgent supervises this daemon.
     public var supervisedByLaunchd: Bool?
 
