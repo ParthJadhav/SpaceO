@@ -146,9 +146,10 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.5` is being prepared as an **owner-directed release with a qualification
-exception**. After reviewing the implemented safeguards, 1,701-test verification summary, and
-the explicit statement that the macOS root cause remained unresolved and installation/release
+Version `1.0.5` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.5)
+as an **owner-directed release with a qualification exception**. After reviewing the implemented
+safeguards, 1,701-test verification summary, and the explicit statement that the macOS root cause
+remained unresolved and installation/release
 were held pending another test Mac, the release owner instructed: **"do a release"**.
 That instruction is recorded as GO to construct and publish 1.0.5 with those limitations
 disclosed, conditional on the ordinary source, signing, notarization and distribution checks.
@@ -156,7 +157,9 @@ This exception covers the missing new live/artifact behavior qualification and t
 RA-057 display-safety finding. It does not turn either into a pass or resolve the incident.
 No new stress test is authorized on the affected Mac. All runtime refusal, signing, immutable
 tag and protected-environment controls remain intact. The exception applies only to 1.0.5;
-future releases retain the default gates above. See the [1.0.5 notes](RELEASE_NOTES_1.0.5.md).
+future releases retain the default gates above. The exact signed candidate and all five public
+downloads passed provenance and distribution verification. See the [1.0.5 notes](RELEASE_NOTES_1.0.5.md)
+and [publication record](validation/2026-09-30-release-1.0.5.md).
 
 Version `1.0.4` is **on hold and unpublished** after the
 [September 29 freeze investigation](validation/2026-09-29-freeze-investigation.md).
@@ -171,7 +174,7 @@ the entire XCTest, MCP and performance workload. A functional pass with unhealth
 system evidence fails qualification. The source hardening does not qualify the existing 1.0.4
 artifact, and the immutable candidate/tag must not be moved to include it.
 
-Version `1.0.3` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3)
+Version `1.0.3` remains [available as a previous release](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.3), published
 by explicit release-owner direction after the qualification gaps were reported. The owner made a
 release-specific exception for incomplete physical Viewer pointer evidence and the unresolved
 Chromium soak diagnostic; neither is recorded as passing or fixed. The same five signed assets
