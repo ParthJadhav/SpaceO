@@ -87,6 +87,10 @@ Status definitions:
 ### Host slowdown after sustained live testing
 
 - Status: Open, release blocking — forced restart and WindowServer/ColorSync stall; bounded application memory observations retained
+- September 30 publication: 1.0.5 shipped under an owner-directed exception with this incident
+  and missing new live qualification disclosed. Signed public downloads passed distribution
+  verification. The exception is limited to 1.0.5 and does not close this ticket or qualify the
+  safeguards; see the [publication record](docs/validation/2026-09-30-release-1.0.5.md).
 - September 30 source hardening: production host-health watchdog and sticky refusal, owner
   retention, one reusable idle display, exact-dimension reuse, explicit idle-only trim, and
   32 creation attempts per rolling day. All live harnesses require final system health and

@@ -92,7 +92,10 @@ sticky refusal and owner retention, one reusable idle display, exact geometry re
 idle-only cleanup, and a persistent 32-per-day creation budget. Qualification also checks bounded
 system timeout log evidence across each workload. These contain further exposure; the ColorSync
 root cause, existing accumulated profiles, and safety on a dedicated qualification Mac remain
-unverified. RA-057 and publication stay open/on hold.
+unverified. RA-057 remains open and 1.0.4 stays unpublished. Version 1.0.5 was published under
+the owner's explicit release-specific qualification exception, with the unresolved incident and
+missing new live qualification disclosed. Its distribution checks passed; see the
+[publication record](docs/validation/2026-09-30-release-1.0.5.md). This does not close RA-057.
 
 ### RA-055 — September 25 ColorSync/WindowServer stall and display-driver panic
 
