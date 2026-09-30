@@ -12,14 +12,17 @@ final class OwnershipAndBudgetTests: XCTestCase {
             let report = ResourceLimitsReport(budget)
             XCTAssertEqual(report.maximumCreationsPerMinute, 4)
             XCTAssertEqual(report.maximumCreationsPerTenMinutes, 12)
+            XCTAssertEqual(report.maximumCreationsPerDay, 32)
             let encoded = try JSONEncoder().encode(report)
             XCTAssertEqual(try JSONDecoder().decode(ResourceLimitsReport.self, from: encoded), report)
             var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
             legacy.removeValue(forKey: "maximumCreationsPerTenMinutes")
+            legacy.removeValue(forKey: "maximumCreationsPerDay")
             let decoded = try JSONDecoder().decode(ResourceLimitsReport.self,
                 from: JSONSerialization.data(withJSONObject: legacy))
             XCTAssertNil(decoded.maximumCreationsPerTenMinutes,
                          "an older daemon's omitted window must remain unknown")
+            XCTAssertNil(decoded.maximumCreationsPerDay)
         }
         var strict = ResourceBudget.default
         strict.maximumCreationsPerMinute = 2

@@ -15,6 +15,7 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
+| RA-057 | Critical | Investigation open; live work and 1.0.4 publication held | Repeated WindowServer/ColorSync stalls preceded a forced restart; current-counter preflight and passing XCTest assertions missed system degradation |
 | RA-056 | Medium | Prevention and 1.0.1 provenance migration verified; third-party historical copies remain outside repository control | Release examples and routine output repeated signing identity; live CI could publish raw host diagnostics and reports |
 | RA-055 | Critical | Containment implemented; 1.0.1 physical-display scope qualified; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
@@ -71,6 +72,27 @@ unrestricted display-creation and live-testing posture after the September 25 in
 | RA-052 | Low | Fixed | Daemon transport errors lost their message through `localizedDescription`; page-read failures reported as an empty page |
 | RA-053 | Low | Fixed | MCP daemon auto-start resolved a bare/relative argv[0] against the client's working directory |
 | RA-054 | Low | Fixed | Socket line reads issued one syscall per byte; the cursor fence queried the display list twice per event |
+
+### RA-057 — September 29 freeze after passing live assertions
+
+The owner confirmed a forced restart at 23:03. An earlier 20:28 watchdog/spin captured
+WindowServer's main thread unresponsive and 75 sampled threads blocked through ColorSync.
+System synchronization timeouts recurred during later performance, MCP and XCTest work, even
+though the functional assertions and bounded application leak scans passed. The final freeze's
+exact onset and initiating cause are unestablished. The 1.0.4 qualification claim is withdrawn
+and pending publication canceled; its immutable tag and candidate are preserved.
+
+The gate follow-up adds bounded recent WindowServer diagnostic metadata checks that survive
+reboot, per-case XCTest health checks, and a mandatory wrapper postflight. These are test
+containment changes, not a fix for the system stall. Raw evidence stays private; see the
+[investigation and causal limits](docs/validation/2026-09-29-freeze-investigation.md).
+
+September 30 source hardening adds a native production health monitor with a separate watchdog,
+sticky refusal and owner retention, one reusable idle display, exact geometry reuse, explicit
+idle-only cleanup, and a persistent 32-per-day creation budget. Qualification also checks bounded
+system timeout log evidence across each workload. These contain further exposure; the ColorSync
+root cause, existing accumulated profiles, and safety on a dedicated qualification Mac remain
+unverified. RA-057 and publication stay open/on hold.
 
 ### RA-055 — September 25 ColorSync/WindowServer stall and display-driver panic
 

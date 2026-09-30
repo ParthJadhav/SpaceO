@@ -556,7 +556,7 @@ try {
   const listed = await rpc("tools/list");
   const names = (listed.result?.tools ?? []).map((t) => t.name);
   step(`tools/list advertises ${names.length} tools`,
-       names.length === 34 && new Set(names).size === names.length);
+       names.length === 35 && new Set(names).size === names.length);
 
   let displayBaseline;
   if (verifyDisplayCleanup) {
@@ -580,6 +580,8 @@ try {
   }
 
   if (verifyDisplayCleanup) {
+    const trimmed = cliJSON(["pool", "trim", "--operator", "--json"]);
+    step("[cleanup] retire idle displays", trimmed.ok === true, trimmed.error ?? trimmed.message);
     const idle = await waitForIdlePool();
     step("[cleanup] the idle pool retires every virtual display",
          idle?.usage?.sessions === 0 && idle?.usage?.displays === 0,
@@ -613,6 +615,14 @@ try {
   clearTimeout(killTimer);
   if (shutdownTimedOut || server.exitCode !== 0) {
     recordStep("MCP shutdown", false, "MCP did not exit cleanly after input closed");
+  }
+  try {
+    execFileSync("python3", [fileURLToPath(new URL("./host-health.py", import.meta.url)),
+      "--since", String(runStartedAt.getTime() / 1000)],
+      { stdio: ["ignore", "inherit", "inherit"], timeout: 30_000 });
+    recordStep("[postflight] system health", true, "health and system-service timeout checks passed");
+  } catch {
+    recordStep("[postflight] system health", false, "host health refused; functional passes do not qualify this run");
   }
   try { rmSync(fixtureRoot, { recursive: true, force: true }); } catch {}
   const failed = results.filter((r) => r.status === "fail");

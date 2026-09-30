@@ -137,6 +137,15 @@ public final class Stage: @unchecked Sendable {
         DaemonLog.shared.event("display.safety.tripped", ["reason": reason])
     }
     private static let ownership = OwnershipState()
+    private static let hostHealth = DisplayHostHealth(onFailure: { reason in lifecycle.trip(reason) })
+
+    /// Status reads never start sampling or touch the display server.
+    public static func runtimeHostHealthReport() -> DisplayHostHealthReport { hostHealth.report }
+
+    static func checkActiveHostHealth() throws {
+        try lifecycle.check()
+        if hostHealth.hasStarted { try hostHealth.requireHealthy() }
+    }
 
     /// Includes in-memory circuit failures even if the asynchronous journal write is stalled.
     public static func displaySafetyStatus() -> DisplaySafetyStatus {
@@ -243,6 +252,10 @@ public final class Stage: @unchecked Sendable {
                     ?? "virtual-display is unavailable on this host"
             )
         }
+        // Acquire the persistent owner before sampling so refusal survives a daemon restart.
+        // Sampling stays outside the display worker and its mutation deadline.
+        try Self.lifecycle.perform(timeout: 2) { _ in try Self.lease.acquire() }
+        try Self.hostHealth.requireHealthy()
         let published: (SPOVirtualDisplay, [UInt64], CGRect, Double?) = try Self.lifecycle.perform(timeout: 10) { operation in
             try Self.lease.acquire()
             try operation.check()
@@ -379,8 +392,13 @@ public final class Stage: @unchecked Sendable {
     /// Refuse publishing a slot after any lifecycle failure. Allocation uses publication-time
     /// Space IDs, so claiming it never introduces another synchronous display query.
     func requireAllocationReady() throws {
+        try requireHostHealth()
         try coordinator.check()
         guard isValid else { throw SpaceOError.stageCreationFailed("display is no longer valid") }
+    }
+
+    func requireHostHealth() throws {
+        if usesLiveLease { try Self.checkActiveHostHealth() }
     }
 
     /// Drop the display.
@@ -422,6 +440,7 @@ public final class Stage: @unchecked Sendable {
         configuration: () throws -> UserDisplayConfiguration?,
         liveLease: Bool, coordinator: DisplayLifecycleCoordinator
     ) throws -> Bool {
+        if liveLease { try checkActiveHostHealth() }
         let before = try configuration()
         try operation.check()
         if liveLease { try lease.begin(creation: false) }

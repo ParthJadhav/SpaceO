@@ -380,6 +380,7 @@ spaceo — give each agent its own screen, and leave the user's alone.
   spaceo pool                            displays, capacity and occupancy
   spaceo pool set <N> --operator         sessions per display for new displays
   spaceo pool remove <DISPLAY> --operator
+  spaceo pool trim --operator        Retire idle displays; preserve active sessions
                                          end every session on a virtual display and remove it
 
   spaceo run <app> [files...]            launch an app onto a session, no activation
@@ -1008,6 +1009,7 @@ case "daemon":
         var runtime = daemonRuntime
         runtime.draining = await holder.isDraining()
         runtime.displaySafety = Stage.runtimeDisplaySafetyStatus()
+        runtime.hostHealth = Stage.runtimeHostHealthReport()
         response.daemon = runtime
         let elapsed = started.duration(to: .now).components
         DaemonLog.shared.record(
@@ -1300,6 +1302,12 @@ case "pool":
         remote { request in
             request.cmd = "pool.configure"
             request.count = value
+            request.operatorScope = args.bool("operator") ? true : nil
+        }
+    }
+    if args.positional.first == "trim" {
+        remote { request in
+            request.cmd = "pool.trim"
             request.operatorScope = args.bool("operator") ? true : nil
         }
     }

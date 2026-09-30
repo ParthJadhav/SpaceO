@@ -41,6 +41,10 @@ final class IntegrationTests: XCTestCase {
         guard capabilities.canDrive else {
             throw XCTSkip("SpaceO cannot drive sessions on this host: \(capabilities.report)")
         }
+        // Pacing alone does not prove OS recovery. Sample again after the wait, before
+        // display inventory/admission, so a quiet preflight cannot admit the whole long suite.
+        Thread.sleep(forTimeInterval: 90)
+        try requireHostHealth()
         try Stage.beginLiveTestCase()
         admittedLiveCase = true
         let initial = try Stage.liveTestUserConfiguration()
@@ -49,10 +53,6 @@ final class IntegrationTests: XCTestCase {
             return Self.initialUserConfiguration
         }
         try requireUnchangedUserConfiguration(initial)
-        // Conservative pacing for the shared 4/minute, 12/ten-minute creation budget. This is
-        // not proof that ColorSync has settled. The supervisor still bounds a stuck case.
-        Thread.sleep(forTimeInterval: 90)
-        try requireUnchangedUserConfiguration(Stage.liveTestUserConfiguration())
         // After admission, arm the baseline before any remaining prerequisite can skip.
         baselineDisplays = Set(try Stage.liveTestOnlineDisplayIDs())
         hasDisplayBaseline = true
@@ -61,6 +61,15 @@ final class IntegrationTests: XCTestCase {
             SpaceO cannot drive sessions on this host:
             \(capabilities.report)
             """)
+    }
+
+    private func requireHostHealth() throws {
+        do {
+            try LiveHostHealth.requireAdmission()
+        } catch {
+            Self.failureLock.withLock { Self.stopped = true }
+            throw error
+        }
     }
 
     private func requireUnchangedUserConfiguration(_ current: Stage.UserDisplayConfiguration) throws {
@@ -114,6 +123,14 @@ final class IntegrationTests: XCTestCase {
             FileHandle.standardError.write(Data("LIVE SAFETY STOP REQUEST: live cleanup could not be verified; inspect the retained owner\n".utf8))
             raise(SIGSTOP)
             while true { pause() } // A manual SIGCONT is not permission to resume test work.
+        }
+        // Cleanup is already verified. A health refusal must fail qualification and latch
+        // future admission, without suspending an owner whose display has safely retired.
+        do {
+            try requireHostHealth()
+        } catch {
+            Stage.stopLiveDisplayWork()
+            throw error
         }
     }
 

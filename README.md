@@ -57,7 +57,7 @@ use dedicated displays or share a display in separate tiles.
 
 | Capability | MCP tools |
 | --- | --- |
-| Own a workspace | `spaceo_session_create`, `spaceo_session_destroy`, `spaceo_session_list`, `spaceo_pool_status` |
+| Own a workspace | `spaceo_session_create`, `spaceo_session_destroy`, `spaceo_session_list`, `spaceo_pool_status`, `spaceo_pool_trim` |
 | Launch and place apps | `spaceo_open_app`, `spaceo_open_url`, `spaceo_adopt_app`, `spaceo_place_window`, `spaceo_list_windows` |
 | See the interface | `spaceo_read_screen`, `spaceo_find`, `spaceo_read_text`, `spaceo_screenshot`, `spaceo_wait_for` |
 | Act on it | `spaceo_click`, `spaceo_type`, `spaceo_press_key`, `spaceo_scroll`, `spaceo_drag`, `spaceo_menu`, `spaceo_select_text` |
@@ -144,6 +144,12 @@ make install                 # installs ~/.local/bin/spaceo
 
 Virtual-display creation uses runtime capability checks on macOS 14 and later, with bounded
 lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md).
+The current source monitors host health during display use and keeps one idle display for
+reuse. Explicit `spaceo pool trim --operator` retires idle displays without ending active
+sessions. New display creation is capped at 4/minute, 12/ten minutes and 32/rolling day.
+Version 1.0.5 ships these safeguards by owner direction with an explicit qualification exception.
+The WindowServer/ColorSync freeze remains unresolved, and 1.0.5 has no new live qualification.
+Version 1.0.4 remains unpublished; see the [1.0.5 release notes](docs/RELEASE_NOTES_1.0.5.md).
 
 **Or drive an app yourself from the CLI**
 

@@ -6,6 +6,27 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-09-30
+
+Owner-directed release of display-safety safeguards. The WindowServer/ColorSync freeze remains
+unresolved and this version has no new live qualification. See the
+[release notes](docs/RELEASE_NOTES_1.0.5.md) for validation limits and supported scope.
+
+- Monitor host health during production display use. Memory pressure, active swapping, busy
+  ColorSync, recent WindowServer incidents, or stale/unavailable observations stop further
+  display work and retain owners; failure persists across restarts. Daemon metadata and doctor
+  JSON expose content-free health evidence.
+- Keep one idle display for successive tasks and match exclusive reuse by exact dimensions.
+  `spaceo pool trim --operator` / `spaceo_pool_trim` explicitly retire idle displays without
+  ending active sessions. Limit new display identities to 32 creation attempts per rolling day,
+  in addition to the existing shorter limits, including across daemon restarts.
+- Require final system health evidence for XCTest, MCP, and performance qualification. System
+  service timeouts during the run now fail qualification even when functional assertions pass.
+
+- Refuse live-test admission when recent WindowServer diagnostic reports exist, including
+  after a restart. Recheck host health before each live XCTest case and after cleanup, and fail
+  qualification when the final health check refuses even if all test assertions passed.
+
 ## [1.0.4] - 2026-09-29
 
 - Correct retained-window owner lookup to use the single-window Core Graphics API. Missing,

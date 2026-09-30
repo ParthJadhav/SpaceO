@@ -278,6 +278,32 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         try body(directory.appendingPathComponent("safety.json").path)
     }
 
+    func testDailyBudgetSurvivesRestartAndAllowsRetirement() throws {
+        try withJournal { path in
+            var lease: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)
+            try lease!.acquire()
+            let start = Date(timeIntervalSince1970: 1000)
+            for index in 0..<32 {
+                try lease!.begin(creation: true, now: start.addingTimeInterval(Double(index * 601)))
+                try lease!.finish()
+            }
+            lease = nil
+            let restarted = DisplayLifecycleLease(path: path)
+            try restarted.acquire()
+            let refusedAt = start.addingTimeInterval(32 * 601)
+            XCTAssertThrowsError(try restarted.begin(creation: true, now: refusedAt)) { error in
+                guard case SpaceOError.resourceLimit(.creationRate, _, let retry) = error else {
+                    return XCTFail("wrong error: \(error)")
+                }
+                XCTAssertEqual(retry, 86_400 - 32 * 601)
+            }
+            try restarted.begin(creation: false, now: refusedAt)
+            try restarted.finish()
+            try restarted.begin(creation: true, now: start.addingTimeInterval(86_400))
+            try restarted.finish()
+        }
+    }
+
     func testLeaseExcludesOtherOwnersAndRetainsRateHistoryAcrossRestart() throws {
         try withJournal { path in
             var first: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)

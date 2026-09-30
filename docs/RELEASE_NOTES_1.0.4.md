@@ -1,5 +1,9 @@
 # SpaceO 1.0.4 — Background control and reliability fixes
 
+**Publication on hold.** These are prepared notes for an unpublished candidate. The
+[September 29 freeze investigation](validation/2026-09-29-freeze-investigation.md) found
+system display failures during qualification; the pending publication was canceled.
+
 SpaceO 1.0.4 improves background Chromium rendering, tightens capture ownership checks, and
 cleans up Viewer capture resources more reliably. It also makes daemon startup, diagnostics,
 and client configuration handling more predictable when applications or files stop responding.

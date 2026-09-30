@@ -3,6 +3,112 @@ import CoreGraphics
 @testable import SpaceOKit
 
 final class DisplaySafetyTests: XCTestCase {
+    private final class HealthSwitch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var failed = false
+        func trip() { lock.withLock { failed = true } }
+        func check() throws {
+            if lock.withLock({ failed }) { throw SpaceOError.stageCreationFailed("injected health failure") }
+        }
+    }
+
+    func testBlockedSessionInventoryRemainsAvailableWithoutRefreshingGeometry() async throws {
+        let health = HealthSwitch()
+        let backing = DisplayBacking(displayID: 90_080)
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [backing.displayID] })
+        let pool = DisplayPool(stageFactory: { _, _, _, _ in stage })
+        let manager = SessionManager(pool: pool, runJanitor: false,
+            hostHealthCheck: { try health.check() }, sessionFactory: { AgentSession(id: $0, slot: $1) })
+        let created = await manager.handle(TestController.createRequest())
+        XCTAssertTrue(created.ok, created.error ?? "")
+        health.trip()
+        let inventory = await manager.handle(TestController.request("session.list"))
+        XCTAssertTrue(inventory.ok, inventory.error ?? "")
+        XCTAssertEqual(inventory.sessions?.count, 1)
+        XCTAssertEqual(inventory.sessions?.first?.lifecycleReason, "host_health_blocked")
+        XCTAssertEqual(inventory.sessions?.first?.width, 0)
+        XCTAssertEqual(inventory.sessions?.first?.spaces, [])
+        let destroyed = await manager.handle(TestController.request("session.destroy"))
+        XCTAssertFalse(destroyed.ok)
+        XCTAssertEqual(pool.sessionCount, 1)
+        XCTAssertEqual(backing.invalidationCount, 0)
+    }
+
+    func testDefaultManagerKeepsOneIdleDisplayAndOperatorCanTrimIt() async throws {
+        let backing = DisplayBacking(displayID: 90_050)
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { backing.isAttached ? [backing.displayID] : [] })
+        var creations = 0
+        let pool = DisplayPool(stageFactory: { _, _, _, _ in creations += 1; return stage })
+        let manager = SessionManager(pool: pool, runJanitor: false,
+            idleDisplayGraceNanoseconds: 1_000_000,
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        for _ in 0..<3 {
+            let created = await manager.handle(TestController.createRequest())
+            XCTAssertTrue(created.ok, created.error ?? "")
+            let destroyed = await manager.handle(TestController.request("session.destroy"))
+            XCTAssertTrue(destroyed.ok, destroyed.error ?? "")
+            try await Task.sleep(for: .milliseconds(20))
+            XCTAssertEqual(pool.displayCount, 1)
+            XCTAssertEqual(backing.invalidationCount, 0)
+        }
+        XCTAssertEqual(creations, 1)
+        let refused = await manager.handle(Request(cmd: "pool.trim"))
+        XCTAssertFalse(refused.ok)
+        var trim = Request(cmd: "pool.trim")
+        trim.operatorScope = true
+        let trimmed = await manager.handle(trim)
+        XCTAssertTrue(trimmed.ok, trimmed.error ?? "")
+        XCTAssertEqual(pool.displayCount, 0)
+        XCTAssertEqual(backing.invalidationCount, 1)
+    }
+
+    func testTrimPreservesActiveReservationsAndHealthFailurePreservesAllOwners() async throws {
+        var nextID: UInt32 = 90_060
+        let pool = DisplayPool(stageFactory: { _, _, _, _ in
+            nextID += 1
+            let backing = DisplayBacking(displayID: nextID)
+            return Stage(testingBacking: backing, onlineDisplayIDs: { backing.isAttached ? [backing.displayID] : [] })
+        })
+        let active = try pool.allocate()
+        let idle = try pool.allocate()
+        XCTAssertTrue(pool.release(idle, retainEmpty: true))
+        let manager = SessionManager(pool: pool, runJanitor: false,
+            hostHealthCheck: { throw SpaceOError.stageCreationFailed("injected unhealthy host") },
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        for cmd in ["session.create", "session.destroy", "pool.trim", "pool.remove", "daemon.stop", "screenshot", "click"] {
+            var request = Request(cmd: cmd)
+            request.operatorScope = true
+            let result = await manager.handle(request)
+            XCTAssertFalse(result.ok, cmd)
+            XCTAssertTrue(result.error?.contains("injected unhealthy host") == true, cmd)
+        }
+        for cmd in ["ping", "pool", "session.list"] {
+            let result = await manager.handle(Request(cmd: cmd))
+            XCTAssertTrue(result.ok, result.error ?? cmd)
+        }
+        XCTAssertEqual(pool.displayCount, 2)
+        XCTAssertTrue(active.stage.isValid)
+        XCTAssertTrue(idle.stage.isValid)
+        XCTAssertTrue(pool.retireEmptyDisplays().isEmpty)
+        XCTAssertEqual(pool.displayCount, 1)
+        XCTAssertEqual(pool.sessionCount, 1)
+        XCTAssertTrue(active.stage.isValid)
+        XCTAssertFalse(idle.stage.isValid)
+    }
+
+    func testExclusiveReuseRequiresDimensionsNotJustArea() throws {
+        var creations = 0
+        let pool = DisplayPool(stageFactory: { _, _, _, _ in
+            creations += 1
+            return Stage(testingBacking: DisplayBacking(displayID: 90_070 + UInt32(creations)), onlineDisplayIDs: { [] })
+        })
+        let first = try pool.allocateExclusive(size: CGSize(width: 1920, height: 1080))
+        XCTAssertTrue(pool.release(first, retainEmpty: true))
+        let second = try pool.allocateExclusive(size: CGSize(width: 1080, height: 1920))
+        XCTAssertEqual(creations, 2)
+        XCTAssertNotEqual(first.stage.displayID, second.stage.displayID)
+    }
+
     private final class DisplayBacking: StageDisplayBacking, @unchecked Sendable {
         let displayID: CGDirectDisplayID
         let bounds = CGRect(x: 2_000, y: 0, width: 1_280, height: 800)
@@ -173,6 +279,7 @@ final class DisplaySafetyTests: XCTestCase {
             pool: pool,
             runJanitor: false,
             idleDisplayGraceNanoseconds: 5_000_000,
+            retainedIdleDisplayCount: 0,
             sessionFactory: { AgentSession(id: $0, slot: $1) })
 
         let created = await manager.handle(TestController.createRequest())
@@ -223,6 +330,7 @@ final class DisplaySafetyTests: XCTestCase {
             pool: pool,
             runJanitor: false,
             idleDisplayGraceNanoseconds: 60_000_000_000,
+            retainedIdleDisplayCount: 0,
             sessionFactory: { AgentSession(id: $0, slot: $1) })
         let created = await manager.handle(TestController.createRequest())
         XCTAssertTrue(created.ok, created.error ?? "")
@@ -263,6 +371,7 @@ final class DisplaySafetyTests: XCTestCase {
             pool: pool,
             runJanitor: false,
             idleDisplayGraceNanoseconds: 50_000_000,
+            retainedIdleDisplayCount: 0,
             sessionFactory: { AgentSession(id: $0, slot: $1) })
 
         let firstCreate = await manager.handle(TestController.createRequest())

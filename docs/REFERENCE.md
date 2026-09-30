@@ -47,6 +47,10 @@ agent displays instead of each spinning up its own.
 `spaceo doctor` and `spaceo pool` report current display and session usage. SpaceO accepts any
 positive, technically representable display geometry and packing density; allocation failures
 from CoreGraphics or WindowServer are returned to the caller.
+The daemon retains one idle display for reuse after a task ends. `spaceo pool trim --operator`
+or MCP `spaceo_pool_trim` with `operator: true` retires idle displays only; active sessions keep
+their reservations. Host-health refusal retains display owners and blocks further display work.
+See [display safety](DISPLAY_SAFETY.md) for the persistent limits and recovery requirements.
 
 The daemon appends every failed request, janitor reclamation, and lifecycle event as one JSON
 line to `~/Library/Logs/SpaceO/daemon.log` (path shown by `spaceo doctor`; override with
@@ -77,7 +81,7 @@ Tools the agent sees: `spaceo_session_create`, `spaceo_session_list`,
 `spaceo_scroll`, `spaceo_move`, `spaceo_drag`, `spaceo_select_text`, `spaceo_type`,
 `spaceo_press_key`, `spaceo_run_steps`, `spaceo_clipboard_set`, `spaceo_clipboard_get`,
 `spaceo_screenshot`, `spaceo_list_windows`, `spaceo_verify_isolation`, `spaceo_pool_status`,
-`spaceo_events`, `spaceo_session_destroy`. The server also publishes the agent playbook as MCP
+`spaceo_pool_trim`, `spaceo_events`, `spaceo_session_destroy`. The server also publishes the agent playbook as MCP
 prompts (`drive-app`, `drive-web`, `hand-off-to-human`) and resources (`spaceo://docs/…`,
 `spaceo://schema`, `spaceo://doctor`); `spaceo skill` prints the same playbook as a `SKILL.md`.
 
@@ -131,6 +135,7 @@ The lease also fences what other clients of the same daemon can see and break: s
 reads (`windows`, `ax`, `screenshot`, `verify`) need the session's lease, `session.list` redacts
 other controllers' app/window detail, and `session.destroy --all`, `daemon.stop`, `pool set`
 and `pool remove` need the explicit `--operator` flag when they would cross controller boundaries.
+`pool trim` always requires that flag, including when every display is idle.
 This is coordination between cooperating agents, not a security boundary — everything on the
 socket shares one uid.
 

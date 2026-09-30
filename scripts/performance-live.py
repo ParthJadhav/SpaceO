@@ -143,6 +143,7 @@ def main():
         raise SystemExit("build the CLI, Viewer bundle and process-resources sampler first")
     if os.environ.get("SPACEO_PERF_NATIVE_PROBE") == "1" and not (ROOT / ".build/performance-metal-probe").is_file():
         raise SystemExit("compile Tests/LiveFixtures/TranscriptProbe.swift as .build/performance-metal-probe first")
+    health_since = time.time()
     with (out / "host-health.json").open("xb") as health_log:
         health = subprocess.run([sys.executable, str(ROOT / "scripts/host-health.py")],
                                 stdout=health_log, timeout=30)
@@ -476,6 +477,7 @@ def main():
                 (out / "fixture-health.json").write_text(json.dumps(fixture_records, indent=2))
             try:
                 if daemon is not None and daemon.poll() is None and not cleanup_errors:
+                    call("pool.trim", operatorScope=True)
                     for _ in range(25):
                         if call("pool").get("usage", {}).get("displays") == 0: break
                         time.sleep(1)
@@ -514,6 +516,12 @@ def main():
                     success = False
                     raise RuntimeError("postflight topology or display safety changed")
                 topology_restored = True
+            with (out / "host-health-postflight.json").open("xb") as health_log:
+                health = subprocess.run([sys.executable, str(ROOT / "scripts/host-health.py"),
+                                         "--since", str(health_since)], stdout=health_log, timeout=30)
+            if health.returncode != 0:
+                success = False
+                sampler_errors.append("postflight system health refused")
             scratch.cleanup()
             (out / "operations.json").write_text(json.dumps(operations, indent=2))
             (out / "summary.json").write_text(json.dumps(dict(ok=success, topologyRestored=topology_restored,

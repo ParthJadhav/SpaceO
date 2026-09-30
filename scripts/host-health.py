@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """Read-only admission check for reserved-host live tests; never resets or kills services."""
 import json
+from datetime import datetime, timezone
 import math
 import os
+from pathlib import Path
 import re
 import selectors
+import stat
 import subprocess
 import sys
 import time
 
 SERVICES = ("/usr/libexec/colorsync.displayservices", "/usr/libexec/colorsyncd")
 MAX_OUTPUT = 1024 * 1024
+MAX_DIAGNOSTIC_ENTRIES = 10000
 
 
 def read_command(command):
@@ -68,6 +72,47 @@ def parse_services(text):
     return result
 
 
+def diagnostic_cutoff(boot_text, now):
+    values = re.findall(r"\bsec\s*=\s*(\d+)\b", boot_text)
+    if len(values) != 1 or not math.isfinite(now) or not 0 < int(values[0]) <= now:
+        raise ValueError("boot time unavailable")
+    # A restart must not immediately erase the admission warning. Keep the whole current
+    # boot, or the last 24 hours when that is longer. This is not an automatic recovery gate.
+    return min(int(values[0]), now - 24 * 3600)
+
+
+def windowserver_diagnostics(roots, since):
+    """Count recent report metadata only; never read or emit diagnostic contents/names."""
+    count = scanned = 0
+    deadline = time.monotonic() + 3
+    for root, required in roots:
+        for directory, must_exist in ((root, required), (root / "Retired", False)):
+            try:
+                info = directory.lstat()
+            except FileNotFoundError:
+                if must_exist:
+                    raise ValueError("diagnostic directory unavailable")
+                continue
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError("diagnostic directory is not a directory")
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    scanned += 1
+                    if scanned > MAX_DIAGNOSTIC_ENTRIES or time.monotonic() > deadline:
+                        raise ValueError("diagnostic scan exceeded budget")
+                    if not (entry.name.startswith(("WindowServer-", "WindowServer_"))
+                            and entry.name.endswith((".ips", ".spin", ".crash", ".diag", ".hang"))):
+                        continue
+                    info = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(info.st_mode) or not math.isfinite(info.st_mtime):
+                        raise ValueError("diagnostic metadata unavailable")
+                    if info.st_mtime >= since:
+                        count += 1
+    if time.monotonic() > deadline:
+        raise ValueError("diagnostic scan exceeded budget")
+    return count
+
+
 def snapshot():
     pressure = read_command(["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"]).strip()
     if pressure not in ("1", "2", "4"):
@@ -83,9 +128,26 @@ def snapshot():
     return dict(at=time.monotonic(), pressure=int(pressure), swap=counters, services=services)
 
 
-def assess(before, after):
+def windowserver_timeouts(since, now):
+    """Keep only a count; matching unified-log content never leaves this helper."""
+    if not all(math.isfinite(value) for value in (since, now)) or not now-86400 <= since <= now:
+        raise ValueError("invalid system-health evidence interval")
+    predicate = ('(process == "WindowServer" OR process == "colorsync.displayservices" '
+                 'OR process == "colorsyncd") AND '
+                 '(eventMessage CONTAINS[c] "timed out" OR eventMessage CONTAINS[c] "timeout")')
+    stamp = lambda value: datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    rows = json.loads(read_command(["/usr/bin/log", "show", "--style", "json", "--info", "--debug",
+                                   "--timezone", "UTC", "--start", stamp(since), "--end", stamp(now),
+                                   "--predicate", predicate]))
+    if not isinstance(rows, list) or any(not isinstance(row, dict) or
+            not isinstance(row.get("eventMessage"), str) for row in rows):
+        raise ValueError("system-health log evidence unavailable")
+    return len(rows)
+
+
+def assess(before, after, diagnostic_reports=0):
     elapsed = after["at"] - before["at"]
-    if not math.isfinite(elapsed) or elapsed < 4:
+    if not math.isfinite(elapsed) or not 4 <= elapsed <= 10:
         raise ValueError("insufficient sampling interval")
     cpu = 0
     for service in SERVICES:
@@ -105,19 +167,38 @@ def assess(before, after):
         reasons.append("colorsync_busy")
     if any(swap.values()):
         reasons.append("swap_activity")
+    if diagnostic_reports:
+        reasons.append("recent_windowserver_diagnostic")
     return dict(schemaVersion=1, admitted=not reasons, reasons=reasons,
                 intervalSeconds=round(elapsed, 3), colorsyncCPUPercent=round(cpu, 2),
                 memoryPressureBefore=before["pressure"], memoryPressureAfter=after["pressure"],
-                swapinsDelta=swap["Swapins"], swapoutsDelta=swap["Swapouts"])
+                swapinsDelta=swap["Swapins"], swapoutsDelta=swap["Swapouts"],
+                windowServerDiagnosticReports=diagnostic_reports)
 
 
 def main():
     try:
-        if sys.platform != "darwin" or len(sys.argv) != 1:
-            raise ValueError("requires macOS; no arguments accepted")
+        if sys.platform != "darwin":
+            raise ValueError("requires macOS")
+        if len(sys.argv) == 1:
+            since = time.time() - 300
+        elif len(sys.argv) == 3 and sys.argv[1] == "--since":
+            since = float(sys.argv[2])
+        else:
+            raise ValueError("expected optional --since epoch-seconds")
+        cutoff = diagnostic_cutoff(read_command(["/usr/sbin/sysctl", "-n", "kern.boottime"]), time.time())
+        roots = [(Path("/Library/Logs/DiagnosticReports"), True),
+                 (Path.home() / "Library/Logs/DiagnosticReports", False)]
+        reports = windowserver_diagnostics(roots, cutoff)
         before = snapshot()
         time.sleep(5)
-        report = assess(before, snapshot())
+        after = snapshot()
+        reports = max(reports, windowserver_diagnostics(roots, cutoff))
+        report = assess(before, after, reports)
+        report["systemServiceTimeouts"] = windowserver_timeouts(since, time.time())
+        if report["systemServiceTimeouts"]:
+            report["reasons"].append("system_service_timeout")
+            report["admitted"] = False
     except (OSError, ValueError, subprocess.SubprocessError):
         # Do not print command output, process identities, or arbitrary exception content.
         print(json.dumps(dict(schemaVersion=1, admitted=False, reasons=["host_health_unknown"])))

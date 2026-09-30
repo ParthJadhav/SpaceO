@@ -49,6 +49,7 @@ struct WindowWatcherDriver {
             throw SpaceOError.applicationExited("process exited before installing its window watcher")
         }
         return Self(pid: pid, validate: {
+            try Stage.checkActiveHostHealth()
             guard identity.isAlive else { throw SpaceOError.applicationExited("window watcher process exited or changed") }
         }, discover: { budget in
             try AXWindowDiscovery.discover(of: pid, app: AX.application(pid),
