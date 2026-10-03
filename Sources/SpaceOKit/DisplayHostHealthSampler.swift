@@ -35,7 +35,7 @@ enum DisplayHostHealthSampler {
                     (FileManager.default.homeDirectoryForCurrentUser
                         .appendingPathComponent("Library/Logs/DiagnosticReports").path, false)],
             since: min(Double(boot.tv_sec), now - 86_400))
-        let counters = try parseServices(readProcessList())
+        let counters = try serviceSample()
         return .init(uptime: ProcessInfo.processInfo.systemUptime, pressure: pressure,
                      swapins: vm.swapins, swapouts: vm.swapouts, services: counters,
                      diagnosticReports: reports)
@@ -64,7 +64,7 @@ enum DisplayHostHealthSampler {
         return value
     }
 
-    static func parseServices(_ text: String) throws -> [String: DisplayHostHealthSample.Service] {
+    static func processServices(_ text: String) throws -> [String: DisplayHostHealthSample.Service] {
         guard text.utf8.count <= 1_048_576 else { throw Unknown() }
         var counters: [String: DisplayHostHealthSample.Service] = [:]
         for line in text.split(separator: "\n") {
@@ -76,8 +76,61 @@ enum DisplayHostHealthSampler {
             let start = fields[1...5].joined(separator: " ")
             counters[name] = .init(pid: pid, start: start, cpuSeconds: try cpuSeconds(String(fields[6])))
         }
+        return counters
+    }
+
+    static func parseServices(_ text: String) throws -> [String: DisplayHostHealthSample.Service] {
+        let counters = try processServices(text)
         guard Set(counters.keys) == Set(services) else { throw Unknown() }
         return counters
+    }
+
+    static func idleService(_ text: String, service: String) throws -> DisplayHostHealthSample.Service {
+        guard text.utf8.count <= 1_048_576, services.contains(service) else { throw Unknown() }
+        var fields: [String: String] = [:]
+        for line in text.split(separator: "\n") where line.hasPrefix("\t") && !line.hasPrefix("\t\t") {
+            let parts = line.dropFirst().split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespaces)
+            let value = parts[1].trimmingCharacters(in: .whitespaces)
+            guard fields[key] == nil else { throw Unknown() }
+            fields[key] = value
+        }
+        guard fields["program"] == service, fields["state"] == "not running",
+              fields["active count"] == "0", fields["last exit reason"] == "JETSAM_REASON_MEMORY_IDLE_EXIT",
+              fields["last jetsam exit details", default: "JETSAM_REASON_MEMORY_IDLE_EXIT"] == "JETSAM_REASON_MEMORY_IDLE_EXIT",
+              fields["properties", default: ""].components(separatedBy: " | ").contains("supports pressured exit"),
+              ["pid", "last terminating signal", "last exit code"].allSatisfy({ fields[$0] == nil }),
+              let raw = fields["runs"], !raw.isEmpty, raw.utf8.count <= 20,
+              raw.allSatisfy({ $0.isASCII && $0.isNumber }), let launches = UInt64(raw) else { throw Unknown() }
+        return .idle(launches: launches)
+    }
+
+    static func serviceSample(
+        read: (String, [String]) throws -> String = { try readHelper(executable: $0, arguments: $1) }
+    ) throws -> [String: DisplayHostHealthSample.Service] {
+        let arguments = ["-axo", "pid=,lstart=,time=,comm="]
+        let running = try processServices(read("/bin/ps", arguments))
+        let missing = Set(services).subtracting(running.keys)
+        if missing.isEmpty { return running }
+        var idle: [String: DisplayHostHealthSample.Service] = [:]
+        for service in services where missing.contains(service) {
+            let label = "com.apple." + service.split(separator: "/").last!
+            idle[service] = try idleService(read("/bin/launchctl", ["print", "system/" + label]), service: service)
+        }
+        let latest = try processServices(read("/bin/ps", arguments))
+        guard Set(latest.keys) == Set(running.keys) else { throw Unknown() }
+        for name in running.keys {
+            guard case let .running(oldPID, oldStart, _) = running[name],
+                  case let .running(pid, start, _) = latest[name],
+                  oldPID == pid, oldStart == start else { throw Unknown() }
+        }
+        var result = latest
+        for (name, state) in idle {
+            guard result[name] == nil else { throw Unknown() }
+            result[name] = state
+        }
+        return result
     }
 
     static func diagnosticReports(roots: [(String, Bool)], since: TimeInterval,
