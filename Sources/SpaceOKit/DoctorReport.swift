@@ -147,6 +147,16 @@ public struct DoctorReport: Sendable {
         return nil
     }
 
+    /// Permission remedies must name the process doing the work. An old or silent daemon
+    /// cannot inherit this terminal's attribution merely because its own is unavailable.
+    public var permissionGrantTarget: String {
+        switch daemon {
+        case .notRunning: return callerAttribution ?? "the terminal or app running spaceo"
+        case .running, .unresponsive:
+            return runtime?.responsibleProcess ?? "the app or executable hosting the daemon"
+        }
+    }
+
     // MARK: - Rendering
 
     static func ids(_ values: [UInt32]) -> String {
@@ -325,7 +335,9 @@ public struct DoctorReport: Sendable {
             safetyBlockers = [Blocker(
                 code: "display_safety_" + safety.state.rawValue,
                 sentence: "Display creation is blocked: " + (safety.reason ?? "lifecycle state is unknown") + ".",
-                next: "Stop display work and inspect docs/DISPLAY_SAFETY.md; restarting does not reset the safety latch.")]
+                next: (safety.reason?.hasPrefix("host health: host_health_unknown") == true
+                    ? "Stop all SpaceO owners (including Viewer and launchd) and inspect docs/DISPLAY_SAFETY.md, then run `spaceo safety clear-host-health --operator`. Recovery refuses unless no owner or SpaceO display remains and host observations pass."
+                    : "Stop display work and inspect docs/DISPLAY_SAFETY.md; restarting does not reset the safety latch."))]
         } else { safetyBlockers = [] }
         if case .unresponsive(let seconds) = daemon {
             return safetyBlockers + [Blocker(
@@ -335,7 +347,7 @@ public struct DoctorReport: Sendable {
                 next: "Retry `spaceo doctor` in a few seconds; if it stays silent, read the daemon "
                     + "log at \(logPath).")]
         }
-        let grantee = runtime?.responsibleProcess ?? "the app that started the daemon"
+        let grantee = permissionGrantTarget
         return safetyBlockers + readiness.blockers.map { code in
             switch code {
             case "daemon_not_running":

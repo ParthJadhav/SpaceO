@@ -399,7 +399,8 @@ func runDoctor() -> Never {
             orphanProfileDirectories: orphanProfileDirectories,
             liveSessionCount: daemonResponse?.usage?.sessions ?? 0,
             daemonUnresponsive: daemonUnresponsive)
-        fixes = applyDoctorRemedies(DoctorRemedy.remedies(for: findings), daemonIsRunning: daemonIsRunning)
+        fixes = applyDoctorRemedies(DoctorRemedy.remedies(for: findings), daemonIsRunning: daemonIsRunning,
+                                   permissionGrantTarget: report.permissionGrantTarget)
     }
 
     if args.hasJSON {
@@ -414,7 +415,8 @@ func runDoctor() -> Never {
 }
 
 /// Runs each confirmed remedy; prose goes through `note` so `--json` stays one object.
-func applyDoctorRemedies(_ remedies: [DoctorRemedy], daemonIsRunning: Bool) -> [[String: Any]] {
+func applyDoctorRemedies(_ remedies: [DoctorRemedy], daemonIsRunning: Bool,
+                         permissionGrantTarget: String) -> [[String: Any]] {
     var results: [[String: Any]] = []
     if remedies.isEmpty { note("\ndoctor --fix: nothing to fix") }
     for remedy in remedies {
@@ -438,7 +440,7 @@ func applyDoctorRemedies(_ remedies: [DoctorRemedy], daemonIsRunning: Bool) -> [
         switch remedy {
         case .openSettingsPane(let pane):
             NSWorkspace.shared.open(pane.url)
-            outcome = "opened System Settings; enable \(ResponsibleProcess.grantPhrase(ResponsibleProcess.attribution())) there"
+            outcome = "opened System Settings; enable \(permissionGrantTarget) there"
         case .restartDaemonWhenIdle:
             // Doctor never passes --now: it waits a bounded minute for sessions to finish, and
             // otherwise leaves the restart to `spaceo daemon restart --operator`.

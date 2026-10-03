@@ -478,4 +478,21 @@ final class CLIScriptingContractTests: XCTestCase {
         XCTAssertEqual(result.status, 1)
     }
 
+    func testSafetyRecoveryRefusalIsRuntimeFailureAndMalformedInvocationRemainsUsage() throws {
+        let directory = fixtureHome.appendingPathComponent("Library/Application Support/SpaceO")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let path = directory.appendingPathComponent("display-safety.json")
+        let original = Data("{\"attempts\":[],\"pending\":false,\"failure\":\"fixture-only safety failure\"}".utf8)
+        try original.write(to: path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+        let refused = try run(["safety", "clear-host-health", "--operator", "--json"])
+        XCTAssertEqual(refused.status, CLIExitCode.failure.rawValue)
+        XCTAssertEqual(try json(refused.stdout)["errorCode"] as? String, "display_creation_failed")
+        XCTAssertEqual(try Data(contentsOf: path), original, "refusal retains the unrelated latch")
+
+        let malformed = try run(["safety", "clear-host-health", "--json"])
+        XCTAssertEqual(malformed.status, CLIExitCode.usage.rawValue)
+        XCTAssertEqual(try json(malformed.stdout)["errorCode"] as? String, "usage_error")
+    }
+
 }

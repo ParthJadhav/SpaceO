@@ -9,13 +9,20 @@ public struct DisplayHostHealthReport: Codable, Sendable, Equatable {
     public var swapinsDelta: UInt64?
     public var swapoutsDelta: UInt64?
     public var windowServerDiagnosticReports: Int?
+    public var unavailableInput: String?
 }
 
 struct DisplayHostHealthSample: Sendable {
-    struct Service: Sendable, Equatable {
-        let pid: Int32
-        let start: String
-        let cpuSeconds: Double
+    /// Launch counts come from launchd for both states, so a launch between samples is visible
+    /// even when no process row exists at either sample.
+    enum Service: Sendable, Equatable {
+        case running(pid: Int32, start: String, cpuSeconds: Double, launches: UInt64)
+        case idle(launches: UInt64)
+
+        var isValid: Bool {
+            guard case let .running(pid, start, cpuSeconds, launches) = self else { return true }
+            return pid > 0 && !start.isEmpty && cpuSeconds.isFinite && cpuSeconds >= 0 && launches >= 1
+        }
     }
     let uptime: TimeInterval
     let pressure: UInt32
@@ -31,14 +38,29 @@ struct DisplayHostHealthSample: Sendable {
               before.swapins <= after.swapins, before.swapouts <= after.swapouts,
               before.diagnosticReports >= 0, after.diagnosticReports >= 0,
               Set(before.services.keys) == Set(DisplayHostHealthSampler.services),
-              Set(after.services.keys) == Set(before.services.keys) else { throw Unknown() }
+              Set(after.services.keys) == Set(DisplayHostHealthSampler.services) else { throw Unknown("sampling_interval_or_counters") }
         var cpu = 0.0
         for name in DisplayHostHealthSampler.services {
-            guard let old = before.services[name], let new = after.services[name],
-                  old.pid > 0, old.pid == new.pid, !old.start.isEmpty, old.start == new.start,
-                  old.cpuSeconds.isFinite, new.cpuSeconds.isFinite,
-                  old.cpuSeconds >= 0, new.cpuSeconds >= old.cpuSeconds else { throw Unknown() }
-            cpu += (new.cpuSeconds - old.cpuSeconds) / elapsed * 100
+            let old = before.services[name]!, new = after.services[name]!
+            guard old.isValid, new.isValid else { throw Unknown("colorsync_service_counter") }
+            switch (old, new) {
+            case let (.running(oldPID, oldStart, oldCPU, oldLaunches), .running(pid, start, newCPU, launches)):
+                guard oldPID == pid, oldStart == start, newCPU >= oldCPU else { throw Unknown("colorsync_service_changed") }
+                guard oldLaunches == launches else { throw Unknown("colorsync_launch_count_changed") }
+                cpu += (newCPU - oldCPU) / elapsed * 100
+            case let (.idle(oldLaunches), .idle(launches)):
+                // No launch between the two launchd reads, so no service CPU in the interval.
+                guard oldLaunches == launches else { throw Unknown("colorsync_launch_count_changed") }
+            case let (.idle(oldLaunches), .running(_, _, newCPU, launches)):
+                // Exactly one launch: its whole lifetime CPU bounds all service work since the
+                // idle read. Any further launch could hide an exited instance's CPU.
+                guard oldLaunches < UInt64.max, launches == oldLaunches + 1 else {
+                    throw Unknown("colorsync_launch_count_changed")
+                }
+                cpu += newCPU / elapsed * 100
+            case (.running, .idle):
+                throw Unknown("colorsync_service_transition")
+            }
         }
         guard cpu.isFinite else { throw Unknown() }
         let swapins = after.swapins - before.swapins, swapouts = after.swapouts - before.swapouts
@@ -54,7 +76,10 @@ struct DisplayHostHealthSample: Sendable {
                      windowServerDiagnosticReports: reports)
     }
 
-    struct Unknown: Error {}
+    struct Unknown: Error {
+        let reason: String
+        init(_ reason: String = "host_health_unknown") { self.reason = reason }
+    }
 }
 
 /// One sampler and an independent watchdog. Nothing here queries or mutates WindowServer.
@@ -94,13 +119,14 @@ final class DisplayHostHealth: @unchecked Sendable {
 
     func requireHealthy() throws {
         start()
-        guard initialDecision.wait(timeout: .now() + 10) == .success else {
+        guard initialDecision.wait(timeout: .now() + 15) == .success else {
             fail("host_health_timeout")
             throw SpaceOError.stageCreationFailed("host health could not be established; inspect display safety")
         }
         let observed = report
         guard observed.state == .ready else {
             throw SpaceOError.stageCreationFailed("host health refused: " + observed.reasons.joined(separator: ", ")
+                + (observed.unavailableInput.map { " (unavailable input: \($0))" } ?? "")
                 + "; retain the display owner and inspect docs/DISPLAY_SAFETY.md")
         }
     }
@@ -132,6 +158,7 @@ final class DisplayHostHealth: @unchecked Sendable {
         worker.async { [weak self] in
             guard let self else { return }
             do { self.accept(try self.sample()) }
+            catch let error as DisplayHostHealthSample.Unknown { self.fail("host_health_unknown", unavailableInput: error.reason) }
             catch { self.fail("host_health_unknown") }
         }
     }
@@ -163,6 +190,9 @@ final class DisplayHostHealth: @unchecked Sendable {
                         current.state = .unknown
                         failed = assessment.reasons.joined(separator: ",")
                     } else { finishInitialDecision() }
+                } catch let error as DisplayHostHealthSample.Unknown {
+                    current.unavailableInput = error.reason
+                    failed = "host_health_unknown"
                 } catch { failed = "host_health_unknown" }
             }
             self.previous = next
@@ -190,17 +220,21 @@ final class DisplayHostHealth: @unchecked Sendable {
         if expired { fail("host_health_stale_or_timed_out") }
     }
 
-    private func fail(_ reason: String) {
+    private func fail(_ reason: String, unavailableInput: String? = nil) {
         let first = lock.withLock { () -> Bool in
             guard current.state != .blocked else { return false }
             current.state = .blocked
+            if let unavailableInput { current.unavailableInput = unavailableInput }
             current.reasons = reason.split(separator: ",").map(String.init)
             timer?.cancel()
             timer = nil
             finishInitialDecision()
             return true
         }
-        if first { onFailure("host health: " + reason) }
+        if first {
+            let input = lock.withLock { current.unavailableInput }
+            onFailure("host health: " + reason + (input.map { " (\($0))" } ?? ""))
+        }
     }
 
     deinit { timer?.cancel() }

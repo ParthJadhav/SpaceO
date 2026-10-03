@@ -15,17 +15,24 @@ import time
 SERVICES = ("/usr/libexec/colorsync.displayservices", "/usr/libexec/colorsyncd")
 MAX_OUTPUT = 1024 * 1024
 MAX_DIAGNOSTIC_ENTRIES = 10000
+# Whole snapshot budget, mirroring the native sampler; each helper gets only what remains.
+SNAPSHOT_BUDGET = 2.5
+IDLE_EXIT = "JETSAM_REASON_MEMORY_IDLE_EXIT"
 
 
-def read_command(command):
+def read_command(command, until=None):
     """Bound diagnostic helpers, which own no displays, by bytes and elapsed time."""
+    deadline = time.monotonic() + 3
+    if until is not None:
+        deadline = min(deadline, until)
+        if deadline - time.monotonic() <= 0:
+            raise ValueError("snapshot exceeded budget")
     child = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                              env=dict(os.environ, LC_ALL="C"))
     try:
         with selectors.DefaultSelector() as selector:
             selector.register(child.stdout, selectors.EVENT_READ)
             data = bytearray()
-            deadline = time.monotonic() + 3
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or not selector.select(remaining):
@@ -58,17 +65,108 @@ def cpu_seconds(value):
 
 
 def parse_services(text):
+    if not text.strip() or len(text.encode("utf-8")) > MAX_OUTPUT:
+        raise ValueError("process list unavailable")
     result = {}
+    saw_process = False
     for line in text.splitlines():
         parts = line.split(None, 2)
-        if len(parts) != 3 or parts[2] not in SERVICES:
+        if len(parts) != 3:
+            if any(line.endswith(service) for service in SERVICES):
+                raise ValueError("invalid service row")
+            continue
+        if not parts[0].isdecimal():
+            raise ValueError("invalid process row")
+        saw_process = True
+        if parts[2] not in SERVICES:
             continue
         pid, counter, service = parts
         if service in result or not pid.isdecimal() or int(pid) <= 0:
             raise ValueError("ambiguous service identity")
         result[service] = (int(pid), cpu_seconds(counter))
-    if set(result) != set(SERVICES):
-        raise ValueError("service counters unavailable")
+    if not saw_process:
+        raise ValueError("process list unavailable")
+    return result
+
+
+def launchd_label(service):
+    return "com.apple." + service.rsplit("/", 1)[1]
+
+
+def launchd_service(text, service):
+    """Return (pid or None, launches) from top-level fields of the exact launchd job only.
+
+    Idle requires a recognized memory-idle exit or the never-started shape; failures,
+    signals, exit codes and other states are unknown rather than guessed idle."""
+    lines = text.split("\n")
+    if (service not in SERVICES or len(text.encode("utf-8")) > MAX_OUTPUT
+            or lines[0] != "system/" + launchd_label(service) + " = {"):
+        raise ValueError("service record invalid")
+    fields = {}
+    for line in lines[1:]:
+        match = re.fullmatch(r"\t([^\t=]+?) = (.*)", line)
+        if not match:
+            continue
+        key, value = match.groups()
+        if key in fields:
+            raise ValueError("ambiguous service record")
+        fields[key] = value
+
+    def number(key):
+        raw = fields.get(key)
+        if raw is not None and not re.fullmatch(r"[0-9]{1,20}", raw):
+            raise ValueError("service record invalid")
+        return None if raw is None else int(raw)
+
+    if fields.get("program") != service:
+        raise ValueError("service program mismatch")
+    runs, pid = number("runs"), number("pid")
+    if runs is None or runs >= 2**64 or (pid is not None and pid >= 2**31):
+        raise ValueError("service record invalid")
+    state = fields.get("state")
+    if state == "running":
+        if pid and runs >= 1 and fields.get("job state") in (None, "running"):
+            return (pid, runs)
+    elif (state == "not running" and pid is None and fields.get("active count") == "0"
+            and "last terminating signal" not in fields):
+        if (runs >= 1 and fields.get("last exit reason") == IDLE_EXIT
+                and "last exit code" not in fields
+                and fields.get("last jetsam exit details", IDLE_EXIT) == IDLE_EXIT
+                and fields.get("job state") in (None, "exited")
+                and "supports pressured exit" in fields.get("properties", "").split(" | ")):
+            return (None, runs)
+        if (runs == 0 and fields.get("last exit code") == "(never exited)"
+                and not {"last exit reason", "last jetsam exit details", "job state"} & set(fields)):
+            return (None, 0)
+    raise ValueError("service state unsupported")
+
+
+def service_sample(until):
+    """Read both launchd jobs around the final process snapshot. A launch and exit may
+    be absent from both process lists, so the job identities/counts must also agree."""
+    command = ["/bin/ps", "-axo", "pid=,time=,comm="]
+    first = parse_services(read_command(command, until))
+    records = {name: launchd_service(read_command(
+        ["/bin/launchctl", "print", "system/" + launchd_label(name)], until), name) for name in SERVICES}
+    latest = parse_services(read_command(command, until))
+    for name in SERVICES:
+        final = launchd_service(read_command(
+            ["/bin/launchctl", "print", "system/" + launchd_label(name)], until), name)
+        if final != records[name]:
+            raise ValueError("service changed during sampling")
+    if time.monotonic() >= until:
+        raise ValueError("snapshot exceeded budget")
+    result = {}
+    for name, (pid, runs) in records.items():
+        if pid is None:
+            if name in first or name in latest:
+                raise ValueError("service changed during sampling")
+            result[name] = (None, None, runs)
+            continue
+        if (name not in first or name not in latest or first[name][0] != pid
+                or latest[name][0] != pid or latest[name][1] < first[name][1]):
+            raise ValueError("service changed during sampling")
+        result[name] = (pid, latest[name][1], runs)
     return result
 
 
@@ -114,18 +212,22 @@ def windowserver_diagnostics(roots, since):
 
 
 def snapshot():
-    pressure = read_command(["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"]).strip()
+    until = time.monotonic() + SNAPSHOT_BUDGET
+    pressure = read_command(["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"], until).strip()
     if pressure not in ("1", "2", "4"):
         raise ValueError("memory pressure unavailable")
-    vm = read_command(["/usr/bin/vm_stat"])
+    vm = read_command(["/usr/bin/vm_stat"], until)
     counters = {}
     for name in ("Swapins", "Swapouts"):
         values = re.findall(r"^" + name + r":\s+(\d+)\.\s*$", vm, re.MULTILINE)
         if len(values) != 1:
             raise ValueError("swap counters unavailable")
         counters[name] = int(values[0])
-    services = parse_services(read_command(["/bin/ps", "-axo", "pid=,time=,comm="]))
-    return dict(at=time.monotonic(), pressure=int(pressure), swap=counters, services=services)
+    services = service_sample(until)
+    at = time.monotonic()
+    if at > until:
+        raise ValueError("snapshot exceeded budget")
+    return dict(at=at, pressure=int(pressure), swap=counters, services=services)
 
 
 def windowserver_timeouts(since, now):
@@ -149,11 +251,26 @@ def assess(before, after, diagnostic_reports=0):
     elapsed = after["at"] - before["at"]
     if not math.isfinite(elapsed) or not 4 <= elapsed <= 10:
         raise ValueError("insufficient sampling interval")
+    if set(before["services"]) != set(SERVICES) or set(after["services"]) != set(SERVICES):
+        raise ValueError("service changed during sampling")
     cpu = 0
     for service in SERVICES:
-        old_pid, old = before["services"][service]
-        pid, new = after["services"][service]
-        if pid != old_pid or new < old or not math.isfinite(new-old):
+        old_pid, old, old_runs = before["services"][service]
+        pid, new, runs = after["services"][service]
+        if old_pid is None and pid is None:
+            # No launch between the launchd reads, so no service CPU in the interval.
+            if runs != old_runs:
+                raise ValueError("service launched during sampling")
+            continue
+        if pid is None or pid <= 0 or not math.isfinite(new) or new < 0:
+            raise ValueError("service changed during sampling")
+        if old_pid is None:
+            # Exactly one launch: its whole CPU bounds all work since the idle read.
+            if runs != old_runs + 1:
+                raise ValueError("service launched during sampling")
+            cpu += new / elapsed * 100
+            continue
+        if pid != old_pid or runs != old_runs or new < old or not math.isfinite(new-old):
             raise ValueError("service changed during sampling")
         cpu += (new-old) / elapsed * 100
     swap = {key: after["swap"][key]-before["swap"][key] for key in ("Swapins", "Swapouts")}

@@ -62,6 +62,12 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   It requires two observations about five seconds apart, normal memory pressure, no new swap,
   combined ColorSync CPU below 50%, and no recent WindowServer diagnostic reports (this boot or
   at least 24 hours). These are conservative admission thresholds, not macOS diagnostic criteria.
+  On-demand ColorSync services contribute zero CPU only with verified launchd idle/never-started
+  state and unchanged launch counts, reconciled with the process list. A single verified new
+  launch contributes its whole lifetime CPU; hidden relaunches, exits, restarts and malformed
+  or unavailable evidence remain unknown. All sampler work shares a bounded deadline.
+  Unknown reports expose the unavailable input in `hostHealth.unavailableInput`.
+  Initial admission waits up to 15 seconds for the two bounded observations.
   Observations continue every five seconds; a separate watchdog trips on a sampler exceeding
   three seconds or a passing result older than ten seconds. There is one sampler, no replacement
   worker, no automatic reset, and no acceptance of a late result after refusal.
@@ -100,6 +106,44 @@ The per-user journal is `~/Library/Application Support/SpaceO/display-safety.jso
 non-private journal fails closed. There is intentionally no automatic reset, expiry of failures,
 or retry loop. Do not unlink it while any SpaceO owner is running or suspended: replacing a locked
 file would defeat cross-process exclusion.
+
+For the false `host health: host_health_unknown` latch produced by 1.0.5 when on-demand
+ColorSync services were absent, upgrade the CLI, stop **all** SpaceO owners (including Viewer
+and the supervised LaunchAgent), then run:
+
+```sh
+spaceo safety clear-host-health --operator
+```
+
+This local operator command locks the existing journal, refuses a pending mutation/live case
+or any other failure class, requires no online SpaceO display and two healthy host observations,
+and archives the old journal before clearing only its failure. It preserves creation budgets
+and the locked file's identity. An owner that relaunches or still holds the file lock prevents
+recovery; stop its supervision first. Doctor remains read-only. Memory pressure, incidents and
+unknown/stale health still refuse; this command neither qualifies the host nor clears RA-057.
+
+Recovery first saves a blocking marker, then commits a private, complete receipt. Its bounded
+wait can end before a stalled filesystem operation returns. A confirmed abort retains the latch;
+an unconfirmed abort reports an undecided outcome, and the recovery worker keeps the lifecycle
+file locked until it finishes. Doctor may report `unknown` while that outcome is undecided.
+Wait for the safety process to fully exit before treating a subsequent doctor result as final.
+If a killed recovery left a staged receipt, doctor remains undecided until a new explicit
+operator recovery takes the journal lock and removes that stale staged file.
+New display creation still requires fresh host-health admission after taking the lifecycle lock.
+This exclusion relies on Darwin retaining the process's file locks until outstanding kernel
+operations finish or process teardown closes its descriptors.
+
+Retain the journal's `.host-health-*.json` archives and `.recovery-*` decision files together
+with the journal; receipts can be needed to interpret its recovery marker. A later owner saves
+the resolved state into the journal. Rolling back to 1.0.5 before that save leaves its older
+reader blocked by the marker and requires the documented operator recovery. Do not delete
+these files during recovery or while any owner is running.
+
+The LaunchAgent uses `KeepAlive`, and Viewer or MCP clients can start a daemon on demand.
+Stopping one daemon PID does not stop those launchers. Quit Viewer and disconnect MCP clients,
+and stop LaunchAgent supervision during the reserved recovery window. Repeated "already
+listening" messages mean another daemon owns the socket; they do not authorize killing it or
+removing its socket/journal. Restore the intended single daemon launcher after recovery.
 
 After a trip, stop further display work, retain the log and journal, and plan recovery on a
 reserved host. Establish that all display-owning SpaceO processes have exited, no orphan display

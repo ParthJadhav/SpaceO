@@ -486,3 +486,15 @@ Known boundaries:
 For readiness, menu-bar apps, explicit placement, stable selectors, memory capture and controller
 handoffs, see [Reliable interactive testing](TRANSCRIPT_WORKFLOWS.md). Discover the current
 command surface offline with `spaceo schema --json` or any subcommand's `--help`.
+
+### Recover a false host-health latch
+
+`spaceo safety clear-host-health --operator` is local operator recovery for an idle
+`host_health_unknown` latch, after upgrading and stopping all display owners. It preserves
+creation budgets and refuses other faults, pending work, online SpaceO displays, or unhealthy
+observations. Follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md) first.
+
+Native `type --replace` and typing into a selection use Accessibility selected-text editing
+with readback. Unsupported native replacement refuses before typing; a failed postcondition
+reports unconfirmed delivery and must not be retried blindly. Screenshot file output creates
+missing parent directories and names the directory if it cannot be created.

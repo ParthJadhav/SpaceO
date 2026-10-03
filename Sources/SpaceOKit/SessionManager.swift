@@ -2721,6 +2721,7 @@ public actor SessionManager {
             let editorBridge = session.electronEditorBridge(for: window)
             let editorStateBefore = await ElectronEffectConfirmation.before(editorBridge)
             var targetingNote: String?
+            var semanticTyping = false
             let selectAll = KeyCombo(keyCode: 0, flags: .maskCommand)
             let returnKey = KeyCombo(keyCode: 36, flags: [])
             let typingRoute = InputRouter.keystrokeRoute(
@@ -2740,12 +2741,21 @@ public actor SessionManager {
                 // Refuses before a single keystroke leaves the process when the application
                 // would route it to a different one of its windows.
                 targetingNote = try requireKeystrokeTarget(window, in: session, action: "type")
-                try InputRouter.prepareForInput(window)
-                // `replace` selects the field's existing contents first (⌘A in the focused
-                // element), so the typed text stands in for them instead of appending.
-                if request.replace == true { try InputRouter.key(selectAll, to: window.pid) }
-                try InputRouter.type(text, to: window.pid)
-                if request.submit == true { try InputRouter.key(returnKey, to: window.pid) }
+                // A declined semantic edit re-proves the same focused target before returning,
+                // so the keystroke fallback below is never aimed at a field that moved.
+                if editorBridge == nil, let driver = try NativeTextInput.driver(for: window) {
+                    semanticTyping = try NativeTextInput.type(text, replace: request.replace == true, driver: driver)
+                } else if request.replace == true {
+                    throw SpaceOError.unsupportedTarget("replace requires a text selection attributable to the requested window; nothing typed")
+                }
+                if !semanticTyping {
+                    try InputRouter.prepareForInput(window)
+                    try InputRouter.type(text, to: window.pid)
+                }
+                if request.submit == true {
+                    if semanticTyping { try InputRouter.prepareForInput(window) }
+                    try InputRouter.key(returnKey, to: window.pid)
+                }
             }
             // A VS Code-family renderer can swallow synthetic keys without a word. Ask its
             // semantic channel whether the document or selection actually moved.
@@ -2753,8 +2763,8 @@ public actor SessionManager {
                 editorBridge, before: editorStateBefore, action: "typing")
             var response = Response(ok: true)
             response.action = ActionReceipt(command: request.cmd, windowID: window.windowID,
-                route: keystrokeReceiptRoute(typingRoute, session: session, window: window),
-                completion: "operation_completed_postcondition_not_asserted", elapsedSeconds: 0)
+                route: semanticTyping ? "accessibility-text" : keystrokeReceiptRoute(typingRoute, session: session, window: window),
+                completion: semanticTyping && request.submit != true ? "postcondition_verified" : "operation_completed_postcondition_not_asserted", elapsedSeconds: 0)
             response.warnings = [targetingNote, typingNote].compactMap { $0 }.nilWhenEmpty
             let now = IsolationSnapshot.capture()
             response.isolation = now.report(comparedTo: before)
@@ -2834,6 +2844,7 @@ public actor SessionManager {
             let editorStateBefore = await ElectronEffectConfirmation.before(editorBridge)
             var targetingNote: String?
             var pasteReceipt: PasteReceipt?
+            var semanticSelection = false
             var brokerMessage: String?
             // Operator keys are the human's and go where the human put them; DevTools carries
             // only taps, so a hold or separate down/up keeps the native route.
@@ -2874,6 +2885,10 @@ public actor SessionManager {
                         try InputRouter.keyEvent(parsedCombo, down: true, to: window.pid)
                         try? await Task.sleep(nanoseconds: UInt64(holdMs) * 1_000_000)
                         try InputRouter.keyEvent(parsedCombo, down: false, to: window.pid)
+                    } else if editorBridge == nil, NativeTextInput.isSelectAll(parsedCombo),
+                              let driver = try NativeTextInput.driver(for: window),
+                              try NativeTextInput.selectAll(driver) {
+                        semanticSelection = true
                     } else {
                         try InputRouter.key(parsedCombo, to: window.pid)
                     }
@@ -2897,10 +2912,10 @@ public actor SessionManager {
                 response.error = brokerMessage
             }
             response.action = ActionReceipt(command: request.cmd, windowID: window.windowID,
-                route: pasteReceipt != nil
+                route: semanticSelection ? "accessibility-text" : pasteReceipt != nil
                     ? actionRoute(request, session: session, target: window)
                     : keystrokeReceiptRoute(keyRoute, session: session, window: window),
-                completion: "operation_completed_postcondition_not_asserted", elapsedSeconds: 0)
+                completion: semanticSelection ? "postcondition_verified" : "operation_completed_postcondition_not_asserted", elapsedSeconds: 0)
             response.warnings = [targetingNote, keyNote].compactMap { $0 }.nilWhenEmpty
             let now = IsolationSnapshot.capture()
             response.isolation = now.report(comparedTo: before)
@@ -3130,7 +3145,14 @@ public actor SessionManager {
             case .file(let data):
                 let path = request.output ?? NSTemporaryDirectory() + "spaceo-\(UUID().uuidString).png"
                 // Publish only a timely result. Workers never write requested output paths.
-                try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+                let destination = URL(fileURLWithPath: path)
+                let parent = destination.deletingLastPathComponent()
+                do {
+                    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+                } catch {
+                    throw SpaceOError.captureFailed("could not create screenshot directory \(parent.path): \(error.localizedDescription)")
+                }
+                try data.write(to: destination, options: .atomic)
                 response.path = path
             }
             response.image = captured.geometry
