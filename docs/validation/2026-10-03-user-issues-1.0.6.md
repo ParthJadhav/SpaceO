@@ -84,3 +84,13 @@ paths; its final requested outcome-reporting and focus checks are implemented wi
 for both commit/abort orders, owner exclusion and focus moving during qualification. Hosted CI, signed candidate construction,
 publication and public-download verification are tracked by the subsequent completion entry.
 Screenshots, process lists, Accessibility content and raw host logs remain private.
+
+## Publication and replies
+
+PR #39 merged as `7617109` after both required checks passed. Immutable tag `v1.0.6` names that
+source; the protected candidate/publication workflow succeeded. The retained signed candidate
+and all five unauthenticated public downloads passed exact provenance and fresh-mount
+distribution verification. Version 1.0.6 is published as latest, and the reporter replies were
+posted and read back. Screenshot issue #29 is closed; #30/#34/#36 await reporter confirmation,
+while #38 and RA-057 remain open. See the [publication record](2026-10-03-release-1.0.6.md) for
+immutable artifact identifiers and reply links.
