@@ -28,6 +28,8 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         var pending = false
         var liveTestPending: Bool?
         var failure: String?
+        /// Token of a host-health recovery whose clearing is decided by its exclusive record.
+        var recovery: String?
     }
 
     private let lock = NSLock()
@@ -95,13 +97,37 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             return .init(state: .unknown, reason: "cannot read a complete lifecycle journal")
         }
         if count == 0 { return .init(state: .ready) }
-        guard let journal = try? JSONDecoder().decode(Journal.self, from: Data(bytes.prefix(count))),
+        guard var journal = try? JSONDecoder().decode(Journal.self, from: Data(bytes.prefix(count))),
               journal.attempts.count <= maximumCreationsPerTenMinutes,
               journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }) else {
             return .init(state: .unknown, reason: "lifecycle journal is unreadable; inspection is required")
         }
         guard validDayHistory(journal) else {
             return .init(state: .unknown, reason: "invalid daily lifecycle history")
+        }
+        if let token = markedRecovery(journal) {
+            var decision = RecoveryDecision.absent
+            // A pending mutation or live case blocks whatever the recovery decides.
+            if !journal.pending, journal.liveTestPending != true {
+                // Unlocked, so a recovery worker may still be running. Its commit renames the
+                // staged record onto the decision path atomically, so inspect staged FIRST: a
+                // staged record already gone with no decision can never commit later, while a
+                // decision entry, once present, is final because the commit rename is exclusive.
+                var stagedInfo = stat()
+                let staged: Bool
+                if lstat(recoveryDecisionPath(path, token) + ".staged", &stagedInfo) == 0 { staged = true }
+                else if errno == ENOENT { staged = false }
+                else { return .init(state: .unknown, reason: "cannot inspect host-health recovery \(token)") }
+                decision = inspectRecoveryDecision(path: path, token: token)
+                if decision == .unreadable {
+                    return .init(state: .unknown, reason: "cannot read the decision of host-health recovery \(token)")
+                }
+                if decision == .absent, staged {
+                    return .init(state: .unknown, reason: "host-health recovery \(token) is undecided; a stalled recovery "
+                        + "may still commit. If no `spaceo safety clear-host-health` process remains, rerun it")
+                }
+            }
+            resolveRecovery(&journal, token: token, committed: decision == .committed)
         }
         if let failure = journal.failure {
             return .init(state: .blocked, reason: String(failure.prefix(512)))
@@ -145,6 +171,11 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                       journal.attempts.allSatisfy({ $0.isFinite && $0 >= 0 }),
                       Self.validDayHistory(journal) else {
                     throw refused("invalid lifecycle history")
+                }
+                // Locked: no recovery worker is live, so only a complete commit record clears.
+                if let token = Self.markedRecovery(journal) {
+                    Self.resolveRecovery(&journal, token: token,
+                                         committed: Self.inspectRecoveryDecision(path: path, token: token) == .committed)
                 }
             }
             descriptor = fd
@@ -203,32 +234,168 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         return failure == "host health: host_health_unknown" || failure.hasPrefix("host health: host_health_unknown (")
     }
 
+    /// Steps whose filesystem calls can stall past a recovery deadline. Tests interpose here.
+    enum HostHealthRecoveryStep: Sendable { case journal, commit, sync, abort }
+    typealias HostHealthRecoveryInterposer = @Sendable (HostHealthRecoveryStep, () throws -> Void) throws -> Void
+    static let directRecoveryStep: HostHealthRecoveryInterposer = { _, step in try step() }
+
     /// Explicit operator recovery only. The original file remains locked and in place; rolling
     /// creation budgets survive, and pending mutations or other failure classes cannot be reset.
-    static func clearHostHealthLatch(path: String = defaultPath, checkDeadline: () throws -> Void = {}, validateHost: () throws -> Void) throws -> String {
+    ///
+    /// No write can be cancelled, so clearing never depends on one finishing in time. The journal
+    /// first persists a blocking marker naming `token`; the latch clears only when a complete,
+    /// pre-synced record is renamed exclusively to the token's decision path. A caller whose
+    /// deadline expires claims that same path first (`abortHostHealthRecovery`), after which a
+    /// late commit fails instead of overwriting the deadline failure.
+    static func clearHostHealthLatch(
+        path: String = defaultPath, token: String = UUID().uuidString,
+        checkDeadline: () throws -> Void = {}, interpose: HostHealthRecoveryInterposer = directRecoveryStep,
+        validateHost: () throws -> Void
+    ) throws -> String {
         let lease = DisplayLifecycleLease(path: path)
         try lease.acquire(allowHostHealthRecovery: true)
         return try lease.lock.withLock {
             guard isRecoverableHostHealthLatch(lease.journal) else {
                 throw lease.refused("only an idle host_health_unknown latch can be cleared")
             }
+            guard UUID(uuidString: token) != nil else { throw lease.refused("invalid recovery token") }
+            // The journal lock excludes every live worker, so an earlier run's staged record can
+            // only be left by a killed process. Removing it lets readers resolve that run as
+            // blocked even if this run fails; its archive and any decision record stay as evidence.
+            if let previous = lease.journal.recovery, UUID(uuidString: previous) != nil,
+               lease.journal.failure == recoveryRetainedFailure(previous) {
+                unlink(recoveryDecisionPath(path, previous) + ".staged")
+            }
             try checkDeadline()
             try validateHost()
             try checkDeadline()
             let archive = path + ".host-health-" + UUID().uuidString + ".json"
-            let backup = try JSONEncoder().encode(lease.journal)
-            let fd = open(archive, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-            guard fd >= 0 else { throw lease.refused("could not archive host-health latch") }
-            defer { close(fd) }
-            let written = backup.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-            guard written == backup.count, fsync(fd) == 0 else {
-                throw lease.refused("could not persist host-health latch archive; latch retained")
-            }
+            try lease.writeNewPrivateFile(archive, try JSONEncoder().encode(lease.journal),
+                                          failure: "could not persist host-health latch archive; latch retained")
+            let decision = recoveryDecisionPath(path, token)
+            let staged = decision + ".staged"
+            var stagedRemains = true
+            defer { if stagedRemains { unlink(staged) } }
+            try lease.writeNewPrivateFile(staged, Data(recoveryCommitRecord(token).utf8),
+                                          failure: "could not stage host-health recovery; latch retained")
             try checkDeadline()
-            lease.journal.failure = nil
-            try lease.save()
+            // Blocked on disk; while the staged record exists, an unlocked reader reports this
+            // recovery as undecided rather than guessing either outcome.
+            lease.journal.failure = recoveryMarker(token)
+            lease.journal.recovery = token
+            try interpose(.journal) { try lease.save() }
+            try checkDeadline()
+            var committed = false
+            do {
+                try interpose(.commit) {
+                    guard renamex_np(staged, decision, UInt32(RENAME_EXCL)) == 0 else {
+                        throw lease.refused(errno == EEXIST ? "host-health recovery was aborted before it committed; latch retained"
+                                            : "could not commit host-health recovery; latch retained")
+                    }
+                    stagedRemains = false
+                    committed = true
+                }
+            } catch {
+                guard committed else { throw error }
+            }
+            // Commit point. Nothing after the rename may throw: the latch is already cleared, and
+            // an error here would make the caller report (or abort) a failure that did not happen.
+            // A lost directory entry after a crash reads as uncommitted: blocked, never ready.
+            try? interpose(.sync) {
+                let directory = open(URL(fileURLWithPath: path).deletingLastPathComponent().path,
+                                     O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+                if directory >= 0 { _ = fsync(directory); close(directory) }
+            }
             return archive
         }
+    }
+
+    enum HostHealthRecoveryAbort: Sendable, Equatable { case aborted, committed, unconfirmed }
+
+    /// Deadline path for a recovery whose worker may still be running. Exclusive creation of the
+    /// decision path either wins, so the worker's exclusive rename can never commit, or finds the
+    /// decision already recorded. The call itself can stall; callers must bound their wait.
+    static func abortHostHealthRecovery(path: String = defaultPath, token: String,
+                                        interpose: HostHealthRecoveryInterposer = directRecoveryStep) -> HostHealthRecoveryAbort {
+        guard UUID(uuidString: token) != nil else { return .unconfirmed }
+        var outcome = HostHealthRecoveryAbort.unconfirmed
+        try? interpose(.abort) {
+            let decision = recoveryDecisionPath(path, token)
+            let fd = open(decision, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            if fd >= 0 { close(fd); outcome = .aborted }
+            else if errno == EEXIST {
+                // Only a complete commit record clears; any other entry already refuses. An entry
+                // that cannot be inspected leaves the outcome unknown.
+                switch inspectRecoveryDecision(path: path, token: token) {
+                case .committed: outcome = .committed
+                case .refused: outcome = .aborted
+                case .absent, .unreadable: outcome = .unconfirmed
+                }
+            }
+        }
+        return outcome
+    }
+
+    private static func recoveryDecisionPath(_ path: String, _ token: String) -> String {
+        path + ".recovery-" + token
+    }
+    private static func recoveryCommitRecord(_ token: String) -> String { "commit \(token)\n" }
+    private static func recoveryMarker(_ token: String) -> String {
+        "host health: recovery \(token) has not committed"
+    }
+
+    private static func recoveryRetainedFailure(_ token: String) -> String {
+        "host health: host_health_unknown (recovery \(token) has not committed)"
+    }
+
+    /// Token of a persisted, still-unresolved recovery marker.
+    private static func markedRecovery(_ journal: Journal) -> String? {
+        guard let token = journal.recovery, UUID(uuidString: token) != nil,
+              journal.failure == recoveryMarker(token) else { return nil }
+        return token
+    }
+
+    /// `refused` is any entry other than a complete private commit record. Because the commit
+    /// rename is exclusive, any entry at the decision path is final.
+    private enum RecoveryDecision { case absent, committed, refused, unreadable }
+
+    private static func inspectRecoveryDecision(path: String, token: String) -> RecoveryDecision {
+        let expected = Array(recoveryCommitRecord(token).utf8)
+        let fd = open(recoveryDecisionPath(path, token), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else {
+            switch errno {
+            case ENOENT: return .absent
+            case ELOOP: return .refused // A symbolic link is never a commit record.
+            default: return .unreadable
+            }
+        }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return .unreadable }
+        guard info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(), info.st_nlink == 1,
+              info.st_mode & 0o077 == 0, info.st_size == off_t(expected.count) else { return .refused }
+        var bytes = [UInt8](repeating: 0, count: expected.count)
+        guard pread(fd, &bytes, bytes.count, 0) == expected.count else { return .unreadable }
+        return bytes == expected ? .committed : .refused
+    }
+
+    /// A recovery marker is ready only with its commit record. An aborted, interrupted or late
+    /// recovery keeps the original latch class, so only another explicit operator run can clear it.
+    private static func resolveRecovery(_ journal: inout Journal, token: String, committed: Bool) {
+        if committed, !journal.pending, journal.liveTestPending != true {
+            journal.failure = nil
+            journal.recovery = nil
+        } else {
+            journal.failure = recoveryRetainedFailure(token)
+        }
+    }
+
+    private func writeNewPrivateFile(_ file: String, _ data: Data, failure: String) throws {
+        let fd = open(file, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw refused(failure) }
+        defer { close(fd) }
+        let written = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        guard written == data.count, fsync(fd) == 0 else { throw refused(failure) }
     }
 
     private static func validDayHistory(_ journal: Journal) -> Bool {

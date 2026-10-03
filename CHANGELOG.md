@@ -13,10 +13,12 @@ All notable user-visible changes are recorded here. SpaceO follows
   new launch its whole CPU total. Hidden relaunches, exits, restarts and invalid data still refuse. Report the unavailable sampler input and allow 15 seconds for startup.
 - Add `spaceo safety clear-host-health --operator` to recover the old idle false-unknown latch
   after stopping all owners. Recovery verifies host health, archives the journal and preserves
-  creation budgets; pending work and other safety failures cannot be cleared.
+  creation budgets; pending work and other safety failures cannot be cleared. A stalled
+  commit reports an undecided outcome while the lifecycle lock prevents new owners.
 - Use Accessibility selection and readback for native `cmd+a`, `type --replace`, and typing
   into a selection. Unsupported replacement refuses before typing; an unconfirmed edit is
-  never repeated through synthetic input.
+  never repeated through synthetic input. Qualification and edits share one deadline, and
+  a changed target refuses fallback.
 - Create missing parent directories for screenshot file output and identify the directory
   when creation fails.
 - Point `doctor --fix` permission guidance at the daemon's reported app or executable rather

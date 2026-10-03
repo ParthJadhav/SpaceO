@@ -19,7 +19,8 @@ parsers required both services, so a successful listing without them threw unkno
 requires verified launchd idle/never-started state and unchanged launch counts before admitting
 absence as zero. Exactly one new launch can use its whole CPU total; hidden relaunches, exits,
 restarts, duplicate identities and malformed/unavailable data still refuse. The process list is
-reconciled before/after launchd observations and all sampling work shares a deadline. This adopts
+reconciled with launchd observations, and launch counts are read again after the final process
+snapshot so a launch/exit between reads cannot disappear. All sampling work shares a deadline. This adopts
 the verified idle-evidence approach from Muness Castle's PR #37 while excluding its headless
 Stage/window changes. Issue #38 remains open for live qualification.
 The startup decision waits 15 seconds, covering two bounded samples five seconds apart.
@@ -27,12 +28,19 @@ The startup decision waits 15 seconds, covering two bounded samples five seconds
 The old journal is never reset automatically. Explicit operator recovery locks it in place,
 refuses active owners, pending mutations/live cases or other failure classes, checks no SpaceO
 display and passing current observations, archives the latch and preserves rolling budgets.
-Deadline checks precede clearing, including after archive persistence. Doctor stays read-only.
+Recovery persists a blocking marker before publishing a complete, pre-synced receipt by
+exclusive rename. A deadline abort exclusively claims the same decision path, preventing a
+late commit from replacing a confirmed abort. If both filesystem operations stall, the result
+is explicitly undecided and the worker retains the lifecycle lock until completion. Doctor
+stays read-only and reports that undecided state as unknown; fresh health admission is still
+required for subsequent creation. Archives, receipts and rolling budgets are retained.
 
 Native synthetic Command-A was never checked before typing. The fix uses exact-window native
 Accessibility selection and selected-text mutation with full bounded readback, UTF-16 range
 validation and no duplicate fallback after a write. Web/secure/editor mirrors are excluded.
 Collapsed-caret typing retains key delivery. Unsupported replacement refuses before typing.
+Qualification, ancestry, target checks and edits share one three-second Accessibility budget.
+Target changes and budget exhaustion refuse rather than falling back to synthetic typing.
 This is deterministic implementation evidence; TextEdit behavior on reporter hosts remains
 subject to their verification.
 
@@ -60,15 +68,19 @@ limits disclosed; future versions retain the default release gates.
 
 ## Verification status
 
-`make verify-release` passed all 1,726 deterministic Swift tests, the supporting Python, shell
-and Node checks, and MCP smoke for 35 tools. The focused health suites passed 16 Swift and
-17 Python tests; guard-removal checks caused the relevant suites to fail and were restored.
+After the hosted review fixes, `make verify-release` passed all 1,745 deterministic Swift tests,
+the supporting Python, shell and Node checks, and MCP smoke for 35 tools. The revised focused
+suites passed 114 Swift tests and 18 Python health tests. Guard-removal checks in the earlier
+health implementation caused the relevant suites to fail and were restored.
 `Tests/ReleaseSecurityTests.sh`, `Tests/LiveTestGateTests.sh`, release configuration/dry-run,
 public-file privacy checks and `git diff --check` passed. Local dry-run credentials are absent;
 signing and notarization remain confined to the protected hosted workflow.
 
 The optimized warnings-as-errors build passed. The ad-hoc Viewer bundle built and passed strict
-deep signature verification without being launched. Final Opus 5.5 review found no remaining
-blockers in health/recovery or native typing. Hosted CI, signed candidate construction,
+deep signature verification without being launched. Hosted review identified persistence,
+Accessibility deadline/focus, CLI exit-status and late ColorSync churn defects; the follow-up
+fixes passed the fresh complete source gate. Opus 5.5 reviewed the high-risk recovery and native
+paths; its final requested outcome-reporting and focus checks are implemented with regressions
+for both commit/abort orders, owner exclusion and focus moving during qualification. Hosted CI, signed candidate construction,
 publication and public-download verification are tracked by the subsequent completion entry.
 Screenshots, process lists, Accessibility content and raw host logs remain private.

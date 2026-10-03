@@ -122,6 +122,23 @@ and the locked file's identity. An owner that relaunches or still holds the file
 recovery; stop its supervision first. Doctor remains read-only. Memory pressure, incidents and
 unknown/stale health still refuse; this command neither qualifies the host nor clears RA-057.
 
+Recovery first saves a blocking marker, then commits a private, complete receipt. Its bounded
+wait can end before a stalled filesystem operation returns. A confirmed abort retains the latch;
+an unconfirmed abort reports an undecided outcome, and the recovery worker keeps the lifecycle
+file locked until it finishes. Doctor may report `unknown` while that outcome is undecided.
+Wait for the safety process to fully exit before treating a subsequent doctor result as final.
+If a killed recovery left a staged receipt, doctor remains undecided until a new explicit
+operator recovery takes the journal lock and removes that stale staged file.
+New display creation still requires fresh host-health admission after taking the lifecycle lock.
+This exclusion relies on Darwin retaining the process's file locks until outstanding kernel
+operations finish or process teardown closes its descriptors.
+
+Retain the journal's `.host-health-*.json` archives and `.recovery-*` decision files together
+with the journal; receipts can be needed to interpret its recovery marker. A later owner saves
+the resolved state into the journal. Rolling back to 1.0.5 before that save leaves its older
+reader blocked by the marker and requires the documented operator recovery. Do not delete
+these files during recovery or while any owner is running.
+
 The LaunchAgent uses `KeepAlive`, and Viewer or MCP clients can start a daemon on demand.
 Stopping one daemon PID does not stop those launchers. Quit Viewer and disconnect MCP clients,
 and stop LaunchAgent supervision during the reserved recovery window. Repeated "already

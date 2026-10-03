@@ -80,8 +80,8 @@ enum DisplayHostHealthSampler {
         "com.apple." + service.split(separator: "/").last.map(String.init)!
     }
 
-    /// Process rows, then both exact launchd jobs, then process rows again. Launch counts are
-    /// recorded for running and idle services; any disagreement between the reads is unknown.
+    /// Process rows bracketed with two reads of both exact launchd jobs. A job may launch and
+    /// exit without appearing in either process list, so both launch counts must also agree.
     static func serviceSample(
         deadline: Deadline,
         read: Reader = { try readHelper(executable: $0, arguments: $1, timeout: $2) }
@@ -103,6 +103,16 @@ enum DisplayHostHealthSampler {
             records[service] = try launchdService(text, service: service)
         }
         let latest = try processes()
+        for service in services {
+            let timeout = try deadline.remaining()
+            let text: String
+            do { text = try read("/bin/launchctl", ["print", "system/" + launchdLabel(service)], timeout) }
+            catch { throw Unknown("colorsync_launchd_unreadable") }
+            guard try launchdService(text, service: service) == records[service] else {
+                throw Unknown("colorsync_visibility_changed")
+            }
+        }
+        _ = try deadline.remaining()
         var result: [String: DisplayHostHealthSample.Service] = [:]
         for service in services {
             switch records[service]! {

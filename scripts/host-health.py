@@ -142,13 +142,20 @@ def launchd_service(text, service):
 
 
 def service_sample(until):
-    """Process rows, both exact launchd jobs, then process rows again; launch counts are
-    kept for running and idle services and any disagreement is unknown."""
+    """Read both launchd jobs around the final process snapshot. A launch and exit may
+    be absent from both process lists, so the job identities/counts must also agree."""
     command = ["/bin/ps", "-axo", "pid=,time=,comm="]
     first = parse_services(read_command(command, until))
     records = {name: launchd_service(read_command(
         ["/bin/launchctl", "print", "system/" + launchd_label(name)], until), name) for name in SERVICES}
     latest = parse_services(read_command(command, until))
+    for name in SERVICES:
+        final = launchd_service(read_command(
+            ["/bin/launchctl", "print", "system/" + launchd_label(name)], until), name)
+        if final != records[name]:
+            raise ValueError("service changed during sampling")
+    if time.monotonic() >= until:
+        raise ValueError("snapshot exceeded budget")
     result = {}
     for name, (pid, runs) in records.items():
         if pid is None:

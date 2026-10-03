@@ -857,7 +857,7 @@ case "safety":
         let archive = try DisplaySafetyRecovery.clearHostHealthLatch()
         if args.hasJSON { print(CLIJSON.object(["ok": true, "archive": archive])) }
         else { print("cleared host-health latch; creation budgets retained; archive: \(archive)") }
-    } catch { fail(error.localizedDescription) }
+    } catch { fail(error.localizedDescription, exit: .failure, code: (error as? SpaceOError)?.code) }
 
 case "doctor":
     validateFlags("doctor")

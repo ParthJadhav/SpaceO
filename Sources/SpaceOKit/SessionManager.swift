@@ -2741,7 +2741,9 @@ public actor SessionManager {
                 // Refuses before a single keystroke leaves the process when the application
                 // would route it to a different one of its windows.
                 targetingNote = try requireKeystrokeTarget(window, in: session, action: "type")
-                if editorBridge == nil, let driver = NativeTextInput.driver(for: window) {
+                // A declined semantic edit re-proves the same focused target before returning,
+                // so the keystroke fallback below is never aimed at a field that moved.
+                if editorBridge == nil, let driver = try NativeTextInput.driver(for: window) {
                     semanticTyping = try NativeTextInput.type(text, replace: request.replace == true, driver: driver)
                 } else if request.replace == true {
                     throw SpaceOError.unsupportedTarget("replace requires a text selection attributable to the requested window; nothing typed")
@@ -2884,7 +2886,7 @@ public actor SessionManager {
                         try? await Task.sleep(nanoseconds: UInt64(holdMs) * 1_000_000)
                         try InputRouter.keyEvent(parsedCombo, down: false, to: window.pid)
                     } else if editorBridge == nil, NativeTextInput.isSelectAll(parsedCombo),
-                              let driver = NativeTextInput.driver(for: window),
+                              let driver = try NativeTextInput.driver(for: window),
                               try NativeTextInput.selectAll(driver) {
                         semanticSelection = true
                     } else {

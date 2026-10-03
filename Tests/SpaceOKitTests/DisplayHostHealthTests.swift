@@ -268,14 +268,16 @@ final class DisplayHostHealthTests: XCTestCase {
         }
         func run(_ outputs: [String?]) throws -> [String: DisplayHostHealthSample.Service] {
             var queue = outputs, calls: [[String]] = []
-            defer { XCTAssertLessThanOrEqual(calls.count, 4) }
+            if queue.count == 4 { queue.append(contentsOf: [outputs[1], outputs[2]]) }
+            defer { XCTAssertLessThanOrEqual(calls.count, 6) }
             return try DisplayHostHealthSampler.serviceSample(deadline: .init(budget: 60)) { executable, arguments, _ in
                 calls.append([executable] + arguments)
                 let expected = calls.count == 1 || calls.count == 4 ? "/bin/ps"
                     : "/bin/launchctl"
                 XCTAssertEqual(executable, expected)
                 if expected == "/bin/launchctl" {
-                    XCTAssertEqual(arguments, ["print", "system/" + DisplayHostHealthSampler.launchdLabel(names[calls.count - 2])])
+                    let index = calls.count <= 3 ? calls.count - 2 : calls.count - 5
+                    XCTAssertEqual(arguments, ["print", "system/" + DisplayHostHealthSampler.launchdLabel(names[index])])
                 }
                 guard let output = queue.removeFirst() else { throw DisplayHostHealthSample.Unknown() }
                 return output
@@ -306,6 +308,20 @@ final class DisplayHostHealthTests: XCTestCase {
         assertUnknown(try run([unrelated, idle0, record(["state = not running", "active count = 0", "runs = 4",
                                                          "last terminating signal = Segmentation fault: 11"], service: names[1])]),
                       "colorsync_launchd_state_unsupported")
+    }
+
+    func testLaunchAndExitBetweenLaunchdReadAndFinalProcessListRemainsUnknown() {
+        let names = DisplayHostHealthSampler.services
+        let unrelated = "1 Tue Sep 29 20:00:00 2026 00:00.01 /sbin/launchd"
+        let initial = names.map { record(Self.idleFields, service: $0) }
+        for changedService in names.indices {
+            var final = initial
+            final[changedService] = final[changedService].replacingOccurrences(of: "runs = 23", with: "runs = 24")
+            var outputs = [unrelated, initial[0], initial[1], unrelated, final[0], final[1]]
+            assertUnknown(try DisplayHostHealthSampler.serviceSample(deadline: .init(budget: 60)) { _, _, _ in
+                outputs.removeFirst()
+            }, "colorsync_visibility_changed")
+        }
     }
 
     func testCaptureBudgetBoundsEveryHelperByRemainingTimeAndStopsWhenSpent() {

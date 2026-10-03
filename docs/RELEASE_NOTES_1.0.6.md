@@ -9,11 +9,13 @@ This update fixes the issues reported in #29, #30, #34 and #36.
   pressure, swapping, incidents and service exits/restarts still refuse work.
 - `spaceo safety clear-host-health --operator` can clear the old false-unknown latch after all
   SpaceO owners are stopped. It verifies current host health, preserves creation budgets and
-  archives the old journal. It cannot clear pending work or other failures. Follow
-  [display-safety recovery](DISPLAY_SAFETY.md#recovery-and-requalification).
+  archives the old journal. It cannot clear pending work or other failures. A stalled commit
+  reports an undecided outcome while the lifecycle lock prevents new owners. Follow
+  [display-safety recovery](https://github.com/ParthJadhav/SpaceO/blob/v1.0.6/docs/DISPLAY_SAFETY.md#recovery-and-requalification).
 - Native `cmd+a` selects text through Accessibility when supported. `type --replace` and typing
   into that selection edit the selected text and verify the result. Unsupported native replacement
-  refuses before typing; an unconfirmed edit must not be retried blindly.
+  refuses before typing; a changed target or exhausted shared Accessibility deadline refuses
+  fallback. An unconfirmed edit must not be retried blindly.
 - Screenshot file output creates missing parent directories and names the directory if it fails.
 - `doctor --fix` names the daemon's reported permission target, including a launchd executable,
   instead of telling users to enable the terminal running doctor.

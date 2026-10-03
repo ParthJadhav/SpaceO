@@ -172,6 +172,8 @@ class HostHealthTests(unittest.TestCase):
         idle0, idle1 = self.record(self.IDLE, names[0]), self.record(self.NEVER_STARTED, names[1])
 
         def run(outputs):
+            if len(outputs) == 4:
+                outputs = outputs + outputs[1:3]
             calls = []
 
             def read(command, until):
@@ -179,13 +181,15 @@ class HostHealthTests(unittest.TestCase):
                 expected = '/bin/ps' if len(calls) in (1, 4) else '/bin/launchctl'
                 self.assertEqual(command[0], expected)
                 if expected == '/bin/launchctl':
-                    self.assertEqual(command[1:], ['print', 'system/' + health.launchd_label(names[len(calls)-2])])
+                    index = len(calls)-2 if len(calls) <= 3 else len(calls)-5
+                    self.assertEqual(command[1:], ['print', 'system/' + health.launchd_label(names[index])])
                 self.assertEqual(until, 99)
                 value = outputs[len(calls)-1]
                 if value is None:
                     raise ValueError('unreadable')
                 return value
-            with mock.patch.object(health, 'read_command', side_effect=read):
+            with mock.patch.object(health, 'read_command', side_effect=read), \
+                    mock.patch.object(health.time, 'monotonic', return_value=0):
                 return health.service_sample(99)
 
         self.assertEqual(run([other, idle0, idle1, other]), self.services((None, None, 23), (None, None, 0)))
@@ -203,6 +207,18 @@ class HostHealthTests(unittest.TestCase):
                                                     'last terminating signal = Segmentation fault: 11'], names[1])]]:
             with self.subTest(outputs=outputs):
                 with self.assertRaises(ValueError): run(outputs)
+
+    def test_launch_and_exit_after_launchd_read_is_not_hidden_by_absent_process_rows(self):
+        other = '1 00:00.01 /sbin/launchd'
+        initial = [self.record(self.IDLE, name) for name in health.SERVICES]
+        for changed in range(2):
+            final = initial.copy()
+            final[changed] = final[changed].replace('runs = 23', 'runs = 24')
+            outputs = [other, *initial, other, *final]
+            with mock.patch.object(health, 'read_command', side_effect=outputs), \
+                    mock.patch.object(health.time, 'monotonic', return_value=0):
+                with self.assertRaisesRegex(ValueError, 'service changed'):
+                    health.service_sample(99)
 
     def test_snapshot_shares_one_budget_across_every_helper(self):
         clock = [0.]
@@ -225,7 +241,7 @@ class HostHealthTests(unittest.TestCase):
         clock[0], seen[:] = 0., []
         with mock.patch.object(health.time, 'monotonic', side_effect=lambda: clock[0]), \
                 mock.patch.object(health, 'read_command', side_effect=read), \
-                mock.patch.object(health, 'SNAPSHOT_BUDGET', 3.1):
+                mock.patch.object(health, 'SNAPSHOT_BUDGET', 4.1):
             self.assertEqual(health.snapshot()['services'], self.services((None, None, 23), (None, None, 23)))
         with self.assertRaises(ValueError): health.read_command([sys.executable, '-c', 'pass'], until=0)
 
