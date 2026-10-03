@@ -1,6 +1,7 @@
 # Contributing to SpaceO
 
-Start with [AGENTS.md](AGENTS.md) and [ARCHITECTURE.md](ARCHITECTURE.md). Small, focused pull
+Start with [AGENTS.md](AGENTS.md) and the [navigation map](docs/NAVIGATION.md), then read the
+relevant [architecture](ARCHITECTURE.md) section. Small, focused pull
 requests are easiest to review. Explain the concrete problem, behavior change, and validation.
 
 Use your GitHub noreply address for public commits. Enable **Keep my email addresses private**

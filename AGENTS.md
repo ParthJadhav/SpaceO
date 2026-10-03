@@ -11,6 +11,24 @@ The design depends on runtime-discovered private macOS APIs. Availability is not
 preserve fail-closed capability checks, explicit partial/unknown isolation results, and the release
 qualification requirements.
 
+## Start here
+
+- Read [docs/NAVIGATION.md](docs/NAVIGATION.md) for a task-to-source/test map and document authority.
+  Pick the relevant row before reading large source files or historical logs.
+- Current work is in [TICKETS.md — Active milestone](TICKETS.md#active-milestone). Product backlog
+  evidence, dated plans, audit rounds, and validation records describe their recorded revision;
+  they do not establish current implementation, release status, or qualification.
+- Current display constraints are in [docs/DISPLAY_SAFETY.md](docs/DISPLAY_SAFETY.md). Release
+  requirements and recorded publication status are in [docs/RELEASE_POLICY.md](docs/RELEASE_POLICY.md).
+  The 1.0.0 handoff and open-source preparation record are historical.
+- Start discovery with `rg --files <directory>` and `rg -n '<symbol or heading>' <paths>`, then
+  read the matching section. Avoid concatenating whole backlogs, audits, and source files;
+  tool output can truncate before the relevant information appears.
+- Edit `docs/playbook/*.md`, then run `node scripts/generate-playbook.mjs`; commit the Markdown
+  and generated `Sources/SpaceOMCP/Playbook.swift` together. Do not edit the generated copy alone.
+- A build does not replace the installed CLI or running daemon. Use [docs/UPDATING.md](docs/UPDATING.md)
+  to distinguish them before interpreting runtime evidence; installation/restart still needs task authorization.
+
 ## Project map
 
 - `Sources/SpaceOKit/` — display lifecycle, placement, input, capture, isolation, daemon transport,

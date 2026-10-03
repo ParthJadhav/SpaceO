@@ -1,5 +1,11 @@
 # SpaceO Tickets
 
+Start with [Active milestone](#active-milestone) for current priorities and the
+[navigation map](docs/NAVIGATION.md) for source/test locations. Older numbered tickets retain
+their original problem, acceptance criteria, and evidence; later safeguards can supersede those
+decisions. Check [display safety](docs/DISPLAY_SAFETY.md) and
+[release policy](docs/RELEASE_POLICY.md#current-status) before treating a Done label as current qualification.
+
 ## Product direction
 
 SpaceO provides background display and input control for its qualified native and Chromium
@@ -277,6 +283,9 @@ Status definitions:
   - Control off/on/off transitions cleared and restored the target note correctly.
 
 ### SPAO-104 — Remove virtual-display creation restrictions
+
+> Historical change. Later lifecycle and host-health safeguards supersede the unrestricted
+> creation criteria below; see [current display safety](docs/DISPLAY_SAFETY.md).
 
 - Priority: P1
 - Status: Done
@@ -711,6 +720,9 @@ Status definitions:
   `testWindowWatcherContainsLateWindowsWithoutBeingSweptByHand` cover these paths.
 
 ### SPAO-128 — Remove bounded WindowServer resource admission
+
+> Historical change. Persistent creation budgets, ownership checks, and failure latches were
+> subsequently introduced; see [current display safety](docs/DISPLAY_SAFETY.md).
 
 - Priority: P0
 - Status: Done

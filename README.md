@@ -270,8 +270,9 @@ make verify-release   # optimized build, safe tests, MCP smoke checks
 Live tests create displays and drive real apps. Read [LIVE_TESTS.md](docs/LIVE_TESTS.md) and use
 an eligible idle host. Skipped live tests are not release evidence.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for changes and review, [AGENTS.md](AGENTS.md) for repository
-conventions, and [CHANGELOG.md](CHANGELOG.md) for what is implemented.
+Start with the [repository navigation map](docs/NAVIGATION.md) to find the source, tests, and
+current guidance for your task. See [CONTRIBUTING.md](CONTRIBUTING.md) for changes and review,
+[AGENTS.md](AGENTS.md) for repository conventions, and [CHANGELOG.md](CHANGELOG.md) for what is implemented.
 
 | Learn more | |
 | --- | --- |
