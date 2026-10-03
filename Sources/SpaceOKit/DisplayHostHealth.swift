@@ -51,10 +51,10 @@ struct DisplayHostHealthSample: Sendable {
                       oldCPU.isFinite, newCPU.isFinite, oldCPU >= 0, newCPU >= oldCPU else { throw Unknown() }
                 cpu += (newCPU - oldCPU) / elapsed * 100
             case let (.idle(oldLaunches), .idle(launches)):
-                guard oldLaunches == launches else { throw Unknown() }
+                guard oldLaunches == launches else { throw Unknown("colorsync_idle_launch_count_changed") }
                 idle += 1
             default:
-                throw Unknown()
+                throw Unknown("colorsync_service_transition")
             }
         }
         guard cpu.isFinite else { throw Unknown() }
@@ -71,7 +71,10 @@ struct DisplayHostHealthSample: Sendable {
                      windowServerDiagnosticReports: reports)
     }
 
-    struct Unknown: Error {}
+    struct Unknown: Error {
+        let reason: String
+        init(_ reason: String = "host_health_unknown") { self.reason = reason }
+    }
 }
 
 /// One sampler and an independent watchdog. Nothing here queries or mutates WindowServer.
@@ -180,7 +183,8 @@ final class DisplayHostHealth: @unchecked Sendable {
                         current.state = .unknown
                         failed = assessment.reasons.joined(separator: ",")
                     } else { finishInitialDecision() }
-                } catch { failed = "host_health_unknown" }
+                } catch let error as DisplayHostHealthSample.Unknown { failed = error.reason }
+                catch { failed = "host_health_unknown" }
             }
             self.previous = next
             if failed != nil {

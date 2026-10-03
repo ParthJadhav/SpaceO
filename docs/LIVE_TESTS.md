@@ -175,3 +175,7 @@ A successful no-skip local run on that host (`make test-live-full` and
 `make computer-use-check-full`, retained privately) is still required *approval evidence* under
 `docs/RELEASE_POLICY.md` — the release owner reviews it at go/no-go rather than automation
 enforcing it.
+
+A focused passing case must also leave the native lifecycle journal and runtime health circuit ready after helper postflight. Helper success and verified removal alone cannot clear a sticky native refusal. Service transitions and changed idle launch counts now have specific native failure reasons; these remain blocking, rather than an automatic recovery policy.
+
+A case that never creates a Stage may leave the native sampler at its initial `unknown/not_sampled` state. Postflight permits that exact unused state only with a ready lifecycle journal; all sampled unknown or blocked states still refuse.

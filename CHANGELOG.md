@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Preserve specific ColorSync service-transition and idle launch-count failure reasons in the native sticky health circuit. Live test postflight now rejects a blocked/unknown native circuit even when the independent helper succeeds and display cleanup is verified.
+
 - Recognize explicitly recorded ColorSync memory-idle exits during native runtime and live-test health admission instead of treating every absent process counter as unknown. Stable launch counts, exact service identity and reconciled process observations are required; crashes, transitions, unreadable diagnostics, memory/swap pressure and recent WindowServer reports still refuse admission.
 
 - Permit a successfully read empty or inactive user-display baseline without requiring a physical monitor to be active. An inactive monitor may have no current mode. The agent display still must become active with its own managed Space, preserve the user display graph, and avoid overlap. Display inventory errors, invalid identities, lifecycle failures and host-health refusals remain blocking. Deterministic verification does not establish live headless or locked-host qualification.

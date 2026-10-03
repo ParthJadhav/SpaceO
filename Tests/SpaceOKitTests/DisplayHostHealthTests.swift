@@ -193,6 +193,30 @@ final class DisplayHostHealthTests: XCTestCase {
         }
     }
 
+    func testServiceTransitionReasonLatchesAndLaterStableSamplesCannotClearIt() {
+        let clock = Clock()
+        let names = DisplayHostHealthSampler.services
+        let idle = Dictionary(uniqueKeysWithValues: names.map { ($0, DisplayHostHealthSample.Service.idle(launches: 23)) })
+        let failed = expectation(description: "transition latches once")
+        failed.assertForOverFulfill = true
+        let monitor = DisplayHostHealth(now: { clock.value }, onFailure: { reason in
+            XCTAssertEqual(reason, "host health: colorsync_service_transition")
+            failed.fulfill()
+        })
+        monitor.accept(withServices(100, idle))
+        clock.value = 105
+        monitor.accept(withServices(105, idle))
+        XCTAssertEqual(monitor.report.state, .ready)
+        clock.value = 110
+        monitor.accept(sample(110))
+        XCTAssertEqual(monitor.report.state, .blocked)
+        XCTAssertEqual(monitor.report.reasons, ["colorsync_service_transition"])
+        clock.value = 115
+        monitor.accept(sample(115))
+        XCTAssertEqual(monitor.report.state, .blocked)
+        wait(for: [failed], timeout: 1)
+    }
+
     func testIdleSampleReconcilesLaunchdAndProcessIdentity() throws {
         let records = DisplayHostHealthSampler.services.map(idleRecord)
         func read(_ values: [String]) -> (String, [String]) throws -> String {

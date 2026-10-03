@@ -1,11 +1,23 @@
 import Foundation
 import Darwin
+import SpaceOKit
 
 /// Only launches the read-only health helper, never a display owner. Its output is retained
 /// by the live supervisor; helper failures must not admit a case or suspend verified cleanup.
 enum LiveHostHealth {
     enum Failure: Error {
-        case missingHelper, refused, timedOut
+        case missingHelper, refused, timedOut, nativeNotReady
+    }
+
+    /// Helper success cannot clear or substitute for the runtime's sticky circuit.
+    static func requireNativeReadiness(
+        lifecycle: DisplaySafetyStatus = Stage.displaySafetyStatus(),
+        health: DisplayHostHealthReport = Stage.runtimeHostHealthReport()
+    ) throws {
+        // A case that never creates a Stage never starts the native sampler. Stage
+        // creation requires ready health before mutation; do not reject pure refusal cases.
+        let unused = health.state == .unknown && health.reasons == ["not_sampled"]
+        guard lifecycle.allowsCreation, health.state == .ready || unused else { throw Failure.nativeNotReady }
     }
 
     static func requireAdmission(scriptPath: String? = ProcessInfo.processInfo.environment["SPACEO_LIVE_HEALTH_SCRIPT"]) throws {
