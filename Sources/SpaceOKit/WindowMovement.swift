@@ -45,6 +45,17 @@ enum WindowMovement {
             guard windowID != 0, observedID == windowID else {
                 throw SpaceOError.windowNotFound("the discovered window identity changed before placement")
             }
+            // Launch settle/reveal passes often find the requested geometry already in place.
+            // Avoid redundant AX setters only on an exact authoritative observation; ordinary
+            // containment or an AX fallback does not prove this particular request is satisfied.
+            try validate()
+            try budget.check()
+            let initialBounds = liveBounds()
+            try validate()
+            try budget.check()
+            if let initialBounds, validGeometry(initialBounds), initialBounds == target {
+                return initialBounds
+            }
             // Position is repeated after size because apps can clamp the first position to
             // the old display. Setter return values alone never confirm the requested effect.
             _ = try AXTraversal.boundedCall(element, provider: provider, budget: budget) {

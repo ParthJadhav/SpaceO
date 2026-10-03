@@ -24,6 +24,7 @@ struct DisplayHostHealthSample: Sendable {
             return pid > 0 && !start.isEmpty && cpuSeconds.isFinite && cpuSeconds >= 0 && launches >= 1
         }
     }
+    /// Monotonic timestamp paired with the final process CPU observation.
     let uptime: TimeInterval
     let pressure: UInt32
     let swapins: UInt64
@@ -170,13 +171,14 @@ final class DisplayHostHealth: @unchecked Sendable {
         lock.withLock {
             guard current.state != .blocked else { return }
             inFlightSince = nil
-            // Pace from completion so a slower first sample followed by a fast one cannot
-            // shrink the observation interval below the policy's minimum.
-            lastAttempt = now()
             guard next.uptime.isFinite, abs(now() - next.uptime) <= 3,
                   next.diagnosticReports >= 0, [1, 2, 4].contains(next.pressure) else {
                 failed = "host_health_unknown"; return
             }
+            // Pace from the CPU observation, rather than trailing validation completion.
+            // Each next observation is at least five seconds later without adding both
+            // captures' helper budgets to the policy's maximum sampling interval.
+            lastAttempt = next.uptime
             // A known incident/pressure does not need another five seconds to refuse admission.
             if next.diagnosticReports > 0 { failed = "recent_windowserver_diagnostic" }
             else if next.pressure != 1 { failed = "memory_pressure" }
@@ -184,7 +186,7 @@ final class DisplayHostHealth: @unchecked Sendable {
                 do {
                     let assessment = try DisplayHostHealthSample.assess(previous, next)
                     current = assessment
-                    reportedAt = now()
+                    reportedAt = next.uptime
                     if assessment.state == .blocked {
                         // fail() owns publishing a sticky failure and its notification.
                         current.state = .unknown

@@ -33,6 +33,12 @@ enum DisplayHostHealthSampler {
         let cpuSeconds: Double
     }
 
+    struct ServiceObservation {
+        /// Timestamp of the final process read, before slower launchd reconciliation.
+        let uptime: TimeInterval
+        let services: [String: DisplayHostHealthSample.Service]
+    }
+
     enum LaunchdRecord: Equatable {
         case running(pid: Int32, launches: UInt64)
         case idle(launches: UInt64)
@@ -71,8 +77,8 @@ enum DisplayHostHealthSampler {
         } catch { throw Unknown("windowserver_diagnostic_metadata") }
         let counters = try serviceSample(deadline: deadline)
         _ = try deadline.remaining()
-        return .init(uptime: ProcessInfo.processInfo.systemUptime, pressure: pressure,
-                     swapins: vm.swapins, swapouts: vm.swapouts, services: counters,
+        return .init(uptime: counters.uptime, pressure: pressure,
+                     swapins: vm.swapins, swapouts: vm.swapouts, services: counters.services,
                      diagnosticReports: reports)
     }
 
@@ -85,15 +91,16 @@ enum DisplayHostHealthSampler {
     static func serviceSample(
         deadline: Deadline,
         read: Reader = { try readHelper(executable: $0, arguments: $1, timeout: $2) }
-    ) throws -> [String: DisplayHostHealthSample.Service] {
-        func processes() throws -> [String: ProcessRow] {
+    ) throws -> ServiceObservation {
+        func processes() throws -> (rows: [String: ProcessRow], uptime: TimeInterval) {
             let timeout = try deadline.remaining()
             let text: String
             do { text = try read("/bin/ps", ["-axo", "pid=,lstart=,time=,comm="], timeout) }
             catch { throw Unknown("colorsync_process_list") }
-            do { return try parseServices(text) } catch { throw Unknown("colorsync_service_counter") }
+            let uptime = deadline.clock()
+            do { return (try parseServices(text), uptime) } catch { throw Unknown("colorsync_service_counter") }
         }
-        let first = try processes()
+        let first = try processes().rows
         var records: [String: LaunchdRecord] = [:]
         for service in services {
             let timeout = try deadline.remaining()
@@ -102,7 +109,10 @@ enum DisplayHostHealthSampler {
             catch { throw Unknown("colorsync_launchd_unreadable") }
             records[service] = try launchdService(text, service: service)
         }
-        let latest = try processes()
+        let observation = try processes()
+        let latest = observation.rows
+        // Keep counters paired with their process observation. Subsequent launchctl latency
+        // must not shorten or lengthen the interval used to calculate CPU consumption.
         for service in services {
             let timeout = try deadline.remaining()
             let text: String
@@ -127,7 +137,7 @@ enum DisplayHostHealthSampler {
                 result[service] = .idle(launches: launches)
             }
         }
-        return result
+        return .init(uptime: observation.uptime, services: result)
     }
 
     /// Accepts only top-level fields of the exact job. Idle requires a recognized memory-idle

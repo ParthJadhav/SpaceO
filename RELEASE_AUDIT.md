@@ -75,6 +75,15 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 ### RA-057 — September 29 freeze after passing live assertions
 
+October 4 investigation found a reproducible CPU timestamp defect and avoidable display/window
+churn. A timing regression can report true 40% CPU as 55.69% when trailing launchd validation
+is delayed; the native/Python samplers now pair the timestamp with the CPU observation. Idle
+retention and already-satisfied placement also reduce unnecessary work. A modified-build,
+owner-authorized experiment passed lifecycle/rendered-capture checks before a later ColorSync
+busy refusal; its 54.5% measurement is not proven false. These fixes preserve the existing
+thresholds, identities and failure containment. RA-057 remains open; see the
+[investigation record](docs/validation/2026-10-04-colorsync-root-cause.md).
+
 October 3 maintenance update: fixes for #29/#30/#34/#36 address screenshot paths, native text
 selection and absent on-demand service sampling. Explicit recovery clears only idle false-unknown
 latches after healthy observations and owner exclusion, retaining creation budgets. This neither

@@ -148,7 +148,10 @@ def service_sample(until):
     first = parse_services(read_command(command, until))
     records = {name: launchd_service(read_command(
         ["/bin/launchctl", "print", "system/" + launchd_label(name)], until), name) for name in SERVICES}
-    latest = parse_services(read_command(command, until))
+    latest_text = read_command(command, until)
+    at = time.monotonic()
+    latest = parse_services(latest_text)
+    # Pair CPU counters with their process observation, before final launchd validation.
     for name in SERVICES:
         final = launchd_service(read_command(
             ["/bin/launchctl", "print", "system/" + launchd_label(name)], until), name)
@@ -167,7 +170,7 @@ def service_sample(until):
                 or latest[name][0] != pid or latest[name][1] < first[name][1]):
             raise ValueError("service changed during sampling")
         result[name] = (pid, latest[name][1], runs)
-    return result
+    return at, result
 
 
 def diagnostic_cutoff(boot_text, now):
@@ -223,9 +226,8 @@ def snapshot():
         if len(values) != 1:
             raise ValueError("swap counters unavailable")
         counters[name] = int(values[0])
-    services = service_sample(until)
-    at = time.monotonic()
-    if at > until:
+    at, services = service_sample(until)
+    if time.monotonic() > until:
         raise ValueError("snapshot exceeded budget")
     return dict(at=at, pressure=int(pressure), swap=counters, services=services)
 
@@ -308,7 +310,8 @@ def main():
                  (Path.home() / "Library/Logs/DiagnosticReports", False)]
         reports = windowserver_diagnostics(roots, cutoff)
         before = snapshot()
-        time.sleep(5)
+        # Final launchd validation may already have consumed part of the spacing interval.
+        time.sleep(max(0, before["at"] + 5 - time.monotonic()))
         after = snapshot()
         reports = max(reports, windowserver_diagnostics(roots, cutoff))
         report = assess(before, after, reports)

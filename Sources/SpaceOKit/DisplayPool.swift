@@ -246,22 +246,33 @@ public final class DisplayPool {
             return true
         }
         let occupancy = displays[position]
-        occupancy.taken.remove(slot.index)
+        let wasReserved = occupancy.taken.remove(slot.index) != nil
         guard occupancy.isEmpty else { return true }
-        guard !retainEmpty else { return true }
+        if retainEmpty {
+            // Empty occupancies are ordered by their last transition to idle. Keeping the
+            // oldest-created display forever made a newly used geometry attach and retire
+            // again on every later task. Duplicate releases must not change that recency.
+            if wasReserved {
+                displays.remove(at: position)
+                displays.append(occupancy)
+            }
+            return true
+        }
 
         guard retire(occupancy) else { return false }
         displays.remove(at: position)
         return true
     }
 
-    /// Retire empty displays, optionally preserving a small warm standby set.
+    /// Retire empty displays, optionally preserving the most recently emptied valid standbys.
     @discardableResult
     public func retireEmptyDisplays(keeping retainedCount: Int = 0) -> [CGDirectDisplayID] {
         lock.lock()
         defer { lock.unlock() }
         let empty = displays.filter(\.isEmpty)
-        let retiring = Array(empty.dropFirst(max(0, retainedCount)))
+        let retained = Set(empty.filter { $0.stage.isValid }
+            .suffix(max(0, retainedCount)).map { ObjectIdentifier($0.stage) })
+        let retiring = empty.filter { !retained.contains(ObjectIdentifier($0.stage)) }
         let (retiredStages, stillAttached) = retireEach(retiring)
         displays.removeAll {
             retiredStages.contains(ObjectIdentifier($0.stage))
