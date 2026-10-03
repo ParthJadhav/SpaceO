@@ -81,6 +81,8 @@ latches after healthy observations and owner exclusion, retaining creation budge
 closes RA-057 nor qualifies the affected Mac. Version 1.0.6 is owner-directed with a release-specific
 qualification exception; [the record](docs/validation/2026-10-03-user-issues-1.0.6.md) retains the
 refused host preflight and missing new live/artifact behavior evidence.
+The [1.0.6 publication record](docs/validation/2026-10-03-release-1.0.6.md) retains signed
+candidate/public-download verification and reporter replies; it does not close this finding.
 
 The owner confirmed a forced restart at 23:03. An earlier 20:28 watchdog/spin captured
 WindowServer's main thread unresponsive and 75 sampled threads blocked through ColorSync.

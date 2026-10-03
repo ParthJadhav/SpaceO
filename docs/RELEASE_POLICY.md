@@ -146,8 +146,8 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.6` is being prepared as an **owner-directed maintenance release with a qualification
-exception**. On October 3, 2026 the owner requested fixes for the open user issues, a new release,
+Version `1.0.6` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.6)
+as an **owner-directed maintenance release with a qualification exception**. On October 3, 2026 the owner requested fixes for the open user issues, a new release,
 deployment and issue replies, and authorized testing this computer without follow-up questions.
 That release-specific direction is recorded as GO to construct and publish 1.0.6 with the missing
 new live/artifact behavior qualification and open RA-057 disclosed, conditional on passing source,
@@ -156,9 +156,11 @@ refused a recent WindowServer diagnostic; no live workload followed it. No safet
 qualification is relabeled as passed. The exception applies only to 1.0.6 and does not bypass
 runtime refusal, owner retention, signing or protected publication. See the
 [1.0.6 notes](RELEASE_NOTES_1.0.6.md) and
-[issue-fix record](validation/2026-10-03-user-issues-1.0.6.md).
+[issue-fix record](validation/2026-10-03-user-issues-1.0.6.md). The exact signed candidate and all
+five unauthenticated public downloads passed provenance and distribution verification through
+the normal protected approvals; see the [publication record](validation/2026-10-03-release-1.0.6.md).
 
-Version `1.0.5` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.5)
+Version `1.0.5` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.5)
 as an **owner-directed release with a qualification exception**. After reviewing the implemented
 safeguards, 1,701-test verification summary, and the explicit statement that the macOS root cause
 remained unresolved and installation/release
