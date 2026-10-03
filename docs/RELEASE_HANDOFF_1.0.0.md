@@ -1,7 +1,8 @@
 # SpaceO 1.0.0 release handoff
 
-> Historical record, superseded for current repository settings by
-> [open-source readiness](OPEN_SOURCE_READINESS.md) and [release policy](RELEASE_POLICY.md).
+> Historical 1.0.0 record. For current requirements and recorded publication status, use
+> [release policy](RELEASE_POLICY.md) and its [Current status](RELEASE_POLICY.md#current-status).
+> [Open-source readiness](OPEN_SOURCE_READINESS.md) is also a dated preparation record.
 > As of September 24, 2026, required reviewers, no admin bypass, and tag-only restrictions
 > are configured on both release environments. The missing-protection statements below
 > describe earlier observations, not current blockers. The NO-GO below is superseded: on

@@ -1,5 +1,9 @@
 # Open-source readiness
 
+> Historical preparation record from September 24, 2026. Publication and qualification status
+> subsequently changed; use [release policy — Current status](RELEASE_POLICY.md#current-status).
+> The pending-release wording below describes preparation at that time.
+
 Preparation date: 2026-09-24. **Source is public. Binary release qualification is pending.**
 This record describes preparation, not authorization to publish or evidence that all defects
 have been eliminated.

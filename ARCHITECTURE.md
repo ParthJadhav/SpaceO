@@ -1,6 +1,10 @@
 # SpaceO — Architecture
 
-Background and evidence for every design choice here is in [FINDINGS.md](FINDINGS.md).
+Start with the [navigation map](docs/NAVIGATION.md) for source and test entry points.
+[FINDINGS.md](FINDINGS.md) records early experiments; later decisions and incidents are in
+[RELEASE_AUDIT.md](RELEASE_AUDIT.md) and dated validation records. Current display constraints
+are maintained in [DISPLAY_SAFETY.md](docs/DISPLAY_SAFETY.md), and current support/qualification
+requirements in [RELEASE_POLICY.md](docs/RELEASE_POLICY.md). Historical experiments do not override them.
 The short version: **an agent gets its own display, not its own Space**, because a window on an
 inactive Space is officially "not visible" and macOS tells apps to stop drawing, while a window on
 a second display's active Space renders normally.
@@ -22,7 +26,8 @@ Three global singletons get stolen by a naive agent. SpaceO keeps them isolated 
 The load-bearing rule, stated once:
 
 > **Never call `SLPSSetFrontProcessWithOptions`.** That is the single API that raises a window and
-> makes macOS follow the app to its Space. Everything else can be done invisibly.
+> makes macOS follow the app to its Space. Other operations still require observed isolation
+> evidence; apps can activate themselves and an unavailable check remains unknown.
 
 ---
 
@@ -61,8 +66,9 @@ The load-bearing rule, stated once:
 `SpaceOPrivate` is the only place that touches private API. It resolves symbols lazily via
 `dlsym`, which handles a missing name but cannot validate calling convention or behavior.
 `SPOCapabilityAvailable` reports whether the required runtime classes and symbols exist.
-Display-graph state is inventoried for diagnostics, but mirror, orphan, physical-display activity,
-overlap, and cursor-fence state are not product gates on virtual-display creation.
+Display creation checks user-display availability and ownership of existing SpaceO displays,
+alongside lifecycle and host-health admission. Mirroring is admitted. There is no cursor fence
+or production display-origin mutation; see [DISPLAY_SAFETY.md](docs/DISPLAY_SAFETY.md).
 
 ---
 
@@ -74,7 +80,7 @@ overlap, and cursor-fence state are not product gates on virtual-display creatio
 let pool = DisplayPool(sessionsPerDisplay: 4,
                        displaySize: CGSize(width: 2560, height: 1600))
 let slot = try pool.allocate()      // reuses a display with a free tile
-pool.release(slot)                  // retires the display once it empties
+pool.release(slot)                  // releases the reservation; retention is caller-controlled
 ```
 
 A virtual display is an entire framebuffer for the WindowServer to composite, so one per agent
@@ -88,9 +94,10 @@ caller does not pin a size, the CLI grows the display to match the requested den
 keeps one empty display warm for its lifetime so rapid agent churn reuses a stable framebuffer;
 excess empty displays from a larger peak are retired after a grace period.
 
-**Runtime geometry — `ResourceBudget`.** `allocate()` does not impose product-policy ceilings on
-sessions, displays, framebuffer totals, or creation rate. It validates positive whole-pixel
-geometry representable by Swift and CoreGraphics. `pool` and `doctor` report current usage.
+**Runtime geometry — `ResourceBudget`.** `allocate()` validates positive whole-pixel geometry
+representable by Swift and CoreGraphics and enforces configured session, display, framebuffer,
+and creation limits. Operator resource overrides do not lift the separate persistent lifecycle
+creation budget or host-health checks. `pool` and `doctor` report usage and effective limits.
 The convenience full-layout API materializes at most
 `TileLayout.maximumMaterializedCapacity` entries. That allocation bound is not a density limit:
 production per-tile lookup stays O(1) and allocation-free for any positive technically
@@ -112,19 +119,22 @@ stage.invalidate()   // waits up to its timeout and returns whether removal comp
 - **Intended lifetime = object lifetime.** Releasing `CGVirtualDisplay` normally removes the
   display. The macOS 27 preview host nevertheless retained three ownerless displays after rapid
   churn, so SpaceO does not trust that contract blindly: teardown is verified and `doctor`
-  inventories unmatched vendor/model IDs. Ownerless IDs remain diagnostic and do not block
-  another creation attempt.
+  inventories unmatched vendor/model IDs. Online SpaceO displays not owned by this process block
+  new creation. Unknown teardown retains display owners and trips a persistent failure latch.
 - The descriptor binds to a **private serial queue, never the main queue.** CoreGraphics
   publishes display lifecycle on that queue, so using the main queue would make creation and
   teardown depend on the *caller* running a main run loop — which an XCTest case or a one-shot
   CLI does not. Symptom when we had this wrong: the display registered but never reported
   bounds, and never went away on release.
-- Creation and retirement are serialized process-wide without an application-level cooldown.
+- Creation and retirement use a bounded serialized lifecycle worker plus a per-user ownership
+  lease, persistent creation budget, and failure journal. A caller deadline cannot cancel Apple
+  IPC already in flight; timed-out workers and display owners are retained, without automatic retries.
 - A process-local ownership registry distinguishes its live stages from ownerless SpaceO
   displays in the same graphical login session. Inventory and teardown use the online display
   list, not only active displays, so an inactive-but-still-attached phantom cannot be missed.
-- Mirroring, absence or deactivation of a physical display, framebuffer overlap, and ownerless
-  displays are diagnostic only.
+- Mirroring is admitted. Missing, inactive, or unreadable user displays and unowned online SpaceO
+  displays refuse creation. Current checks and limits are listed in
+  [DISPLAY_SAFETY.md](docs/DISPLAY_SAFETY.md).
 - Production contains no display-origin mutation, diagonal-parking API, cursor fence, or
   pointer-warp path. `CGConfigureDisplayOrigin` pinned displays and poisoned later virtual-display
   creation in `probes/probe7.m`; see [FINDINGS.md](FINDINGS.md) §4.1.
@@ -179,13 +189,9 @@ let app = try await session.launch(app: appURL, opening: [fileURL])   // placed 
 - Some apps activate themselves regardless of `activates = false` (Electron shells calling
   `NSApp.activate`). SpaceO cannot prevent that, so it hands the user's frontmost app straight
   back and reports that it had to — a blip rather than a state change.
-- Electron renderer control is not treated as Chromium browser control by default. A
-  private-profile Cursor launch with remote debugging creates no window while backgrounded, and
-  foregrounding it to obtain one violates the invariant above. VS Code-family bundles instead
-  receive a per-launch semantic editor adapter from a private temporary extension directory. The
-  adapter never activates the app, authenticates over a private Unix socket, and declares scroll
-  success only when the editor's visible range changes. The MCP conformance harness separately
-  requires rendered pixels to change.
+- Managed Electron launches are refused before starting the process because their startup can
+  take desktop focus. The retained semantic editor adapter described below is not a supported
+  launch path; qualification is required before changing that admission policy.
 
 ### 3.3 Input — `InputRouter`
 
@@ -203,8 +209,8 @@ The native-input sequence:
    the element exposes it. Otherwise fall back to `CGEventPostToPid` mouse events in **global**
    coordinates inside the tile, stamped with the target window id. Chromium *web content* needs
    §3.3b instead.
-6. `press(element:)` — `AXUIElementPerformAction(kAXPressAction)`. **Preferred.** Coordinate-free,
-   needs no focus, cannot miss, works while occluded.
+6. `press(element:)` — `AXUIElementPerformAction(kAXPressAction)`. **Preferred.** Coordinate-free;
+   provider failures and unconfirmed effects must still be reported truthfully.
 
 The `AXPress` shortcut in step 5 is taken **only for a plain single left click**. A modifier-held,
 multi-, or non-left click means something a press cannot express — shift-click extends a selection,
@@ -219,15 +225,19 @@ added action from quietly skipping the stamp — an unstamped per-PID event has 
 to and is dropped rather than delivered. A scroll takes a point for the same reason a click does:
 an app with two scrollable regions routes the wheel by what is under the pointer.
 
-`InputRouter` does not classify targets by bundle identifier. It attempts the requested per-PID
-delivery for native, canvas, game, browser, and Electron processes alike. A target may ignore a
-synthetic event, but SpaceO does not turn that prior expectation into an admission policy.
+`InputRouter` is a delivery primitive, not the supported-target policy. Managed launch admission
+is enforced by `AppLauncher`, which refuses Electron. A target may ignore synthetic input;
+attempted delivery alone does not establish an effect or qualify a new application class.
 
 Input priming still captures and restores the user's route when possible. Priming is best-effort:
 an unavailable focus route does not block direct per-PID delivery and is not treated as a
 display- or application-class restriction.
 
 ### 3.3a VS Code-family Electron editors
+
+**Retained implementation, outside current managed-launch support.** `AppLauncher` refuses
+Electron before this adapter can be prepared. The description below records the adapter design,
+not evidence that agents can launch or control these editors in the supported product scope.
 
 VS Code-family Electron editors ignore background synthetic wheel events, and their macOS
 accessibility tree exposes only a 1×1 screen-reader proxy rather than a settable editor scroll
@@ -441,42 +451,22 @@ blames SpaceO for changes that land on agent territory:
 | active Space → an **agent display's** Space | breach — the user was dragged |
 | cursor ends up **on an agent screen** | breach — the pointer was pulled away |
 | cursor moved anywhere else | ambient |
-| the fence pushed the pointer back off | **containment working**, reported, not blamed |
 
-The distinction between the last two lines is the point: the failure is the cursor *arriving* on
-an agent screen, not the fence *removing* it. Getting this wrong in either direction ruins the
-check — too strict and it cries wolf, too loose and it misses the thing it exists to catch.
+The distinction between the last two lines is the point: cursor movement is attributed by
+whether it lands on an agent screen. SpaceO does not fence or warp the pointer. Getting attribution
+wrong ruins the check — too strict and it cries wolf, too loose and it misses the thing it exists to catch.
 
 ---
 
 ## 5. CLI surface
 
-```
-spaceo doctor                                  capability + TCC gate
-spaceo session create [--name N] [--size WxH]  → session id, display id, bounds
-spaceo session list | destroy <id>
-spaceo run <id> <app-path> [-- files...]       launch into a session, no activation
-spaceo windows <id>                            owned windows with ids and frames
-spaceo ax <id> [--window W]                    indexed accessibility tree
-spaceo click <id> (--element N | --x X --y Y) [--button B] [--count N] [--modifiers M]
-spaceo move <id> --x X --y Y                   hover, to reveal hover-only UI
-spaceo drag <id> --x X --y Y --to-x X --to-y Y
-spaceo scroll <id> --x X --y Y --dy -600       reach content below the fold
-spaceo type <id> "text" [--replace] [--submit]
-spaceo key <id> cmd+s [--hold-ms N] [--action down|up]
-spaceo screenshot <id> [--window W] [--scale N] [--annotate] [--x X --y Y --width W --height H] -o out.png
-spaceo verify <id>                             assert the isolation invariant right now
-spaceo open-url <URL>                          navigate the session's managed Chromium
-spaceo wait <condition> [value]                bounded wait; probes enter the gate one at a time
-spaceo find <query> [--role R]                 search elements, fresh indices
-spaceo text [--element N]                      window text in reading order
-spaceo steps --steps-json '[…]'                up to 16 actions, per-step receipts
-spaceo clipboard get | set <text>              the session's private clipboard
-spaceo events [--follow]                       the daemon event stream
-spaceo daemon restart --operator               drain, then start this build
-spaceo daemon install                          LaunchAgent with a stable TCC identity
-spaceo clean --operator                        orphaned profile garbage collection
-```
+Command syntax, session/lease flags, operator scope, and examples are maintained in
+[REFERENCE.md](docs/REFERENCE.md). The parser is `Sources/SpaceOKit/CLIArguments.swift`, help
+is `Sources/SpaceOKit/CLIHelp.swift`, dispatch is `Sources/spaceo/main.swift`, and setup/doctor/
+daemon lifecycle commands are in `Sources/spaceo/HostCommands.swift`. Session IDs are selected
+with `--session` or the documented environment variables, not a leading positional argument.
+Use the [navigation map](docs/NAVIGATION.md) when changing a command across the CLI, protocol,
+daemon, and MCP surfaces.
 
 Element references (`3`, `w3`) are accepted wherever a point is, on scroll, move and drag as
 well as click; the receipt reports the `resolved_point` actually used.
@@ -495,11 +485,12 @@ scale 1 returns one pixel per point, so the two spaces are the same numbers by c
 | Private symbol missing | `Capabilities` reports it; affected calls throw `SpaceOError.unavailable(symbol:)` |
 | Accessibility not granted | hard error with the exact System Settings path |
 | Screen Recording not granted | capture throws; input still works |
-| Target app ignores per-PID input | Delivery is still attempted; no bundle-based target block |
-| Display creation fails | session creation fails; nothing partially constructed survives |
+| Target app ignores per-PID input | Report unconfirmed delivery/effect; managed Electron launch remains refused |
+| Display creation fails or times out | Refuse further work when lifecycle state is failed/unknown; retain owners when cleanup cannot be verified |
 | Chromium page click without a DevTools port | Attempt unrestricted per-PID delivery without a bridge |
 | Non-positive or non-integral display dimensions | rejected before calling the private display API |
-| Any positive tile density | accepted; the caller owns the usability tradeoff |
-| Daemon receives SIGTERM/SIGINT | waits for any in-flight teardown, destroys sessions and quits their apps, then exits; a previous daemon's detached records still inside their recovery grace are left on disk for the next daemon and named on stderr |
+| Positive tile density | Still subject to geometry, configured budgets, lifecycle admission, and host-health checks |
+| Daemon receives SIGTERM/SIGINT | Attempts verified shutdown; unhealthy or unknown lifecycle state retains display owners rather than forcing graph changes. Detached records remain subject to recovery policy. |
 
-Report actual operation failures; do not reject control based on display or application class.
+Report actual operation failures and enforce current lifecycle, ownership, and supported-target
+admission.

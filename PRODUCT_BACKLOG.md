@@ -1,6 +1,13 @@
 # SpaceO — Product Backlog (PM review, 2026-07-30)
 
-Latest end-to-end review: [2026-09-05 product trust audit](docs/validation/2026-09-05-product-trust-audit.md).
+> Historical product review and acceptance criteria, with dated follow-ups. Start current work
+> in [TICKETS.md — Active milestone](TICKETS.md#active-milestone) and use the
+> [navigation map](docs/NAVIGATION.md) to find implementation and tests. Evidence paragraphs
+> below describe the original finding, including under tickets subsequently marked Done.
+> The September 17/23 summaries supersede older per-item Open labels for those rounds;
+> implementation does not imply live or signed-artifact qualification.
+
+Earlier end-to-end review: [2026-09-05 product trust audit](docs/validation/2026-09-05-product-trust-audit.md).
 SPAO-180–186 fix first-run, display, Viewer, and verification defects; the existing live and
 artifact-qualification blockers remain open. Use the audit's acceptance sequence before adding
 more breadth to the first public release.
@@ -50,11 +57,12 @@ an eligible idle host remains part of the live evidence requirement above. See `
 
 ## Epic A — Computer-use parity
 
-The product promises to "support all the agent's default computer-use implementation." Measured
-against the standard computer-use action set, SpaceO currently implements screenshot, left click,
-type, and key. Everything else is missing, partial, or silently ignored. An agent handed a SpaceO
-session instead of a normal desktop cannot scroll a page, drag a slider, hover a menu, or
-shift-click a range — these are ordinary steps in ordinary tasks, not edge cases.
+At the original July 30 review, the product promised to "support all the agent's default
+computer-use implementation." Measured against the standard computer-use action set, that
+revision implemented screenshot, left click, type, and key. Everything else was missing,
+partial, or silently ignored. An agent handed a SpaceO session instead of a normal desktop
+could not scroll a page, drag a slider, hover a menu, or shift-click a range — ordinary steps
+in ordinary tasks. Later implementation and evidence are recorded in the status summaries above.
 
 ### SPAO-135 — Expose scroll to agents
 
