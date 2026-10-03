@@ -6,6 +6,14 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Pair ColorSync CPU counters with their actual process observation time so slow follow-up
+  launchd queries cannot inflate CPU usage and falsely stop display work.
+- Keep the most recently used valid idle display, reducing repeated display creation when
+  task sizes change. Skip redundant window-position/size writes when exact live geometry
+  already satisfies the request.
+- Retain content-free launch failure phase and error category before live cleanup can suspend
+  a test. Move an app-free browser refusal check to deterministic coverage, avoiding an
+  unnecessary live display cycle.
 - Require live XCTest postflight to retain a ready native lifecycle and health circuit, even
   when the independent host helper passes. Preserve the initial unused sampler for cases that
   never create a Stage. Add missing-destination window cleanup coverage and stabilize the

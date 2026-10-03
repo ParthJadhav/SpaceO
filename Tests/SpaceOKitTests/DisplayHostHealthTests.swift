@@ -128,7 +128,7 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertThrowsError(try monitor.requireHealthy())
     }
 
-    func testSamplerDoesNotStartBeforeFiveSecondsAfterCompletion() {
+    func testSamplerDoesNotStartBeforeFiveSecondsAfterObservation() {
         let clock = Clock()
         clock.value = 102
         let sampled = expectation(description: "no compressed three-second sample")
@@ -140,6 +140,46 @@ final class DisplayHostHealthTests: XCTestCase {
         monitor.tick()
         wait(for: [sampled], timeout: 0.05)
         XCTAssertEqual(monitor.report.state, .unknown)
+    }
+
+    func testTickPacesFromObservationDespiteSlowTrailingAndLeadingHelpers() {
+        let clock = Clock()
+        let first = sample(100)
+        clock.value = 102.2 // First capture's trailing reconciliation took 2.2 seconds.
+        let sampled = expectation(description: "next capture starts from observation spacing")
+        sampled.assertForOverFulfill = true
+        let monitor = DisplayHostHealth(sample: {
+            clock.value += 2.2 // Next capture spends 2.2 seconds before observing CPU.
+            sampled.fulfill()
+            return .init(uptime: clock.value, pressure: first.pressure,
+                         swapins: first.swapins, swapouts: first.swapouts,
+                         services: first.services, diagnosticReports: first.diagnosticReports)
+        }, now: { clock.value })
+        monitor.accept(first)
+        // A one-second timer can land almost a second after the five-second spacing.
+        clock.value = 106
+        monitor.tick()
+        wait(for: [sampled], timeout: 1)
+        let accepted = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            monitor.report.state == .ready
+        }, object: nil)
+        // XCTest polls predicate expectations once per second. Allow multiple polls for
+        // worker completion; runtime timing is asserted solely by the injected clock.
+        wait(for: [accepted], timeout: 3)
+        XCTAssertEqual(clock.value, 108.2, accuracy: 0.0001)
+        XCTAssertEqual(monitor.report.state, .ready)
+    }
+
+    func testTrailingValidationDoesNotExtendObservedHealthFreshness() {
+        let clock = Clock()
+        let monitor = DisplayHostHealth(now: { clock.value })
+        monitor.accept(sample(100))
+        clock.value = 107.2
+        monitor.accept(sample(105)) // Validation completed 2.2 seconds after observation.
+        XCTAssertEqual(monitor.report.state, .ready)
+        clock.value = 115.1
+        XCTAssertEqual(monitor.report.state, .blocked)
+        XCTAssertEqual(monitor.report.reasons, ["host_health_stale_or_timed_out"])
     }
 
     func testProcessParserAllowsAbsentOnDemandServicesAndRequiresExactIdentities() throws {
@@ -270,7 +310,7 @@ final class DisplayHostHealthTests: XCTestCase {
             var queue = outputs, calls: [[String]] = []
             if queue.count == 4 { queue.append(contentsOf: [outputs[1], outputs[2]]) }
             defer { XCTAssertLessThanOrEqual(calls.count, 6) }
-            return try DisplayHostHealthSampler.serviceSample(deadline: .init(budget: 60)) { executable, arguments, _ in
+            let observation = try DisplayHostHealthSampler.serviceSample(deadline: .init(budget: 60)) { executable, arguments, _ in
                 calls.append([executable] + arguments)
                 let expected = calls.count == 1 || calls.count == 4 ? "/bin/ps"
                     : "/bin/launchctl"
@@ -282,6 +322,7 @@ final class DisplayHostHealthTests: XCTestCase {
                 guard let output = queue.removeFirst() else { throw DisplayHostHealthSample.Unknown() }
                 return output
             }
+            return observation.services
         }
         let idle0 = record(Self.idleFields, service: names[0]), idle1 = record(Self.neverStartedFields, service: names[1])
         XCTAssertEqual(try run([unrelated, idle0, idle1, unrelated]),
@@ -308,6 +349,48 @@ final class DisplayHostHealthTests: XCTestCase {
         assertUnknown(try run([unrelated, idle0, record(["state = not running", "active count = 0", "runs = 4",
                                                          "last terminating signal = Segmentation fault: 11"], service: names[1])]),
                       "colorsync_launchd_state_unsupported")
+    }
+
+    func testCPUObservationTimeExcludesAsymmetricTrailingLaunchdLatency() throws {
+        let names = DisplayHostHealthSampler.services
+        let clock = Clock()
+        var capture = 0
+        func observe() throws -> DisplayHostHealthSample {
+            var calls = 0
+            let observation = try DisplayHostHealthSampler.serviceSample(
+                deadline: .init(budget: 2.5, clock: { clock.value })
+            ) { executable, arguments, _ in
+                calls += 1
+                if executable == "/bin/ps" {
+                    clock.value += 0.05
+                    // Forty percent of one CPU, continuously, independent of helper latency.
+                    let cpu = String(format: "00:%05.2f", clock.value * 0.4)
+                    return "1 Tue Sep 29 20:00:00 2026 00:00.01 /sbin/launchd\n"
+                        + "533 Tue Sep 29 20:00:00 2026 \(cpu) \(names[0])"
+                }
+                if capture == 0, calls == 5 { clock.value += 2 }
+                return arguments[1].hasSuffix(DisplayHostHealthSampler.launchdLabel(names[0]))
+                    ? self.runningRecord(533, service: names[0])
+                    : self.record(Self.neverStartedFields, service: names[1])
+            }
+            return .init(uptime: observation.uptime, pressure: 1, swapins: 0, swapouts: 0,
+                         services: observation.services, diagnosticReports: 0)
+        }
+        let before = try observe()
+        XCTAssertEqual(before.uptime, 100.1, accuracy: 0.0001)
+        // The first reconciliation finished two seconds after the CPU observation. It is
+        // still within the capture/watchdog freshness budget, and must not change CPU units.
+        let monitor = DisplayHostHealth(now: { clock.value })
+        monitor.accept(before)
+        clock.value += 5
+        capture += 1
+        let after = try observe()
+        XCTAssertEqual(after.uptime - before.uptime, 7.1, accuracy: 0.0001)
+        let report = try DisplayHostHealthSample.assess(before, after)
+        XCTAssertEqual(report.state, .ready)
+        XCTAssertEqual(report.colorsyncCPUPercent!, 40, accuracy: 0.0001)
+        monitor.accept(after)
+        XCTAssertEqual(monitor.report.state, .ready)
     }
 
     func testLaunchAndExitBetweenLaunchdReadAndFinalProcessListRemainsUnknown() {

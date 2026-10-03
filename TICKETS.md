@@ -24,6 +24,17 @@ Status definitions:
 
 ## Active milestone
 
+### October 4 ColorSync root-cause follow-up
+
+- Deterministically verified, with one focused native workflow pass: correct CPU-observation
+  timestamps, retain the most recently used valid
+  idle display, and avoid already-satisfied window mutations. Add deterministic regressions
+  and content-free launch failure attribution; remove a refusal-only live display cycle.
+- These fix confirmed measurement and churn defects. They do not establish the initiating
+  cause of the observed ColorSync load or close RA-057/#38. The 50% threshold, randomized
+  display identities, budgets, sticky failure and retained cleanup protections remain.
+- Evidence: [ColorSync investigation](docs/validation/2026-10-04-colorsync-root-cause.md).
+
 ### October 4 qualification test follow-up
 
 - Adopt the native postflight safeguard and missing evacuation destination regression from PR

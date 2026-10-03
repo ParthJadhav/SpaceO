@@ -359,7 +359,17 @@ public enum AppLauncher {
                 return (app, placed)
             })
         } catch {
+            // Cleanup can retain/suspend a display owner before XCTest reports its error.
+            // Preserve attribution first, without application names or provider text.
+            let fields = launchFailureFields(error, phase: launchPhase,
+                health: Stage.runtimeHostHealthReport().state)
+            if ProcessInfo.processInfo.environment["SPACEO_LIVE_TESTS"] == "1",
+               var data = try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys]) {
+                data.append(0x0A)
+                FileHandle.standardError.write(data)
+            }
             await LaunchFailureCleanup.run(app)
+            DaemonLog.shared.event("app.launch.failed", fields)
             throw launchFailure(error, application: app.name, phase: launchPhase)
         }
     }
@@ -386,6 +396,20 @@ public enum AppLauncher {
         case reveal
         case revealedReadiness = "post-reveal window readiness"
         case revealedPlacement = "post-reveal placement"
+    }
+
+    static func launchFailureFields(_ error: Error, phase: LaunchPhase,
+                                    health: DisplaySafetyStatus.State) -> [String: String] {
+        let code: String
+        switch error {
+        case let error as SpaceOError: code = error.code
+        case let error as AXTraversalStopped: code = "ax_" + error.reason.rawValue
+        case is DevToolsDeadline.Exceeded: code = "devtools_deadline"
+        case is CancellationError: code = "cancelled"
+        default: code = "unclassified_error"
+        }
+        return ["event": "app.launch.failed", "phase": phase.rawValue,
+                "errorCode": code, "hostHealthState": health.rawValue]
     }
 
     static func launchFailure(_ error: Error, application: String, phase: LaunchPhase? = nil) -> Error {

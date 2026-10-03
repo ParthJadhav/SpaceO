@@ -1,5 +1,7 @@
 import copy
 import importlib.util
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -190,7 +192,7 @@ class HostHealthTests(unittest.TestCase):
                 return value
             with mock.patch.object(health, 'read_command', side_effect=read), \
                     mock.patch.object(health.time, 'monotonic', return_value=0):
-                return health.service_sample(99)
+                return health.service_sample(99)[1]
 
         self.assertEqual(run([other, idle0, idle1, other]), self.services((None, None, 23), (None, None, 0)))
         rows = lambda cpu: '\n'.join([other, f'533 {cpu} {names[0]}', f'546 00:01.00 {names[1]}'])
@@ -244,6 +246,75 @@ class HostHealthTests(unittest.TestCase):
                 mock.patch.object(health, 'SNAPSHOT_BUDGET', 4.1):
             self.assertEqual(health.snapshot()['services'], self.services((None, None, 23), (None, None, 23)))
         with self.assertRaises(ValueError): health.read_command([sys.executable, '-c', 'pass'], until=0)
+
+    def test_cpu_observation_time_excludes_asymmetric_trailing_launchd_latency(self):
+        clock, calls, capture = [100.], [0], [0]
+
+        def read(command, until):
+            calls[0] += 1
+            if command[0] == '/usr/sbin/sysctl': return '1\n'
+            if command[0] == '/usr/bin/vm_stat': return 'Swapins: 0.\nSwapouts: 0.\n'
+            if command[0] == '/bin/ps':
+                clock[0] += .05
+                # Forty percent of one CPU, continuously, independent of helper latency.
+                cpu = .4 * clock[0]
+                return f'1 00:00.00 /sbin/launchd\n533 00:{cpu:05.2f} {health.SERVICES[0]}'
+            if capture[0] == 0 and calls[0] == 7:
+                clock[0] += 2
+            service = next(name for name in health.SERVICES
+                           if command[-1].endswith(health.launchd_label(name)))
+            return (self.running_record(533, service) if service == health.SERVICES[0]
+                    else self.record(self.NEVER_STARTED, service))
+
+        with mock.patch.object(health.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(health, 'read_command', side_effect=read):
+            before = health.snapshot()
+            self.assertAlmostEqual(before['at'], 100.1)
+            # The first final validation takes two seconds, still inside the snapshot budget.
+            clock[0] += 5
+            capture[0], calls[0] = 1, 0
+            after = health.snapshot()
+        report = health.assess(before, after)
+        self.assertEqual(report['intervalSeconds'], 7.1)
+        self.assertTrue(report['admitted'])
+        self.assertEqual(report['colorsyncCPUPercent'], 40)
+
+    def test_main_paces_from_observation_with_slow_captures_and_sleep_overshoot(self):
+        clock, captures, sleeps = [100.], [0], []
+        before, _ = self.samples()
+
+        def snapshot():
+            result = copy.deepcopy(before)
+            if captures[0] == 0:
+                result['at'] = clock[0]
+                clock[0] += 2.45  # Trailing validation, within the 2.5-second budget.
+            else:
+                clock[0] += 2.45  # Next capture's work before observing process CPU.
+                result['at'] = clock[0]
+            captures[0] += 1
+            return result
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds + .2  # Scheduling may overshoot the requested sleep.
+
+        output = io.StringIO()
+        with mock.patch.object(health.sys, 'platform', 'darwin'), \
+                mock.patch.object(health.sys, 'argv', ['host-health.py']), \
+                mock.patch.object(health.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(health.time, 'time', return_value=200000), \
+                mock.patch.object(health.time, 'sleep', side_effect=sleep), \
+                mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
+                mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
+                mock.patch.object(health, 'windowserver_timeouts', return_value=0), \
+                mock.patch.object(health, 'snapshot', side_effect=snapshot), \
+                mock.patch.object(health.sys, 'stdout', output):
+            self.assertEqual(health.main(), 0)
+        self.assertEqual(captures[0], 2)
+        self.assertAlmostEqual(sleeps[0], 2.55)
+        report = json.loads(output.getvalue())
+        self.assertTrue(report['admitted'])
+        self.assertEqual(report['intervalSeconds'], 7.65)
 
     def test_busy_services_pressure_and_current_swap_refuse(self):
         a, b = self.samples()

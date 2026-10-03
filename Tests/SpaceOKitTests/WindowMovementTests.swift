@@ -61,11 +61,58 @@ final class WindowMovementTests: XCTestCase {
         }
     }
 
-    func testImmediateServerGeometryAvoidsAXFallbackAndSleep() throws {
+    func testExactServerGeometryAvoidsEverySetterAndSleep() throws {
         let provider = Provider()
         XCTAssertEqual(try move(provider, bounds: { target }), target)
-        XCTAssertEqual(provider.calls, ["id", "position", "dimensions", "position", "bounds"])
+        XCTAssertEqual(provider.calls, ["id", "bounds"])
+        XCTAssertEqual(provider.timeouts, [0.25])
+        XCTAssertTrue(provider.sleeps.isEmpty)
+    }
+
+    func testMismatchedServerGeometryStillMovesAndConfirmsTheTarget() throws {
+        let provider = Provider()
+        var probes = 0
+        XCTAssertEqual(try move(provider) {
+            probes += 1
+            return probes == 1 ? before : target
+        }, target)
+        XCTAssertEqual(provider.calls, ["id", "bounds", "position", "dimensions", "position", "bounds"])
         XCTAssertEqual(provider.timeouts, [0.25, 0.25, 0.25, 0.25])
+        XCTAssertTrue(provider.sleeps.isEmpty)
+    }
+
+    func testContainedButDifferentGeometryDoesNotSkipTheRequestedMutation() throws {
+        let provider = Provider()
+        var probes = 0
+        let smaller = target.insetBy(dx: 10, dy: 10)
+        XCTAssertEqual(try move(provider) {
+            probes += 1
+            return probes == 1 ? smaller : target
+        }, target)
+        XCTAssertEqual(provider.calls.filter { $0 == "position" }.count, 2)
+        XCTAssertEqual(provider.calls.filter { $0 == "dimensions" }.count, 1)
+    }
+
+    func testLateInitialObservationCannotConfirmANoOpOrStartSetters() {
+        let provider = Provider()
+        provider.costs["bounds"] = 1_000_000_000
+        assertStopped(.deadline) { _ = try move(provider, bounds: { target }) }
+        XCTAssertEqual(provider.calls, ["id", "bounds"])
+        XCTAssertTrue(provider.sleeps.isEmpty)
+    }
+
+    func testChangedProcessDuringInitialObservationCannotConfirmANoOpOrStartSetters() {
+        let provider = Provider()
+        var valid = true
+        XCTAssertThrowsError(try move(provider, validate: {
+            if !valid { throw SpaceOError.windowNotFound("process changed") }
+        }, bounds: {
+            valid = false
+            return target
+        })) {
+            guard case .windowNotFound = $0 as? SpaceOError else { return XCTFail("\($0)") }
+        }
+        XCTAssertEqual(provider.calls, ["id", "bounds"])
         XCTAssertTrue(provider.sleeps.isEmpty)
     }
 
@@ -75,7 +122,7 @@ final class WindowMovementTests: XCTestCase {
         let snapped = CGRect(x: target.minX, y: target.minY, width: 590, height: 390)
         let observed = try move(provider) {
             probes += 1
-            return probes == 1 ? CGRect(origin: target.origin, size: before.size) : snapped
+            return probes <= 2 ? CGRect(origin: target.origin, size: before.size) : snapped
         }
         XCTAssertEqual(observed, snapped)
         XCTAssertEqual(provider.sleeps, [20_000_000])
@@ -89,7 +136,7 @@ final class WindowMovementTests: XCTestCase {
         limits.maxCallDuration = 0.01
         XCTAssertEqual(try move(provider, limits: limits, bounds: { before }), before)
         XCTAssertEqual(provider.sleeps, [20_000_000, 20_000_000, 15_000_000])
-        XCTAssertEqual(provider.calls.filter { $0 == "bounds" }.count, 3)
+        XCTAssertEqual(provider.calls.filter { $0 == "bounds" }.count, 4)
         XCTAssertEqual(provider.time, 55_000_000)
     }
 
@@ -97,7 +144,7 @@ final class WindowMovementTests: XCTestCase {
         let provider = Provider()
         assertStopped(.deadline) { _ = try move(provider, bounds: { nil }) }
         XCTAssertEqual(provider.time, 1_000_000_000)
-        XCTAssertEqual(provider.calls.filter { $0 == "bounds" }.count, 50)
+        XCTAssertEqual(provider.calls.filter { $0 == "bounds" }.count, 51)
         XCTAssertEqual(provider.calls.filter { $0 == "point" }.count, 50)
         XCTAssertEqual(provider.calls.filter { $0 == "size" }.count, 0,
                        "an unavailable position cannot be repaired by another size query")
@@ -114,8 +161,15 @@ final class WindowMovementTests: XCTestCase {
         let late = Provider()
         late.axPoint = target.origin
         late.axSize = target.size
-        late.costs = ["bounds": 800_000_000, "point": 150_000_000, "size": 60_000_000]
-        assertStopped(.deadline) { _ = try move(late, bounds: { nil }) }
+        late.costs = ["point": 150_000_000, "size": 60_000_000]
+        var probes = 0
+        assertStopped(.deadline) {
+            _ = try move(late, bounds: {
+                probes += 1
+                if probes > 1 { late.time += 800_000_000 }
+                return nil
+            })
+        }
         XCTAssertEqual(late.timeouts.suffix(2).first!, 0.2, accuracy: 0.00001)
         XCTAssertEqual(late.timeouts.last!, 0.05, accuracy: 0.00001)
         XCTAssertTrue(late.sleeps.isEmpty)
@@ -126,11 +180,11 @@ final class WindowMovementTests: XCTestCase {
         var probes = 0
         XCTAssertEqual(try move(provider) {
             probes += 1
-            if probes == 1 { return before }
+            if probes <= 2 { return before }
             provider.time += 1_000_000_000
             return target
         }, before)
-        XCTAssertEqual(probes, 2)
+        XCTAssertEqual(probes, 3)
         XCTAssertEqual(provider.sleeps, [20_000_000])
         XCTAssertFalse(provider.calls.contains("point"))
     }
@@ -138,8 +192,8 @@ final class WindowMovementTests: XCTestCase {
     func testMutationTimeConsumesTheSameBudgetAndStopsRemainingWork() {
         let provider = Provider()
         provider.costs = ["position": 400_000_000, "dimensions": 400_000_000]
-        assertStopped(.deadline) { _ = try move(provider, bounds: { target }) }
-        XCTAssertEqual(provider.calls, ["id", "position", "dimensions", "position"])
+        assertStopped(.deadline) { _ = try move(provider, bounds: { before }) }
+        XCTAssertEqual(provider.calls, ["id", "bounds", "position", "dimensions", "position"])
         XCTAssertEqual(provider.timeouts.last!, 0.2, accuracy: 0.00001)
         XCTAssertTrue(provider.sleeps.isEmpty)
     }
@@ -147,7 +201,13 @@ final class WindowMovementTests: XCTestCase {
     func testFailedSettersDoNotPreventObservingAnAlreadySatisfiedTarget() throws {
         let provider = Provider()
         provider.setterAccepted = false
-        XCTAssertEqual(try move(provider, bounds: { target }), target)
+        var probes = 0
+        XCTAssertEqual(try move(provider) {
+            probes += 1
+            return probes == 1 ? before : target
+        }, target)
+        XCTAssertEqual(provider.calls.filter { $0 == "position" }.count, 2)
+        XCTAssertEqual(provider.calls.filter { $0 == "dimensions" }.count, 1)
         XCTAssertTrue(provider.sleeps.isEmpty)
         let unknown = Provider()
         unknown.setterAccepted = false
@@ -274,7 +334,7 @@ final class WindowMovementTests: XCTestCase {
             watcher.sweep()
         }
         watcher.sweep()
-        XCTAssertEqual(provider.calls, ["id", "position"])
+        XCTAssertEqual(provider.calls, ["id", "bounds", "position"])
         XCTAssertTrue(provider.sleeps.isEmpty)
         XCTAssertTrue(watcher.isQuiescent)
         XCTAssertEqual(watcher.placedCount, 0)
@@ -285,7 +345,7 @@ final class WindowMovementTests: XCTestCase {
         let provider = Provider()
         let watcher = watcher(provider, discoveryCalls: 2_047)
         watcher.sweep()
-        XCTAssertEqual(provider.calls, ["id"], "discovery left no call budget for a mutation")
+        XCTAssertEqual(provider.calls, ["id", "bounds"], "discovery left no AX call budget for a mutation")
         XCTAssertEqual(watcher.refusedCount, 0)
         XCTAssertTrue(watcher.sweepFailure?.contains("axCalls") == true)
     }

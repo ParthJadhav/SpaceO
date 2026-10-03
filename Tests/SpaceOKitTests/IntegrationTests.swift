@@ -563,21 +563,6 @@ final class IntegrationTests: XCTestCase {
                       "refreshing windows must not erase the evidence that an owned app died")
     }
 
-    /// A browser we merely adopted has no DevTools port, so web clicks are impossible. The
-    /// contract is that we say so rather than returning success for a click that did nothing.
-    func testAdoptedBrowserIsRefusedRatherThanSilentlyIgnored() async throws {
-        guard AppLauncher.resolve("Google Chrome") != nil else {
-            throw XCTSkip("Google Chrome is not installed")
-        }
-        let pool = DisplayPool(sessionsPerDisplay: 1)
-        let session = AgentSession(id: "test-adopt-browser", slot: try pool.allocate())
-        defer { session.destroy(quitApps: false); pool.releaseAll() }
-
-        // Fabricate the situation without touching the user's browser: no bridge is registered
-        // for a pid we never launched, so the refusal must fire for any Chromium app.
-        XCTAssertNil(session.webBridge(for: 99999))
-    }
-
     // MARK: - Late windows
     //
     // Apps open windows after launch — restore prompts, dialogs, second documents — and every
