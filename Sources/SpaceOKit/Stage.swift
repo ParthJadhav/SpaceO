@@ -510,15 +510,27 @@ public final class Stage: @unchecked Sendable {
     }
 
     private static func checkedDisplayIDs(active: Bool) throws -> [CGDirectDisplayID] {
-        // One bounded allocation and one call: failure/overflow is unknown, never an empty graph.
+        // One bounded allocation and one call. A successful empty inventory is a readable
+        // headless baseline; an API error or overflow is unknown, never an empty graph.
         var ids = [CGDirectDisplayID](repeating: 0, count: 128)
         var count: UInt32 = 0
         let result = active ? CGGetActiveDisplayList(128, &ids, &count)
             : CGGetOnlineDisplayList(128, &ids, &count)
-        guard result == .success, count > 0, count < 128 else {
+        return try validatedDisplayIDs(result: result, buffer: ids, count: count)
+    }
+
+    /// Pure decoding keeps zero-display success distinct from provider failure in tests.
+    static func validatedDisplayIDs(
+        result: CGError, buffer: [CGDirectDisplayID], count: UInt32
+    ) throws -> [CGDirectDisplayID] {
+        guard result == .success, Int(count) < buffer.count else {
             throw SpaceOError.stageCreationFailed("display inventory is unavailable or exceeds its bound")
         }
-        return Array(ids.prefix(Int(count)))
+        let ids = Array(buffer.prefix(Int(count)))
+        guard ids.allSatisfy({ $0 != 0 }), Set(ids).count == ids.count else {
+            throw SpaceOError.stageCreationFailed("display inventory contains invalid or duplicate identities")
+        }
+        return ids
     }
 
     /// Diagnostics preserve the existing nonthrowing API; lifecycle uses the checked variant.
@@ -573,7 +585,11 @@ public final class Stage: @unchecked Sendable {
             return "the virtual display is online but inactive"
         }
         guard !spaces.isEmpty else { return "the virtual display has no managed Space" }
-        guard activeSpace == 0 || !spaces.contains(activeSpace) else {
+        // With no active user display, the agent's new display may be the only active
+        // display and legitimately own the global active Space. There is no user Space to
+        // share in that baseline. Preserve the check whenever a user display was active.
+        let hasActiveUserDisplay = userConfigurationBefore.displays.contains { $0.active }
+        guard !hasActiveUserDisplay || activeSpace == 0 || !spaces.contains(activeSpace) else {
             return "the virtual display shares the user's active Space"
         }
         for (otherID, otherBounds) in otherDisplayBounds {
@@ -607,20 +623,23 @@ public final class Stage: @unchecked Sendable {
             userConfigurationAfter: try checkedUserDisplayConfiguration())
     }
 
-    /// Requires a readable user display graph with at least one active display. Inactive
-    /// displays are admitted only as mirror followers, whose mode belongs to their master.
+    /// Requires a readable user display graph, not a physical monitor or an active user
+    /// display. An inactive monitor may have no current mode. Its geometry/topology still
+    /// participate in publication and retirement checks; the new virtual display must be active.
     static func admissionFailure(
         configuration: UserDisplayConfiguration, foreignDisplayIDs: [CGDirectDisplayID]
     ) -> String? {
-        guard !configuration.displays.isEmpty,
-              configuration.displays.contains(where: { $0.active }),
+        let ids = Set(configuration.displays.map(\.id))
+        guard ids.count == configuration.displays.count, !ids.contains(0),
               configuration.displays.allSatisfy({
-                  ($0.active || $0.mirroredTo != 0)
-                     && $0.bounds.width.isFinite && $0.bounds.height.isFinite
+                  $0.bounds.width.isFinite && $0.bounds.height.isFinite
                      && $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite
                      && $0.bounds.width > 0 && $0.bounds.height > 0
-                     && $0.modeWidth > 0 && $0.modeHeight > 0
-              }) else { return "user display configuration is missing, inactive, or unreadable" }
+                     && ($0.mirroredTo == 0 || ($0.mirroredTo != $0.id && ids.contains($0.mirroredTo)))
+                     && (($0.modeWidth > 0 && $0.modeHeight > 0)
+                         || (!$0.active && $0.modeWidth == 0 && $0.modeHeight == 0
+                             && $0.modePixelWidth == 0 && $0.modePixelHeight == 0))
+              }) else { return "user display configuration is unreadable" }
         guard foreignDisplayIDs.isEmpty else {
             return "unowned SpaceO displays are still online; refusing another attachment"
         }

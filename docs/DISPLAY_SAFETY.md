@@ -8,8 +8,9 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
 
 - The private shim checks runtime class/symbol availability on every supported OS version; the
   OS version alone never refuses creation.
-- Creation refuses missing, inactive, or unreadable user displays and online SpaceO displays not
-  owned by this process. Mirrored displays and any refresh rate are admitted.
+- Creation accepts a successfully read empty user-display graph or readable inactive monitors; it does not require a physical monitor to be active. A successful zero-display inventory is distinct from an API error. Invalid/duplicate display identities, malformed geometry/modes, dangling mirror relationships, unreadable inventory, and online SpaceO displays not owned by this process still refuse creation. Mirrored displays and any refresh rate are admitted.
+- The new virtual display must be active with a managed Space, avoid overlap, and leave the complete before/after user-display configuration unchanged. If no user display was active in that baseline, the new agent display may legitimately own the global active Space. Existing active user Spaces remain protected. No substitute user-display bounds are invented for recovery; adopted windows that cannot be evacuated retain their session/display under the existing teardown contract.
+- These admission changes have deterministic coverage only. They do not create a graphical login, unlock a host, establish locked-host input/capture support, or bypass the independent host-health gate. Missing ColorSync service counters still refuse admission; live headless behavior requires separate qualification.
 - A per-user file lock admits one SpaceO display-owning process for that process's lifetime.
   Daemon, XCTest, and library users of Stage share the same journal. It does not coordinate old
   binaries, other users, third-party virtual-display software, or direct users of private APIs.

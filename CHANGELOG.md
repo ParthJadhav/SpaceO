@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Permit a successfully read empty or inactive user-display baseline without requiring a physical monitor to be active. An inactive monitor may have no current mode. The agent display still must become active with its own managed Space, preserve the user display graph, and avoid overlap. Display inventory errors, invalid identities, lifecycle failures and host-health refusals remain blocking. Deterministic verification does not establish live headless or locked-host qualification.
+
 ## [1.0.5] - 2026-09-30
 
 Owner-directed release of display-safety safeguards. The WindowServer/ColorSync freeze remains

@@ -76,10 +76,10 @@ final class StrandedWindowTeardownTests: XCTestCase {
         }
     }
 
-    private func makeWindowDriver(_ state: WindowState) -> SessionWindowDriver {
+    private func makeWindowDriver(_ state: WindowState, hasUserDisplay: Bool = true) -> SessionWindowDriver {
         SessionWindowDriver(
             windows: { pid in pid == state.pid ? [state.ref].compactMap { $0 } : [] },
-            userDisplayBounds: { Self.userDisplayBounds },
+            userDisplayBounds: { hasUserDisplay ? Self.userDisplayBounds : nil },
             move: { _, frame in state.move(to: frame) },
             liveBounds: { id in id == state.windowID ? state.liveBounds : nil })
     }
@@ -107,7 +107,7 @@ final class StrandedWindowTeardownTests: XCTestCase {
             stageRetirer: { $0.invalidate(waitingForRemoval: 0) })
     }
 
-    private func makeApp() throws -> LaunchedApp {
+    private func makeApp(startedByUs: Bool = true) throws -> LaunchedApp {
         let identity = try XCTUnwrap(ProcessIdentity.current(of: getpid()))
         return LaunchedApp(
             pid: identity.pid,
@@ -115,7 +115,7 @@ final class StrandedWindowTeardownTests: XCTestCase {
             bundleIdentifier: "dev.spaceo.stranded-window-test",
             name: "Editor",
             url: URL(fileURLWithPath: "/Applications/Editor.app"),
-            startedByUs: true,
+            startedByUs: startedByUs,
             devToolsPort: nil,
             temporaryProfile: nil)
     }
@@ -167,6 +167,29 @@ final class StrandedWindowTeardownTests: XCTestCase {
         let retry = session.destroy(quitApps: false, timeout: 0)
         XCTAssertTrue(retry.isComplete, retry.recoveryDescription)
         XCTAssertEqual(retry.strandedWindows, [])
+        XCTAssertNil(ProcessOwnership.owner(of: app.identity))
+        XCTAssertTrue(pool.release(slot, retainEmpty: false))
+    }
+
+    func testHeadlessTeardownRetainsAdoptedWindowWithoutInventingUserDisplayDestination() throws {
+        let pool = makePool(displayID: 91_005)
+        let slot = try pool.allocate()
+        let app = try makeApp(startedByUs: false)
+        let window = WindowState(pid: app.pid, bounds: WindowPlacement.defaultFrame(in: slot.frame))
+        let session = try AgentSession(
+            id: "agent-1", slot: slot, teardownDriver: makeKeepAppsDriver(),
+            windowDriver: makeWindowDriver(window, hasUserDisplay: false), initialApps: [app])
+
+        let report = session.destroy(quitApps: true, timeout: 0)
+        XCTAssertFalse(report.isComplete)
+        XCTAssertEqual(window.moveAttempts, 0)
+        XCTAssertEqual(report.strandedWindows.map(\.windowID), [window.windowID])
+        XCTAssertEqual(report.stillAttachedDisplayIDs, [91_005])
+        XCTAssertEqual(ProcessOwnership.owner(of: app.identity), "agent-1")
+        XCTAssertTrue(session.teardownPending)
+
+        window.close()
+        XCTAssertTrue(session.destroy(quitApps: true, timeout: 0).isComplete)
         XCTAssertNil(ProcessOwnership.owner(of: app.identity))
         XCTAssertTrue(pool.release(slot, retainEmpty: false))
     }
