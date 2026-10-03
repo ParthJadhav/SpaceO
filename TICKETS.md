@@ -24,6 +24,14 @@ Status definitions:
 
 ## Active milestone
 
+### User-display-independent admission
+
+- Status: In verification
+- Follow-up: the read-only live health helper now distinguishes a stable, launchd-recorded ColorSync memory-idle exit from unknown counters. Host-health unit tests cover exact service state, nested records, failure signals, launch-count changes, process races and mixed idle/running CPU. The local admission attempt still refused elevated pressure, interval swap activity and recent WindowServer diagnostics; no live workload was launched.
+- Permit successful empty display inventories and readable inactive user-monitor baselines without requiring an active physical monitor. Distinguish absent current modes on inactive monitors from malformed/active mode evidence. Preserve inventory errors, topology and overlap checks, virtual-display activation, lifecycle ownership and host-health admission.
+- A new virtual display can own the global active Space when the baseline contains no active user display. An existing active user Space remains excluded. Recovery does not invent a physical-display destination.
+- Evidence: `DisplaySafetyTests` covers empty/failed/bounded inventory, malformed identities and display modes, inactive baselines, foreign owners, headless publication and topology changes. `StrandedWindowTeardownTests` covers adopted-window retention when no user-display recovery destination exists. See [verification record](docs/validation/2026-10-03-headless-admission.md). Live headless/locked-host qualification remains unperformed; unknown host-health counters still block it.
+
 ### September 29 reliability gap audit
 
 - Implemented: descriptor-bounded configuration reads, refusal to discard malformed JSON

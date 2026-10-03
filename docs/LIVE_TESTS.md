@@ -58,7 +58,7 @@ The XCTest wrapper, MCP matrix, and performance workload run a read-only
 memory pressure, swap-counter changes, and the two ColorSync services for five seconds.
 Admission requires normal memory pressure, no swap activity in the interval, and combined
 ColorSync CPU below 50% of one core. These conservative test thresholds are not a macOS health
-diagnosis. Missing counters, a service restart, or a diagnostic timeout refuse admission.
+diagnosis. A missing process counter is accepted only when bounded launchd reads identify that exact registered service as not running, with zero active count, support for pressured exit, and `JETSAM_REASON_MEMORY_IDLE_EXIT`; no PID, terminating signal or exit-code ambiguity is accepted. Process visibility is reconciled after the launchd reads. Both samples must retain the same idle state and launch count; running services still require stable PIDs and readable CPU counters. The report includes an idle-service count, and its CPU percentage measures running services only. Other missing counters, service transitions/restarts, or diagnostic timeouts refuse admission.
 Reports contain numeric counters and reason codes, not process lists or content.
 
 Admission also checks bounded WindowServer report metadata in system/user diagnostic directories
@@ -175,3 +175,7 @@ A successful no-skip local run on that host (`make test-live-full` and
 `make computer-use-check-full`, retained privately) is still required *approval evidence* under
 `docs/RELEASE_POLICY.md` — the release owner reviews it at go/no-go rather than automation
 enforcing it.
+
+A focused passing case must also leave the native lifecycle journal and runtime health circuit ready after helper postflight. Helper success and verified removal alone cannot clear a sticky native refusal. Service transitions and changed idle launch counts now have specific native failure reasons; these remain blocking, rather than an automatic recovery policy.
+
+A case that never creates a Stage may leave the native sampler at its initial `unknown/not_sampled` state. Postflight permits that exact unused state only with a ready lifecycle journal; all sampled unknown or blocked states still refuse.

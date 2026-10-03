@@ -88,6 +88,70 @@ class HostHealthTests(unittest.TestCase):
         for bad in ['', text.splitlines()[1], text + '\n' + text.splitlines()[1]]:
             with self.assertRaises(ValueError): health.parse_services(bad)
 
+    def idle_record(self, service=None):
+        return ("system/service = {\n"
+                "\tprogram = " + (service or health.SERVICES[0]) + "\n"
+                "\tstate = not running\n\tactive count = 0\n\truns = 23\n"
+                "\tlast exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT\n"
+                "\tproperties = supports pressured exit | system service\n"
+                "\tendpoints = {\n\t\tstate = active\n\t}\n}\n")
+
+    def test_idle_service_requires_exact_top_level_pressure_exit_evidence(self):
+        text = self.idle_record()
+        self.assertEqual(health.idle_service(text, health.SERVICES[0]), (None, 23))
+        for bad in [text.replace('not running', 'running'),
+                    text.replace('MEMORY_IDLE_EXIT', 'MEMORY_HIGHWATER'),
+                    text.replace('active count = 0', 'active count = 1'),
+                    text.replace('supports pressured exit', 'unsupported'),
+                    text.replace('runs = 23', 'runs = -1'),
+                    text.replace('\tstate = not running\n', ''),
+                    text + '\tpid = 42\n', text + '\tlast terminating signal = 9\n',
+                    text + '\tlast exit code = 1\n', text + '\tstate = not running\n',
+                    self.idle_record('/private/other')]:
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError): health.idle_service(bad, health.SERVICES[0])
+
+    def test_stable_idle_services_admit_without_inventing_cpu_counters(self):
+        a, b = self.samples()
+        for name in health.SERVICES:
+            a['services'][name] = b['services'][name] = (None, 23)
+        report = health.assess(a, b)
+        self.assertTrue(report['admitted'])
+        self.assertEqual(report['colorsyncIdleServices'], 2)
+        self.assertEqual(report['colorsyncCPUPercent'], 0)
+        b['pressure'] = 2
+        self.assertFalse(health.assess(a, b)['admitted'])
+        self.assertFalse(health.assess(a, b, diagnostic_reports=1)['admitted'])
+
+    def test_idle_service_does_not_mask_busy_running_peer(self):
+        a, b = self.samples()
+        a['services'][health.SERVICES[0]] = b['services'][health.SERVICES[0]] = (None, 23)
+        b['services'][health.SERVICES[1]] = (2, 12.5)
+        report = health.assess(a, b)
+        self.assertEqual(report['colorsyncIdleServices'], 1)
+        self.assertEqual(report['reasons'], ['colorsync_busy'])
+
+    def test_idle_transitions_or_intervening_launch_refuse(self):
+        for old, new in [((None, 23), (None, 24)), ((None, 23), (1, 10)), ((1, 10), (None, 23))]:
+            a, b = self.samples()
+            a['services'][health.SERVICES[0]] = old
+            b['services'][health.SERVICES[0]] = new
+            with self.assertRaises(ValueError): health.assess(a, b)
+
+    def test_service_sample_reconciles_process_and_launchd_evidence(self):
+        records = [self.idle_record(name) for name in health.SERVICES]
+        with mock.patch.object(health, 'read_command', side_effect=['', *records, '']):
+            self.assertEqual(health.service_sample(), {name: (None, 23) for name in health.SERVICES})
+        for tail in ['42 00:01.00 ' + health.SERVICES[0]]:
+            with mock.patch.object(health, 'read_command', side_effect=['', *records, tail]):
+                with self.assertRaises(ValueError): health.service_sample()
+        first = '42 00:01.00 ' + health.SERVICES[0]
+        changed = '43 00:01.00 ' + health.SERVICES[0]
+        with mock.patch.object(health, 'read_command', side_effect=[first, records[1], changed]):
+            with self.assertRaises(ValueError): health.service_sample()
+        with mock.patch.object(health, 'read_command', side_effect=['', ValueError('unreadable')]):
+            with self.assertRaises(ValueError): health.service_sample()
+
     def test_busy_services_pressure_and_current_swap_refuse(self):
         a, b = self.samples()
         service = health.SERVICES[0]

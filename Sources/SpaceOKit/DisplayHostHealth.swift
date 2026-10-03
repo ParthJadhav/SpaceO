@@ -5,6 +5,7 @@ public struct DisplayHostHealthReport: Codable, Sendable, Equatable {
     public var state: DisplaySafetyStatus.State
     public var reasons: [String]
     public var colorsyncCPUPercent: Double?
+    public var colorsyncIdleServices: Int? = nil
     public var memoryPressure: UInt32?
     public var swapinsDelta: UInt64?
     public var swapoutsDelta: UInt64?
@@ -12,10 +13,18 @@ public struct DisplayHostHealthReport: Codable, Sendable, Equatable {
 }
 
 struct DisplayHostHealthSample: Sendable {
-    struct Service: Sendable, Equatable {
-        let pid: Int32
-        let start: String
-        let cpuSeconds: Double
+    enum Service: Sendable, Equatable {
+        case running(pid: Int32, start: String, cpuSeconds: Double)
+        case idle(launches: UInt64)
+
+        init(pid: Int32, start: String, cpuSeconds: Double) {
+            self = .running(pid: pid, start: start, cpuSeconds: cpuSeconds)
+        }
+
+        var cpuSeconds: Double? {
+            if case let .running(_, _, value) = self { return value }
+            return nil
+        }
     }
     let uptime: TimeInterval
     let pressure: UInt32
@@ -33,12 +42,20 @@ struct DisplayHostHealthSample: Sendable {
               Set(before.services.keys) == Set(DisplayHostHealthSampler.services),
               Set(after.services.keys) == Set(before.services.keys) else { throw Unknown() }
         var cpu = 0.0
+        var idle = 0
         for name in DisplayHostHealthSampler.services {
-            guard let old = before.services[name], let new = after.services[name],
-                  old.pid > 0, old.pid == new.pid, !old.start.isEmpty, old.start == new.start,
-                  old.cpuSeconds.isFinite, new.cpuSeconds.isFinite,
-                  old.cpuSeconds >= 0, new.cpuSeconds >= old.cpuSeconds else { throw Unknown() }
-            cpu += (new.cpuSeconds - old.cpuSeconds) / elapsed * 100
+            guard let old = before.services[name], let new = after.services[name] else { throw Unknown() }
+            switch (old, new) {
+            case let (.running(oldPID, oldStart, oldCPU), .running(pid, start, newCPU)):
+                guard oldPID > 0, oldPID == pid, !oldStart.isEmpty, oldStart == start,
+                      oldCPU.isFinite, newCPU.isFinite, oldCPU >= 0, newCPU >= oldCPU else { throw Unknown() }
+                cpu += (newCPU - oldCPU) / elapsed * 100
+            case let (.idle(oldLaunches), .idle(launches)):
+                guard oldLaunches == launches else { throw Unknown("colorsync_idle_launch_count_changed") }
+                idle += 1
+            default:
+                throw Unknown("colorsync_service_transition")
+            }
         }
         guard cpu.isFinite else { throw Unknown() }
         let swapins = after.swapins - before.swapins, swapouts = after.swapouts - before.swapouts
@@ -49,12 +66,15 @@ struct DisplayHostHealthSample: Sendable {
         if swapins > 0 || swapouts > 0 { reasons.append("swap_activity") }
         if reports > 0 { reasons.append("recent_windowserver_diagnostic") }
         return .init(state: reasons.isEmpty ? .ready : .blocked, reasons: reasons,
-                     colorsyncCPUPercent: cpu, memoryPressure: after.pressure,
+                     colorsyncCPUPercent: cpu, colorsyncIdleServices: idle, memoryPressure: after.pressure,
                      swapinsDelta: swapins, swapoutsDelta: swapouts,
                      windowServerDiagnosticReports: reports)
     }
 
-    struct Unknown: Error {}
+    struct Unknown: Error {
+        let reason: String
+        init(_ reason: String = "host_health_unknown") { self.reason = reason }
+    }
 }
 
 /// One sampler and an independent watchdog. Nothing here queries or mutates WindowServer.
@@ -163,7 +183,8 @@ final class DisplayHostHealth: @unchecked Sendable {
                         current.state = .unknown
                         failed = assessment.reasons.joined(separator: ",")
                     } else { finishInitialDecision() }
-                } catch { failed = "host_health_unknown" }
+                } catch let error as DisplayHostHealthSample.Unknown { failed = error.reason }
+                catch { failed = "host_health_unknown" }
             }
             self.previous = next
             if failed != nil {

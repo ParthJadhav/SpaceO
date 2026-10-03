@@ -136,6 +136,7 @@ final class DisplaySafetyTests: XCTestCase {
         main: Bool = true,
         bounds: CGRect = CGRect(x: 0, y: 0, width: 1_920, height: 1_080),
         modeWidth: Int? = nil,
+        noCurrentMode: Bool = false,
         mirroredTo: CGDirectDisplayID = 0,
         refreshRate: Double = 60
     ) -> Stage.UserDisplayConfiguration.Display {
@@ -148,10 +149,10 @@ final class DisplaySafetyTests: XCTestCase {
             pixelHeight: Int(bounds.height),
             rotation: 0,
             mirroredTo: mirroredTo,
-            modeWidth: modeWidth ?? Int(bounds.width),
-            modeHeight: Int(bounds.height),
-            modePixelWidth: Int(bounds.width),
-            modePixelHeight: Int(bounds.height),
+            modeWidth: noCurrentMode ? 0 : modeWidth ?? Int(bounds.width),
+            modeHeight: noCurrentMode ? 0 : Int(bounds.height),
+            modePixelWidth: noCurrentMode ? 0 : Int(bounds.width),
+            modePixelHeight: noCurrentMode ? 0 : Int(bounds.height),
             refreshRate: refreshRate)
     }
 
@@ -203,14 +204,52 @@ final class DisplaySafetyTests: XCTestCase {
             bounds: CGRect(x: 1_920, y: 0, width: 1_280, height: 800)))
     }
 
-    func testCreationAdmissionRejectsUnsafeOrUnknownUserDisplays() {
+    func testCreationAdmissionAcceptsReadableHeadlessBaselines() {
         func failure(_ displays: [Stage.UserDisplayConfiguration.Display], foreign: [UInt32] = []) -> String? {
             Stage.admissionFailure(configuration: configuration(displays), foreignDisplayIDs: foreign)
         }
         XCTAssertNil(failure([userDisplay()]))
-        XCTAssertNotNil(failure([]))
-        XCTAssertNotNil(failure([userDisplay(active: false)]))
+        XCTAssertNil(failure([]))
+        XCTAssertNil(failure([userDisplay(active: false)]))
+        XCTAssertNil(failure([userDisplay(active: false, noCurrentMode: true)]))
+        XCTAssertNotNil(failure([userDisplay(noCurrentMode: true)]))
+        XCTAssertNotNil(failure([userDisplay(modeWidth: -1)]))
+        XCTAssertNotNil(failure([userDisplay(active: false, modeWidth: -1)]))
+        XCTAssertNotNil(failure([userDisplay(id: 0, active: false)]))
+        XCTAssertNotNil(failure([userDisplay(), userDisplay()]))
+        XCTAssertNotNil(failure([userDisplay(active: false, mirroredTo: 1)]))
+        XCTAssertNotNil(failure([userDisplay(active: false, bounds: CGRect(x: CGFloat.nan, y: 0, width: 1920, height: 1080))]))
+        XCTAssertNotNil(failure([userDisplay(active: false, bounds: .zero)]))
+        XCTAssertNil(failure([userDisplay(), userDisplay(id: 2, active: false, noCurrentMode: true)]))
         XCTAssertNotNil(failure([userDisplay()], foreign: [99_222]))
+        XCTAssertNotNil(failure([], foreign: [99_222]))
+    }
+
+    func testSuccessfulEmptyInventoryIsDistinctFromErrorOverflowAndInvalidIdentity() throws {
+        let buffer: [CGDirectDisplayID] = [1, 2, 0, 0]
+        XCTAssertEqual(try Stage.validatedDisplayIDs(result: .success, buffer: buffer, count: 0), [])
+        XCTAssertEqual(try Stage.validatedDisplayIDs(result: .success, buffer: buffer, count: 2), [1, 2])
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .failure, buffer: buffer, count: 0))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: buffer, count: 4))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: buffer, count: 5))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: buffer, count: 3))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: [1, 1, 0, 0], count: 2))
+    }
+
+    func testHeadlessPublicationStillRequiresAnActiveOwnedDisplayAndUnchangedUserGraph() {
+        let empty = configuration([])
+        let inactive = configuration([userDisplay(active: false, noCurrentMode: true)])
+        XCTAssertNil(publicationFailure(otherBounds: [], before: empty, after: empty))
+        XCTAssertNil(publicationFailure(activeSpace: 200, otherBounds: [], before: empty, after: empty))
+        XCTAssertNil(publicationFailure(before: inactive, after: inactive))
+        XCTAssertNil(publicationFailure(activeSpace: 200, before: inactive, after: inactive))
+        XCTAssertNotNil(publicationFailure(active: false, otherBounds: [], before: empty, after: empty))
+        XCTAssertNotNil(publicationFailure(spaces: [], otherBounds: [], before: empty, after: empty))
+        XCTAssertNotNil(publicationFailure(before: inactive, after: configuration([userDisplay()])))
+        XCTAssertNotNil(publicationFailure(before: inactive, after: empty))
+        XCTAssertNotNil(publicationFailure(otherBounds: [], before: empty, after: configuration([userDisplay()])))
+        XCTAssertNotNil(publicationFailure(activeSpace: 200))
+        XCTAssertNotNil(publicationFailure(bounds: CGRect(x: 0, y: 0, width: 1_280, height: 800), before: inactive, after: inactive))
     }
 
     func testMirroredAndHighRefreshDisplaysAreAdmitted() {

@@ -1,6 +1,27 @@
 import XCTest
+@testable import SpaceOKit
 
 final class LiveHostHealthTests: XCTestCase {
+    func testHelperSuccessCannotHideNativeCircuitOrUnknownReadiness() throws {
+        try LiveHostHealth.run(executable: "/usr/bin/true", arguments: [])
+        for lifecycle in [DisplaySafetyStatus.State.ready, .blocked, .unknown] {
+            for health in [DisplaySafetyStatus.State.ready, .blocked, .unknown] {
+                let check = {
+                    try LiveHostHealth.requireNativeReadiness(
+                        lifecycle: .init(state: lifecycle, reason: nil),
+                        health: .init(state: health, reasons: []))
+                }
+                if lifecycle == .ready && health == .ready { XCTAssertNoThrow(try check()) }
+                else { XCTAssertThrowsError(try check()) }
+            }
+        }
+        XCTAssertNoThrow(try LiveHostHealth.requireNativeReadiness(
+            lifecycle: .init(state: .ready, reason: nil),
+            health: .init(state: .unknown, reasons: ["not_sampled"])))
+        XCTAssertThrowsError(try LiveHostHealth.requireNativeReadiness(
+            lifecycle: .init(state: .ready, reason: nil),
+            health: .init(state: .blocked, reasons: ["not_sampled"])))
+    }
     func testOnlySuccessfulHelperExitAdmitsWork() throws {
         try LiveHostHealth.run(executable: "/usr/bin/true", arguments: [])
         XCTAssertThrowsError(try LiveHostHealth.run(executable: "/usr/bin/false", arguments: []))
