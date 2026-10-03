@@ -194,7 +194,7 @@ repo-navigation problem was established, not that the entire task was fast or fl
 This change updates navigation and documentation, not runtime behavior, release gates, or host
 configuration. Verification passed:
 
-- 131 local links, 45 mapped paths, mapped test filenames, and changed-document privacy checks.
+- 131 local links, all mapped paths and test filenames, and changed-document privacy checks.
 - `git diff --check` and `make verify-release`: 1,701 Swift tests, 15 Node tests, supporting checks,
   and MCP smoke covering 35 tools.
 - `bash Tests/ReleaseSecurityTests.sh`, `bash Tests/LiveTestGateTests.sh`, and

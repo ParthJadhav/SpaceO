@@ -276,14 +276,14 @@ Silently succeeding here is the worst possible outcome — the agent believes it
 - browsers SpaceO **launches** get `--remote-debugging-port` and a private `--user-data-dir`
   (a separate profile is not incidental: it keeps the agent out of the user's cookies and
   forces a genuinely separate instance), and web input goes through DevTools;
-- browsers SpaceO **adopts** have no port — a port can only be set at launch — so page input falls
-  back to unrestricted per-PID delivery. Chromium may ignore that fallback, but SpaceO does not
-  reject the target before trying it.
+- browsers SpaceO **adopts** without a managed bridge cannot receive explicit web-content input
+  (`web` coordinates or `wN` element references): those requests fail closed. Native browser
+  controls remain available through native input routes.
 
 `spaceo ax` on a browser appends the page's own elements under `wN` references, so an agent sees
 one list covering both the browser's chrome and its content.
 
-The bridge binds to **one deliberately chosen page** and never re-points itself. `/json/list`
+The bridge binds to **one deliberately chosen page at a time** and never changes targets implicitly. `/json/list`
 order is not documented to mean anything, so treating `targets().first` as "the front page" meant
 that with a second page open the bridge could read, type into, click, and screenshot a page nobody
 asked about — and report success. `attachToLaunchedTarget()` therefore requires exactly one page
@@ -489,7 +489,7 @@ scale 1 returns one pixel per point, so the two spaces are the same numbers by c
 | Screen Recording not granted | capture throws; input still works |
 | Target app ignores per-PID input | Report unconfirmed delivery/effect; managed Electron launch remains refused |
 | Display creation fails or times out | Refuse further work when lifecycle state is failed/unknown; retain owners when cleanup cannot be verified |
-| Chromium page click without a DevTools port | Attempt unrestricted per-PID delivery without a bridge |
+| Explicit web-content input without a DevTools bridge | Refuse `web`/`wN` requests; native browser controls remain available through native routes |
 | Non-positive or non-integral display dimensions | rejected before calling the private display API |
 | Positive tile density | Still subject to geometry, configured budgets, lifecycle admission, and host-health checks |
 | Daemon receives SIGTERM/SIGINT | Attempts verified shutdown; unhealthy or unknown lifecycle state retains display owners rather than forcing graph changes. Detached records remain subject to recovery policy. |
