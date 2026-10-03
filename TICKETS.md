@@ -24,6 +24,17 @@ Status definitions:
 
 ## Active milestone
 
+### October 3 user-reported regressions
+
+- #29: screenshot output now creates missing parents and identifies a blocked directory.
+- #30: native selected-text replacement and Command-A use Accessibility with verified readback;
+  unsupported replacement refuses before typing. Reporter-host confirmation remains pending.
+- #34/#36: verified idle on-demand ColorSync processes no longer produce unknown admission, startup
+  wait covers both observations, and doctor exposes unavailable inputs. Explicit operator
+  recovery handles the old idle false-unknown latch while preserving budgets and owner exclusion.
+- Evidence and qualification limits: [1.0.6 issue fixes](docs/validation/2026-10-03-user-issues-1.0.6.md).
+  RA-057 and #38 remain open; no new live qualification is claimed.
+
 ### September 29 reliability gap audit
 
 - Implemented: descriptor-bounded configuration reads, refusal to discard malformed JSON

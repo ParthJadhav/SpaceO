@@ -346,6 +346,9 @@ spaceo — give each agent its own screen, and leave the user's alone.
   spaceo daemon install|uninstall|status install the daemon as a LaunchAgent with a stable TCC identity
   spaceo setup --client claude-code|codex|cursor|claude-desktop [--yes|--print]
                                          write the MCP registration for that client
+  spaceo safety <subcommand>             local operator recovery
+  spaceo safety clear-host-health --operator
+                                         recover an idle host_health_unknown latch after stopping owners
   spaceo doctor --fix [--yes]            apply the safe remediations doctor found
   spaceo clean [--dry-run] --operator    remove orphaned browser profiles and control roots
   spaceo events [--follow] [--since-seq N]  daemon event stream (agent actions, pauses, verdicts)
@@ -424,7 +427,7 @@ spaceo — give each agent its own screen, and leave the user's alone.
                 --active-line L --active-character C
                                          select editor text by line and character
   spaceo type "text" [--web] [--replace] [--submit]
-                                         --replace selects existing text first; --submit adds Return
+                                         --replace verifies native field replacement; --submit adds Return
   spaceo key cmd+s [--web] [--hold-ms 500] [--action tap|down|up]
   spaceo screenshot [-o out.png] [--window W] [--full] [--scale 1|2|3|4] [--annotate]
                     [--x X --y Y --width W --height H]
@@ -844,6 +847,17 @@ case "completions":
 case "setup":
     validateFlags("setup")
     runSetup()
+
+case "safety":
+    validateFlags("safety")
+    guard args.positional == ["clear-host-health"] else { fail("use safety clear-host-health --operator") }
+    validateFlags("safety.clear-host-health")
+    guard args.bool("operator") else { fail("clearing a host-health latch requires --operator; stop all SpaceO owners first") }
+    do {
+        let archive = try DisplaySafetyRecovery.clearHostHealthLatch()
+        if args.hasJSON { print(CLIJSON.object(["ok": true, "archive": archive])) }
+        else { print("cleared host-health latch; creation budgets retained; archive: \(archive)") }
+    } catch { fail(error.localizedDescription) }
 
 case "doctor":
     validateFlags("doctor")

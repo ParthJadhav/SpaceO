@@ -1093,11 +1093,11 @@ public enum MCPServer {
                       "window": windowArg]),
 
             tool("spaceo_type", """
-                Type text into the focused element; newlines are Return. web=true types into page \
-                content rather than the browser's own UI. replace=true selects the field's \
-                contents first; submit=true presses Return afterwards.
+                Type text; newlines are Return. web=true targets page content. replace=true replaces \
+                field contents (native fields require confirmed AX selection and readback); \
+                submit=true presses Return.
                 """, ["text": ["type": "string", "maxLength": 8_000, "description": "The text to type."],
-                      "replace": ["type": "boolean", "description": "Select-all in the focused field first."],
+                      "replace": ["type": "boolean", "description": "Replace contents; native selection and readback must be confirmed."],
                       "submit": ["type": "boolean", "description": "Press Return after the text."],
                       "web": ["type": "boolean", "description": "Type into page content."],
                       "session": sessionArg,

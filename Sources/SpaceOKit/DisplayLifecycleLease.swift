@@ -113,7 +113,9 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     }
 
 
-    func acquire() throws {
+    func acquire() throws { try acquire(allowHostHealthRecovery: false) }
+
+    private func acquire(allowHostHealthRecovery: Bool) throws {
         try lock.withLock {
             if descriptor >= 0 { try requireHealthy(); return }
             let directory = URL(fileURLWithPath: path).deletingLastPathComponent().path
@@ -148,7 +150,9 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             descriptor = fd
             keep = true
             updateStatus()
-            try requireHealthy()
+            if !allowHostHealthRecovery || !Self.isRecoverableHostHealthLatch(journal) {
+                try requireHealthy()
+            }
         }
     }
 
@@ -190,6 +194,40 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             }
             journal.pending = true
             try save()
+        }
+    }
+
+
+    private static func isRecoverableHostHealthLatch(_ journal: Journal) -> Bool {
+        guard !journal.pending, journal.liveTestPending != true, let failure = journal.failure else { return false }
+        return failure == "host health: host_health_unknown" || failure.hasPrefix("host health: host_health_unknown (")
+    }
+
+    /// Explicit operator recovery only. The original file remains locked and in place; rolling
+    /// creation budgets survive, and pending mutations or other failure classes cannot be reset.
+    static func clearHostHealthLatch(path: String = defaultPath, checkDeadline: () throws -> Void = {}, validateHost: () throws -> Void) throws -> String {
+        let lease = DisplayLifecycleLease(path: path)
+        try lease.acquire(allowHostHealthRecovery: true)
+        return try lease.lock.withLock {
+            guard isRecoverableHostHealthLatch(lease.journal) else {
+                throw lease.refused("only an idle host_health_unknown latch can be cleared")
+            }
+            try checkDeadline()
+            try validateHost()
+            try checkDeadline()
+            let archive = path + ".host-health-" + UUID().uuidString + ".json"
+            let backup = try JSONEncoder().encode(lease.journal)
+            let fd = open(archive, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard fd >= 0 else { throw lease.refused("could not archive host-health latch") }
+            defer { close(fd) }
+            let written = backup.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+            guard written == backup.count, fsync(fd) == 0 else {
+                throw lease.refused("could not persist host-health latch archive; latch retained")
+            }
+            try checkDeadline()
+            lease.journal.failure = nil
+            try lease.save()
+            return archive
         }
     }
 

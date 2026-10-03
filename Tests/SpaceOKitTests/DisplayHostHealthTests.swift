@@ -13,11 +13,44 @@ final class DisplayHostHealthTests: XCTestCase {
 
     private func sample(_ time: Double = 100, cpu: Double = 10, pressure: UInt32 = 1,
                         swap: UInt64 = 50, reports: Int = 0, pid: Int32 = 1,
-                        start: String = "start") -> DisplayHostHealthSample {
+                        start: String = "start", launches: UInt64 = 1) -> DisplayHostHealthSample {
         .init(uptime: time, pressure: pressure, swapins: swap, swapouts: 100,
               services: Dictionary(uniqueKeysWithValues: DisplayHostHealthSampler.services.enumerated().map {
-                  ($0.element, .init(pid: pid + Int32($0.offset), start: start, cpuSeconds: cpu))
+                  ($0.element, .running(pid: pid + Int32($0.offset), start: start, cpuSeconds: cpu, launches: launches))
               }), diagnosticReports: reports)
+    }
+
+    private func sample(_ time: Double, _ services: [DisplayHostHealthSample.Service]) -> DisplayHostHealthSample {
+        .init(uptime: time, pressure: 1, swapins: 50, swapouts: 100,
+              services: Dictionary(uniqueKeysWithValues: zip(DisplayHostHealthSampler.services, services)),
+              diagnosticReports: 0)
+    }
+
+    private func assertUnknown<T>(_ expression: @autoclosure () throws -> T, _ reason: String,
+                                  file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try expression(), file: file, line: line) {
+            XCTAssertEqual(($0 as? DisplayHostHealthSample.Unknown)?.reason, reason, file: file, line: line)
+        }
+    }
+
+    private static let idleFields = ["state = not running", "active count = 0", "runs = 23",
+        "last exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT",
+        "last jetsam exit details = JETSAM_REASON_MEMORY_IDLE_EXIT", "job state = exited",
+        "properties = partial import | supports pressured exit | system service"]
+    private static let neverStartedFields = ["active count = 0", "state = not running", "runs = 0",
+        "last exit code = (never exited)", "properties = supports pressured exit"]
+
+    private func record(_ fields: [String], service: String = DisplayHostHealthSampler.services[0],
+                        program: String? = nil) -> String {
+        // Nested launchd blocks are deliberately ignored; only top-level fields are evidence.
+        "system/" + DisplayHostHealthSampler.launchdLabel(service) + " = {\n\tprogram = " + (program ?? service) + "\n"
+            + fields.map { "\t" + $0 + "\n" }.joined()
+            + "\tendpoints = {\n\t\t\"x\" = {\n\t\t\tpid = 9\n\t\t\tstate = running\n\t\t}\n\t}\n}\n"
+    }
+
+    private func runningRecord(_ pid: Int32, runs: UInt64 = 1, service: String) -> String {
+        record(["active count = 2", "state = running", "runs = \(runs)", "pid = \(pid)",
+                "last exit code = (never exited)", "job state = running"], service: service)
     }
 
     func testPolicyRejectsPressureSwapBusyColorSyncAndIncidentReports() throws {
@@ -109,19 +142,202 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertEqual(monitor.report.state, .unknown)
     }
 
-    func testProcessParserRequiresBothExactServiceIdentities() throws {
+    func testProcessParserAllowsAbsentOnDemandServicesAndRequiresExactIdentities() throws {
         let lines = DisplayHostHealthSampler.services.enumerated().map {
             "\($0.offset + 10) Tue Sep 29 20:00:00 2026 01:02.50 \($0.element)"
         }
         let parsed = try DisplayHostHealthSampler.parseServices(lines.joined(separator: "\n"))
         XCTAssertEqual(parsed.count, 2)
         XCTAssertEqual(parsed.values.first?.cpuSeconds, 62.5)
-        XCTAssertThrowsError(try DisplayHostHealthSampler.parseServices(lines[0]))
+        XCTAssertEqual(try DisplayHostHealthSampler.parseServices(lines[0]).count, 1)
+        XCTAssertEqual(try DisplayHostHealthSampler.parseServices("99 Tue Sep 29 20:00:00 2026 00:00.01 /bin/ps").count, 0)
+        XCTAssertThrowsError(try DisplayHostHealthSampler.parseServices(""))
+        XCTAssertThrowsError(try DisplayHostHealthSampler.parseServices("malformed listing"))
+        XCTAssertThrowsError(try DisplayHostHealthSampler.parseServices("invalid " + DisplayHostHealthSampler.services[0]))
         XCTAssertThrowsError(try DisplayHostHealthSampler.parseServices((lines + [lines[0]]).joined(separator: "\n")))
         XCTAssertEqual(try DisplayHostHealthSampler.cpuSeconds("1-02:03:04.5"), 93_784.5)
         for bad in ["NaN", "00:60", "1:99:00", "-1:02", "1:inf"] {
             XCTAssertThrowsError(try DisplayHostHealthSampler.cpuSeconds(bad))
         }
+    }
+
+
+    func testLaunchdEvidenceAcceptsOnlyExactRunningIdleExitAndNeverStartedShapes() throws {
+        let service = DisplayHostHealthSampler.services[0]
+        XCTAssertEqual(try DisplayHostHealthSampler.launchdService(record(Self.idleFields), service: service), .idle(launches: 23))
+        XCTAssertEqual(try DisplayHostHealthSampler.launchdService(record(Self.neverStartedFields), service: service), .idle(launches: 0))
+        XCTAssertEqual(try DisplayHostHealthSampler.launchdService(runningRecord(533, runs: 4, service: service), service: service),
+                       .running(pid: 533, launches: 4))
+        func idle(replacing old: String, with new: String?) -> String {
+            record(Self.idleFields.compactMap { $0.hasPrefix(old) ? new : $0 })
+        }
+        for unsupported in [idle(replacing: "last exit reason", with: "last exit reason = JETSAM_REASON_MEMORY_HIGHWATER"),
+                            idle(replacing: "last jetsam exit details", with: "last jetsam exit details = JETSAM_REASON_MEMORY_HIGHWATER"),
+                            record(Self.idleFields + ["last terminating signal = Killed: 9"]),
+                            record(Self.idleFields + ["last exit code = 1"]),
+                            record(Self.idleFields + ["pid = 42"]),
+                            idle(replacing: "active count", with: "active count = 1"),
+                            idle(replacing: "properties", with: "properties = system service"),
+                            idle(replacing: "job state", with: "job state = spawn scheduled"),
+                            idle(replacing: "state = not running", with: "state = spawn scheduled"),
+                            idle(replacing: "runs", with: "runs = 0"),
+                            record(Self.neverStartedFields.map { $0 == "runs = 0" ? "runs = 1" : $0 }),
+                            record(Self.neverStartedFields + ["last exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT"]),
+                            record(Self.neverStartedFields + ["job state = exited"]),
+                            record(["state = running", "runs = 1"]),
+                            record(["state = running", "runs = 0", "pid = 533"]),
+                            record(["state = running", "runs = 1", "pid = 0"])] {
+            assertUnknown(try DisplayHostHealthSampler.launchdService(unsupported, service: service),
+                          "colorsync_launchd_state_unsupported")
+        }
+        for invalid in ["", "malformed", idle(replacing: "runs", with: "runs = -1"), idle(replacing: "runs", with: nil),
+                        record(Self.idleFields + ["state = not running"]),
+                        record(["state = running", "runs = 1", "pid = 99999999999"]),
+                        record(Self.idleFields, service: DisplayHostHealthSampler.services[1])] {
+            assertUnknown(try DisplayHostHealthSampler.launchdService(invalid, service: service),
+                          "colorsync_launchd_record_invalid")
+        }
+        assertUnknown(try DisplayHostHealthSampler.launchdService(record(Self.idleFields, program: "/private/other"), service: service),
+                      "colorsync_launchd_program_mismatch")
+    }
+
+    func testCrashLoopHiddenBetweenAbsentProcessListingsIsUnknownAndSticky() {
+        // Neither process listing sees the service, but launchd counted two launches between them.
+        assertUnknown(try DisplayHostHealthSample.assess(sample(100, [.idle(launches: 5), .idle(launches: 0)]),
+                                                         sample(105, [.idle(launches: 7), .idle(launches: 0)])),
+                      "colorsync_launch_count_changed")
+        let clock = Clock()
+        let monitor = DisplayHostHealth(now: { clock.value })
+        monitor.accept(sample(100, [.idle(launches: 5), .idle(launches: 0)]))
+        clock.value = 105
+        monitor.accept(sample(105, [.idle(launches: 7), .idle(launches: 0)]))
+        XCTAssertEqual(monitor.report.state, .blocked)
+        XCTAssertEqual(monitor.report.reasons, ["host_health_unknown"])
+        XCTAssertEqual(monitor.report.unavailableInput, "colorsync_launch_count_changed")
+        clock.value = 110
+        monitor.accept(sample(110, [.idle(launches: 7), .idle(launches: 0)]))
+        clock.value = 115
+        monitor.accept(sample(115, [.idle(launches: 7), .idle(launches: 0)]))
+        XCTAssertEqual(monitor.report.state, .blocked)
+    }
+
+    func testLaunchCountTransitionsAdmitOnlyStableIdleOrOneAccountedStart() throws {
+        let stable = try DisplayHostHealthSample.assess(sample(100, [.idle(launches: 5), .idle(launches: 0)]),
+                                                        sample(105, [.idle(launches: 5), .idle(launches: 0)]))
+        XCTAssertEqual(stable.state, .ready)
+        XCTAssertEqual(stable.colorsyncCPUPercent, 0)
+        let started = try DisplayHostHealthSample.assess(
+            sample(100, [.idle(launches: 5), .idle(launches: 0)]),
+            sample(105, [.running(pid: 40, start: "s", cpuSeconds: 0.1, launches: 6), .idle(launches: 0)]))
+        XCTAssertEqual(started.state, .ready)
+        XCTAssertEqual(started.colorsyncCPUPercent!, 2, accuracy: 0.001)
+        // Whole lifetime CPU of the single new instance still counts toward the busy policy.
+        XCTAssertEqual(try DisplayHostHealthSample.assess(
+            sample(100, [.idle(launches: 5), .idle(launches: 0)]),
+            sample(105, [.running(pid: 40, start: "s", cpuSeconds: 2.5, launches: 6), .idle(launches: 0)])).reasons,
+            ["colorsync_busy"])
+        for (before, after, reason) in [
+            (DisplayHostHealthSample.Service.idle(launches: 5), DisplayHostHealthSample.Service.running(pid: 40, start: "s", cpuSeconds: 0, launches: 7), "colorsync_launch_count_changed"),
+            (.idle(launches: 5), .running(pid: 40, start: "s", cpuSeconds: 0, launches: 5), "colorsync_launch_count_changed"),
+            (.idle(launches: 5), .idle(launches: 4), "colorsync_launch_count_changed"),
+            (.running(pid: 40, start: "s", cpuSeconds: 1, launches: 3), .running(pid: 40, start: "s", cpuSeconds: 1, launches: 4), "colorsync_launch_count_changed"),
+            (.running(pid: 40, start: "s", cpuSeconds: 1, launches: 3), .running(pid: 41, start: "s", cpuSeconds: 1, launches: 4), "colorsync_service_changed"),
+            (.running(pid: 40, start: "s", cpuSeconds: 1, launches: 3), .idle(launches: 3), "colorsync_service_transition"),
+            (.idle(launches: 0), .running(pid: 40, start: "s", cpuSeconds: 1, launches: 0), "colorsync_service_counter"),
+            (.idle(launches: UInt64.max), .running(pid: 40, start: "s", cpuSeconds: 1, launches: UInt64.max), "colorsync_launch_count_changed")] {
+            assertUnknown(try DisplayHostHealthSample.assess(sample(100, [before, .idle(launches: 0)]),
+                                                             sample(105, [after, .idle(launches: 0)])), reason)
+        }
+        assertUnknown(try DisplayHostHealthSample.assess(sample(100, [.idle(launches: 0)]), sample(105, [.idle(launches: 0)])),
+                      "sampling_interval_or_counters")
+    }
+
+    func testIdleServiceDoesNotMaskBusyRunningPeer() throws {
+        let report = try DisplayHostHealthSample.assess(
+            sample(100, [.idle(launches: 23), .running(pid: 2, start: "s", cpuSeconds: 10, launches: 1)]),
+            sample(105, [.idle(launches: 23), .running(pid: 2, start: "s", cpuSeconds: 12.5, launches: 1)]))
+        XCTAssertEqual(report.reasons, ["colorsync_busy"])
+        XCTAssertEqual(report.colorsyncCPUPercent!, 50, accuracy: 0.001)
+    }
+
+    func testServiceSampleReconcilesProcessListingsWithBothExactLaunchdJobs() throws {
+        let names = DisplayHostHealthSampler.services
+        let unrelated = "1 Tue Sep 29 20:00:00 2026 00:00.01 /sbin/launchd"
+        func row(_ pid: Int32, _ name: String, start: String = "Tue Sep 29 20:00:00 2026", cpu: String = "00:01.00") -> String {
+            "\(pid) \(start) \(cpu) \(name)"
+        }
+        func run(_ outputs: [String?]) throws -> [String: DisplayHostHealthSample.Service] {
+            var queue = outputs, calls: [[String]] = []
+            defer { XCTAssertLessThanOrEqual(calls.count, 4) }
+            return try DisplayHostHealthSampler.serviceSample(deadline: .init(budget: 60)) { executable, arguments, _ in
+                calls.append([executable] + arguments)
+                let expected = calls.count == 1 || calls.count == 4 ? "/bin/ps"
+                    : "/bin/launchctl"
+                XCTAssertEqual(executable, expected)
+                if expected == "/bin/launchctl" {
+                    XCTAssertEqual(arguments, ["print", "system/" + DisplayHostHealthSampler.launchdLabel(names[calls.count - 2])])
+                }
+                guard let output = queue.removeFirst() else { throw DisplayHostHealthSample.Unknown() }
+                return output
+            }
+        }
+        let idle0 = record(Self.idleFields, service: names[0]), idle1 = record(Self.neverStartedFields, service: names[1])
+        XCTAssertEqual(try run([unrelated, idle0, idle1, unrelated]),
+                       [names[0]: .idle(launches: 23), names[1]: .idle(launches: 0)])
+        let running = [unrelated, row(533, names[0]), row(546, names[1])].joined(separator: "\n")
+        let later = [unrelated, row(533, names[0], cpu: "00:01.50"), row(546, names[1])].joined(separator: "\n")
+        XCTAssertEqual(try run([running, runningRecord(533, runs: 2, service: names[0]), runningRecord(546, service: names[1]), later]),
+                       [names[0]: .running(pid: 533, start: "Tue Sep 29 20:00:00 2026", cpuSeconds: 1.5, launches: 2),
+                        names[1]: .running(pid: 546, start: "Tue Sep 29 20:00:00 2026", cpuSeconds: 1, launches: 1)])
+        let appeared = [unrelated, row(533, names[0])].joined(separator: "\n")
+        let restarted = [unrelated, row(533, names[0], start: "Tue Sep 29 20:00:09 2026")].joined(separator: "\n")
+        let wrongPID = [unrelated, row(534, names[0])].joined(separator: "\n")
+        for outputs: [String?] in [[unrelated, idle0, idle1, appeared],                       // started after launchd read
+                                   [appeared, idle0, idle1, unrelated],                       // exited before launchd read
+                                   [unrelated, runningRecord(533, service: names[0]), idle1, appeared],
+                                   [appeared, runningRecord(533, service: names[0]), idle1, restarted],
+                                   [wrongPID, runningRecord(533, service: names[0]), idle1, wrongPID]] {
+            assertUnknown(try run(outputs), "colorsync_visibility_changed")
+        }
+        assertUnknown(try run([unrelated, nil]), "colorsync_launchd_unreadable")
+        assertUnknown(try run([nil]), "colorsync_process_list")
+        assertUnknown(try run(["malformed listing"]), "colorsync_service_counter")
+        assertUnknown(try run([unrelated, idle0, "system/ = {"]), "colorsync_launchd_record_invalid")
+        assertUnknown(try run([unrelated, idle0, record(["state = not running", "active count = 0", "runs = 4",
+                                                         "last terminating signal = Segmentation fault: 11"], service: names[1])]),
+                      "colorsync_launchd_state_unsupported")
+    }
+
+    func testCaptureBudgetBoundsEveryHelperByRemainingTimeAndStopsWhenSpent() {
+        final class FakeTime: @unchecked Sendable { var value = 0.0 }
+        let time = FakeTime()
+        let deadline = DisplayHostHealthSampler.Deadline(budget: 2.5) { time.value }
+        XCTAssertEqual(try deadline.remaining(atMost: 1), 1)
+        var timeouts: [TimeInterval] = []
+        let names = DisplayHostHealthSampler.services
+        assertUnknown(try DisplayHostHealthSampler.serviceSample(deadline: deadline) { executable, _, timeout in
+            timeouts.append(timeout)
+            time.value += 1
+            if executable == "/bin/ps" { return "1 Tue Sep 29 20:00:00 2026 00:00.01 /sbin/launchd" }
+            return self.record(Self.idleFields, service: names[timeouts.count - 2])
+        }, "host_health_capture_budget")
+        XCTAssertEqual(timeouts, [2.5, 1.5, 0.5])
+        XCTAssertLessThan(DisplayHostHealthSampler.captureBudget, 3, "must finish inside the in-flight watchdog")
+        time.value = .nan
+        assertUnknown(try deadline.remaining(), "host_health_capture_budget")
+    }
+
+    func testUnavailableInputIsExposedWithoutChangingReasonContract() {
+        let failed = expectation(description: "failure diagnostic")
+        let monitor = DisplayHostHealth(sample: { throw DisplayHostHealthSample.Unknown("vm_statistics") },
+            onFailure: { reason in
+                XCTAssertEqual(reason, "host health: host_health_unknown (vm_statistics)")
+                failed.fulfill()
+            })
+        monitor.tick()
+        wait(for: [failed], timeout: 1)
+        XCTAssertEqual(monitor.report.reasons, ["host_health_unknown"])
+        XCTAssertEqual(monitor.report.unavailableInput, "vm_statistics")
     }
 
     func testMetadataScanIsBoundedAndRejectsSymlinks() throws {

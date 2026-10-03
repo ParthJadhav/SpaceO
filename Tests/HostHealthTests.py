@@ -31,7 +31,7 @@ class HostHealthTests(unittest.TestCase):
 
     def samples(self):
         a = dict(at=1, pressure=1, swap=dict(Swapins=100, Swapouts=200),
-                 services={name: (i+1, 10.) for i, name in enumerate(health.SERVICES)})
+                 services={name: (i+1, 10., 1) for i, name in enumerate(health.SERVICES)})
         b = copy.deepcopy(a)
         b['at'] = 6
         return a, b
@@ -85,13 +85,154 @@ class HostHealthTests(unittest.TestCase):
         text = '1 00:01.00 /private/unrelated app\n' + '\n'.join(
             f'{i+10} 403:18.33 {name}' for i, name in enumerate(health.SERVICES))
         self.assertEqual(len(health.parse_services(text)), 2)
-        for bad in ['', text.splitlines()[1], text + '\n' + text.splitlines()[1]]:
+        self.assertEqual(len(health.parse_services(text.splitlines()[1])), 1)
+        self.assertEqual(health.parse_services('1 00:00.00 /bin/ps'), {})
+        for bad in ['', 'malformed listing', 'invalid ' + health.SERVICES[0], text + '\n' + text.splitlines()[1]]:
             with self.assertRaises(ValueError): health.parse_services(bad)
+
+    IDLE = ["state = not running", "active count = 0", "runs = 23",
+            "last exit reason = JETSAM_REASON_MEMORY_IDLE_EXIT",
+            "last jetsam exit details = JETSAM_REASON_MEMORY_IDLE_EXIT", "job state = exited",
+            "properties = partial import | supports pressured exit | system service"]
+    NEVER_STARTED = ["active count = 0", "state = not running", "runs = 0",
+                     "last exit code = (never exited)"]
+
+    def record(self, fields, service=None, program=None):
+        service = service or health.SERVICES[0]
+        # Nested blocks are ignored; only top-level fields are evidence.
+        return ("system/" + health.launchd_label(service) + " = {\n\tprogram = " + (program or service) + "\n"
+                + "".join("\t" + field + "\n" for field in fields)
+                + '\tendpoints = {\n\t\t"x" = {\n\t\t\tpid = 9\n\t\t\tstate = running\n\t\t}\n\t}\n}\n')
+
+    def running_record(self, pid, service, runs=1):
+        return self.record(["active count = 2", "state = running", f"runs = {runs}", f"pid = {pid}",
+                            "last exit code = (never exited)", "job state = running"], service)
+
+    def test_launchd_evidence_accepts_only_exact_running_idle_exit_and_never_started(self):
+        service = health.SERVICES[0]
+        self.assertEqual(health.launchd_service(self.record(self.IDLE), service), (None, 23))
+        self.assertEqual(health.launchd_service(self.record(self.NEVER_STARTED), service), (None, 0))
+        self.assertEqual(health.launchd_service(self.running_record(533, service, 4), service), (533, 4))
+        idle = lambda old, new: self.record([new if f.startswith(old) else f for f in self.IDLE if new or not f.startswith(old)])
+        for bad in [idle("last exit reason", "last exit reason = JETSAM_REASON_MEMORY_HIGHWATER"),
+                    self.record(self.IDLE + ["last terminating signal = Killed: 9"]),
+                    self.record(self.IDLE + ["last exit code = 1"]), self.record(self.IDLE + ["pid = 42"]),
+                    idle("active count", "active count = 1"), idle("properties", "properties = system service"),
+                    idle("job state", "job state = spawn scheduled"), idle("runs", "runs = 0"),
+                    idle("state = not running", "state = spawn scheduled"),
+                    self.record([f.replace("runs = 0", "runs = 1") for f in self.NEVER_STARTED]),
+                    self.record(self.NEVER_STARTED + ["job state = exited"]),
+                    self.record(["state = running", "runs = 1"]), self.record(["state = running", "runs = 1", "pid = 0"]),
+                    "", "malformed", idle("runs", "runs = -1"), idle("runs", None),
+                    self.record(self.IDLE + ["state = not running"]),
+                    self.record(self.IDLE, health.SERVICES[1]), self.record(self.IDLE, program="/private/other")]:
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError): health.launchd_service(bad, service)
+
+    def services(self, *values):
+        return dict(zip(health.SERVICES, values))
+
+    def test_crash_loop_hidden_between_absent_process_listings_is_unknown(self):
+        a, b = self.samples()
+        a['services'] = self.services((None, None, 5), (None, None, 0))
+        b['services'] = self.services((None, None, 7), (None, None, 0))
+        with self.assertRaises(ValueError): health.assess(a, b)
+
+    def test_launch_counts_admit_only_stable_idle_or_one_accounted_start(self):
+        a, b = self.samples()
+        a['services'] = b['services'] = self.services((None, None, 5), (None, None, 0))
+        report = health.assess(a, b)
+        self.assertTrue(report['admitted'])
+        self.assertEqual(report['colorsyncCPUPercent'], 0)
+        self.assertEqual(set(report), set(health.assess(*self.samples())))
+        b = dict(b, services=self.services((40, .1, 6), (None, None, 0)))
+        self.assertEqual(health.assess(a, b)['colorsyncCPUPercent'], 2)
+        b = dict(b, services=self.services((40, 2.5, 6), (None, None, 0)))
+        self.assertEqual(health.assess(a, b)['reasons'], ['colorsync_busy'])
+        for old, new in [((None, None, 5), (40, 0., 7)), ((None, None, 5), (40, 0., 5)),
+                         ((None, None, 5), (None, None, 4)), ((40, 1., 3), (40, 1., 4)),
+                         ((40, 1., 3), (41, 1., 3)), ((40, 1., 3), (None, None, 3))]:
+            a, b = self.samples()
+            a['services'] = self.services(old, (None, None, 0))
+            b['services'] = self.services(new, (None, None, 0))
+            with self.subTest(old=old, new=new):
+                with self.assertRaises(ValueError): health.assess(a, b)
+        a, b = self.samples()
+        del b['services'][health.SERVICES[1]]
+        with self.assertRaises(ValueError): health.assess(a, b)
+
+    def test_idle_service_does_not_mask_busy_running_peer(self):
+        a, b = self.samples()
+        a['services'] = self.services((None, None, 23), (2, 10., 1))
+        b['services'] = self.services((None, None, 23), (2, 12.5, 1))
+        self.assertEqual(health.assess(a, b)['reasons'], ['colorsync_busy'])
+
+    def test_service_sample_reconciles_process_listings_with_both_exact_jobs(self):
+        names, other = health.SERVICES, '1 00:00.01 /sbin/launchd'
+        idle0, idle1 = self.record(self.IDLE, names[0]), self.record(self.NEVER_STARTED, names[1])
+
+        def run(outputs):
+            calls = []
+
+            def read(command, until):
+                calls.append(command)
+                expected = '/bin/ps' if len(calls) in (1, 4) else '/bin/launchctl'
+                self.assertEqual(command[0], expected)
+                if expected == '/bin/launchctl':
+                    self.assertEqual(command[1:], ['print', 'system/' + health.launchd_label(names[len(calls)-2])])
+                self.assertEqual(until, 99)
+                value = outputs[len(calls)-1]
+                if value is None:
+                    raise ValueError('unreadable')
+                return value
+            with mock.patch.object(health, 'read_command', side_effect=read):
+                return health.service_sample(99)
+
+        self.assertEqual(run([other, idle0, idle1, other]), self.services((None, None, 23), (None, None, 0)))
+        rows = lambda cpu: '\n'.join([other, f'533 {cpu} {names[0]}', f'546 00:01.00 {names[1]}'])
+        self.assertEqual(run([rows('00:01.00'), self.running_record(533, names[0], 2),
+                              self.running_record(546, names[1]), rows('00:01.50')]),
+                         self.services((533, 1.5, 2), (546, 1., 1)))
+        appeared, wrong = other + f'\n533 00:01.00 {names[0]}', other + f'\n534 00:01.00 {names[0]}'
+        for outputs in [[other, idle0, idle1, appeared], [appeared, idle0, idle1, other],
+                        [other, self.running_record(533, names[0]), idle1, appeared],
+                        [wrong, self.running_record(533, names[0]), idle1, wrong],
+                        [rows('00:02.00'), self.running_record(533, names[0]), self.running_record(546, names[1]), rows('00:01.00')],
+                        [other, None], [None], ['malformed listing'], [other, idle0, 'system/ = {'],
+                        [other, idle0, self.record(['state = not running', 'active count = 0', 'runs = 4',
+                                                    'last terminating signal = Segmentation fault: 11'], names[1])]]:
+            with self.subTest(outputs=outputs):
+                with self.assertRaises(ValueError): run(outputs)
+
+    def test_snapshot_shares_one_budget_across_every_helper(self):
+        clock = [0.]
+        seen = []
+        records = {health.launchd_label(name): self.record(self.IDLE, name) for name in health.SERVICES}
+
+        def read(command, until):
+            seen.append(until - clock[0])
+            if until - clock[0] <= 0:
+                raise ValueError('snapshot exceeded budget')
+            clock[0] += .5
+            if command[0] == '/usr/sbin/sysctl': return '1\n'
+            if command[0] == '/usr/bin/vm_stat': return 'Swapins: 1.\nSwapouts: 2.\n'
+            if command[0] == '/bin/ps': return '1 00:00.01 /sbin/launchd'
+            return records[command[2].split('/', 1)[1]]
+        with mock.patch.object(health.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(health, 'read_command', side_effect=read):
+            with self.assertRaises(ValueError): health.snapshot()
+        self.assertEqual(seen, [2.5, 2., 1.5, 1., .5, 0.])
+        clock[0], seen[:] = 0., []
+        with mock.patch.object(health.time, 'monotonic', side_effect=lambda: clock[0]), \
+                mock.patch.object(health, 'read_command', side_effect=read), \
+                mock.patch.object(health, 'SNAPSHOT_BUDGET', 3.1):
+            self.assertEqual(health.snapshot()['services'], self.services((None, None, 23), (None, None, 23)))
+        with self.assertRaises(ValueError): health.read_command([sys.executable, '-c', 'pass'], until=0)
 
     def test_busy_services_pressure_and_current_swap_refuse(self):
         a, b = self.samples()
         service = health.SERVICES[0]
-        b['services'][service] = (a['services'][service][0], 12.5)
+        b['services'][service] = (a['services'][service][0], 12.5, 1)
         b['pressure'] = 2
         b['swap']['Swapouts'] += 1
         r = health.assess(a, b)
@@ -104,8 +245,8 @@ class HostHealthTests(unittest.TestCase):
         for field in ['restart', 'cpu_reset', 'swap_reset', 'short', 'nan']:
             a, b = self.samples()
             name = health.SERVICES[0]
-            if field == 'restart': b['services'][name] = (99, 10)
-            if field == 'cpu_reset': b['services'][name] = (1, 9)
+            if field == 'restart': b['services'][name] = (99, 10, 1)
+            if field == 'cpu_reset': b['services'][name] = (1, 9, 1)
             if field == 'swap_reset': b['swap']['Swapins'] = 0
             if field == 'short': b['at'] = 2
             if field == 'nan': b['at'] = float('nan')

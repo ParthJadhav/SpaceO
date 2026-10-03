@@ -55,6 +55,8 @@ public enum CLISpec {
         "daemon.uninstall": ["socket", "json", "yes"],
         "daemon.status": ["socket", "json"],
         "place": ["socket", "json", "session", "lease", "window", "placement", "strict", "require-isolation"],
+        "safety": ["json", "operator"],
+        "safety.clear-host-health": ["json", "operator"],
         "doctor": ["socket", "json", "interactive", "fix", "yes", "probe-client-versions"],
         "setup": ["socket", "json", "no-prompt", "no-self-test", "client", "yes", "print"],
         "skill": ["json"],

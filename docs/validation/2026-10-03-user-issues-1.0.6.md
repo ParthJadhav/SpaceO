@@ -1,0 +1,68 @@
+# October 3 user issue fixes for 1.0.6
+
+## Scope and authorization
+
+Started from current remote main `a858236`, preserving unrelated local history in the original
+checkout. Four reports were open: #29 screenshot output directories, #30 native text replacement,
+#34 and #36 absent ColorSync service admission and false persistent unknown latches.
+
+The release owner instructed: "fix all the issues you can" and "create a new release with those
+fixes and reply to the users as well", and authorized this computer for testing and deployment
+with no follow-up questions. This is recorded as release-specific owner direction for 1.0.6,
+with the missing behavior qualification and RA-057 disclosed. It does not authorize bypassing
+runtime admission, weakening signing/distribution gates, or claiming the incident resolved.
+
+## Implementation evidence
+
+Both health reports identify an absent on-demand ColorSync service. The native and Python
+parsers required both services, so a successful listing without them threw unknown. New logic
+requires verified launchd idle/never-started state and unchanged launch counts before admitting
+absence as zero. Exactly one new launch can use its whole CPU total; hidden relaunches, exits,
+restarts, duplicate identities and malformed/unavailable data still refuse. The process list is
+reconciled before/after launchd observations and all sampling work shares a deadline. This adopts
+the verified idle-evidence approach from Muness Castle's PR #37 while excluding its headless
+Stage/window changes. Issue #38 remains open for live qualification.
+The startup decision waits 15 seconds, covering two bounded samples five seconds apart.
+
+The old journal is never reset automatically. Explicit operator recovery locks it in place,
+refuses active owners, pending mutations/live cases or other failure classes, checks no SpaceO
+display and passing current observations, archives the latch and preserves rolling budgets.
+Deadline checks precede clearing, including after archive persistence. Doctor stays read-only.
+
+Native synthetic Command-A was never checked before typing. The fix uses exact-window native
+Accessibility selection and selected-text mutation with full bounded readback, UTF-16 range
+validation and no duplicate fallback after a write. Web/secure/editor mirrors are excluded.
+Collapsed-caret typing retains key delivery. Unsupported replacement refuses before typing.
+This is deterministic implementation evidence; TextEdit behavior on reporter hosts remains
+subject to their verification.
+
+Screenshot output creates its parent chain only after timely capture/encoding and geometry
+validation. Parent creation errors name the parent path. Existing capture timeout and late-write
+protections remain covered.
+
+## Host and release boundaries
+
+The read-only preflight on macOS 27.2 build 26B5091g, Apple Silicon, refused
+`recent_windowserver_diagnostic` (one report; normal memory pressure, no new swap, zero bounded
+system-service timeout matches). No live display creation or input followed that refusal.
+This is not passing qualification. Local compiler is Xcode 27 / Swift 6.4; hosted CI and
+candidate workflows pin Xcode 26.3 / Swift 6.2 separately.
+
+RA-057 remains open. No new live suite, computer-use matrix, physical Viewer control, Chromium
+motion or exact-artifact behavior pass is claimed. Release 1.0.6 is owner-directed with those
+limits disclosed; future versions retain the default release gates.
+
+## Verification status
+
+`make verify-release` passed all 1,725 deterministic Swift tests, the supporting Python, shell
+and Node checks, and MCP smoke for 35 tools. The focused health suites passed 16 Swift and
+17 Python tests; guard-removal checks caused the relevant suites to fail and were restored.
+`Tests/ReleaseSecurityTests.sh`, `Tests/LiveTestGateTests.sh`, release configuration/dry-run,
+public-file privacy checks and `git diff --check` passed. Local dry-run credentials are absent;
+signing and notarization remain confined to the protected hosted workflow.
+
+The optimized warnings-as-errors build passed. The ad-hoc Viewer bundle built and passed strict
+deep signature verification without being launched. Final Opus 5.5 review found no remaining
+blockers in health/recovery or native typing. Hosted CI, signed candidate construction,
+publication and public-download verification are tracked by the subsequent completion entry.
+Screenshots, process lists, Accessibility content and raw host logs remain private.

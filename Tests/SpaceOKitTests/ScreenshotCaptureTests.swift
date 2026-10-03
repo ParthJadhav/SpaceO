@@ -244,6 +244,28 @@ final class ScreenshotCaptureTests: XCTestCase {
         _ = try await manager.destroyAll(quitApps: false)
     }
 
+
+    func testScreenshotCreatesMissingParentChainAndNamesBlockedDirectory() async throws {
+        let capture = ScreenshotCapture(provider: { try Self.frame($0) })
+        let (manager, session) = try await manager(capture)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("missing/deep/diag.png")
+        let response = await manager.handle(request(session, output: output))
+        XCTAssertTrue(response.ok, response.error ?? "")
+        let bytes = try Data(contentsOf: output)
+        XCTAssertEqual(Array(bytes.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        let blocker = root.appendingPathComponent("file")
+        try Data("preserve".utf8).write(to: blocker)
+        let blocked = blocker.appendingPathComponent("missing/diag.png")
+        let failure = await manager.handle(request(session, output: blocked))
+        XCTAssertFalse(failure.ok)
+        XCTAssertEqual(failure.errorCode, "capture_failed")
+        XCTAssertTrue(failure.error?.contains(blocked.deletingLastPathComponent().path) == true)
+        XCTAssertEqual(try Data(contentsOf: blocker), Data("preserve".utf8))
+        _ = try await manager.destroyAll(quitApps: false)
+    }
+
     func testGeometryChangedDuringEncodingRefusesPublication() async throws {
         let display = Display()
         let capture = ScreenshotCapture(provider: { try Self.frame($0) }, encoder: { image, limit in

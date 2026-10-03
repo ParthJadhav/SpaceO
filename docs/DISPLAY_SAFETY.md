@@ -62,6 +62,12 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   It requires two observations about five seconds apart, normal memory pressure, no new swap,
   combined ColorSync CPU below 50%, and no recent WindowServer diagnostic reports (this boot or
   at least 24 hours). These are conservative admission thresholds, not macOS diagnostic criteria.
+  On-demand ColorSync services contribute zero CPU only with verified launchd idle/never-started
+  state and unchanged launch counts, reconciled with the process list. A single verified new
+  launch contributes its whole lifetime CPU; hidden relaunches, exits, restarts and malformed
+  or unavailable evidence remain unknown. All sampler work shares a bounded deadline.
+  Unknown reports expose the unavailable input in `hostHealth.unavailableInput`.
+  Initial admission waits up to 15 seconds for the two bounded observations.
   Observations continue every five seconds; a separate watchdog trips on a sampler exceeding
   three seconds or a passing result older than ten seconds. There is one sampler, no replacement
   worker, no automatic reset, and no acceptance of a late result after refusal.
@@ -100,6 +106,21 @@ The per-user journal is `~/Library/Application Support/SpaceO/display-safety.jso
 non-private journal fails closed. There is intentionally no automatic reset, expiry of failures,
 or retry loop. Do not unlink it while any SpaceO owner is running or suspended: replacing a locked
 file would defeat cross-process exclusion.
+
+For the false `host health: host_health_unknown` latch produced by 1.0.5 when on-demand
+ColorSync services were absent, upgrade the CLI, stop **all** SpaceO owners (including Viewer
+and the supervised LaunchAgent), then run:
+
+```sh
+spaceo safety clear-host-health --operator
+```
+
+This local operator command locks the existing journal, refuses a pending mutation/live case
+or any other failure class, requires no online SpaceO display and two healthy host observations,
+and archives the old journal before clearing only its failure. It preserves creation budgets
+and the locked file's identity. An owner that relaunches or still holds the file lock prevents
+recovery; stop its supervision first. Doctor remains read-only. Memory pressure, incidents and
+unknown/stale health still refuse; this command neither qualifies the host nor clears RA-057.
 
 After a trip, stop further display work, retain the log and journal, and plan recovery on a
 reserved host. Establish that all display-owning SpaceO processes have exited, no orphan display

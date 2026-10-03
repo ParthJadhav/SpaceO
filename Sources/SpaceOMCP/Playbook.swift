@@ -304,7 +304,10 @@ means no matching window was confirmed within the budget, not proof that no wind
   `to_element`) in place of a point. The daemon resolves the element's frame centre and reports
   `resolved_point` so you learn the coordinate for later. Supply exactly one of point or element.
 - `spaceo_type` types into the focused element; newlines are Return. `replace: true` clears the
-  field first; `submit: true` appends Return and reports it separately.
+  field first. Native text replacement uses Accessibility selection and readback, and refuses
+  fields where it cannot confirm replacement. Native `cmd+a` selects via Accessibility when
+  available; typing into that selection preserves the surrounding text. `submit: true` appends
+  Return and reports it separately.
 - `spaceo_press_key` for combinations like `cmd+s`, `return`, `esc`. `hold_ms` (0–5000) holds
   the key; `action: down|up` for games and canvases — an unmatched `down` is released by the
   daemon after 10 s and reported.

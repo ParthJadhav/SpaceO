@@ -6,6 +6,23 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-10-03
+
+- Fix host-health admission when ColorSync services are running on demand and absent from the
+  process list. Verify idle state and launch counts through launchd; charge a single verified
+  new launch its whole CPU total. Hidden relaunches, exits, restarts and invalid data still refuse. Report the unavailable sampler input and allow 15 seconds for startup.
+- Add `spaceo safety clear-host-health --operator` to recover the old idle false-unknown latch
+  after stopping all owners. Recovery verifies host health, archives the journal and preserves
+  creation budgets; pending work and other safety failures cannot be cleared.
+- Use Accessibility selection and readback for native `cmd+a`, `type --replace`, and typing
+  into a selection. Unsupported replacement refuses before typing; an unconfirmed edit is
+  never repeated through synthetic input.
+- Create missing parent directories for screenshot file output and identify the directory
+  when creation fails.
+
+The WindowServer/ColorSync freeze (RA-057) remains unresolved. No new live or exact-artifact
+behavior qualification is claimed; see [release notes](docs/RELEASE_NOTES_1.0.6.md).
+
 ## [1.0.5] - 2026-09-30
 
 Owner-directed release of display-safety safeguards. The WindowServer/ColorSync freeze remains

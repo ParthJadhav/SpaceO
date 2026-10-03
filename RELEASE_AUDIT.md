@@ -75,6 +75,13 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 ### RA-057 — September 29 freeze after passing live assertions
 
+October 3 maintenance update: fixes for #29/#30/#34/#36 address screenshot paths, native text
+selection and absent on-demand service sampling. Explicit recovery clears only idle false-unknown
+latches after healthy observations and owner exclusion, retaining creation budgets. This neither
+closes RA-057 nor qualifies the affected Mac. Version 1.0.6 is owner-directed with a release-specific
+qualification exception; [the record](docs/validation/2026-10-03-user-issues-1.0.6.md) retains the
+refused host preflight and missing new live/artifact behavior evidence.
+
 The owner confirmed a forced restart at 23:03. An earlier 20:28 watchdog/spin captured
 WindowServer's main thread unresponsive and 75 sampled threads blocked through ColorSync.
 System synchronization timeouts recurred during later performance, MCP and XCTest work, even
