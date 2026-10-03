@@ -177,3 +177,8 @@ A successful no-skip local run on that host (`make test-live-full` and
 `make computer-use-check-full`, retained privately) is still required *approval evidence* under
 `docs/RELEASE_POLICY.md` — the release owner reviews it at go/no-go rather than automation
 enforcing it.
+
+A passing helper postflight also requires the native lifecycle journal and runtime health circuit
+to remain ready after verified cleanup. Helper success cannot hide a sticky native refusal.
+A case that never starts a Stage may retain only the exact initial `unknown/not_sampled` report
+with a ready journal; that exception does not admit display creation.

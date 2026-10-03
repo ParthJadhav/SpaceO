@@ -128,6 +128,7 @@ final class IntegrationTests: XCTestCase {
         // future admission, without suspending an owner whose display has safely retired.
         do {
             try requireHostHealth()
+            try LiveHostHealth.requireNativeReadiness()
         } catch {
             Stage.stopLiveDisplayWork()
             throw error

@@ -51,7 +51,10 @@ final class RecordingFrameCaptureTests: XCTestCase {
     func testTimeoutCannotAccumulateCapturesAndLateResultIsDiscarded() async throws {
         let started = expectation(description: "native capture started")
         let provider = SuspendedProvider(started: started)
-        let capture = RecordingFrameCapture(timeout: 0.03) { _, _, _, _ in try await provider.image() }
+        // Warm the PNG encoder outside capture deadlines. The suspended provider forces
+        // the timeout; a healthy recovery capture gets the normal production budget.
+        _ = try Capture.pngData(Self.image(), maximumBytes: RecordingFrameCapture.maximumPNGBytes)
+        let capture = RecordingFrameCapture { _, _, _, _ in try await provider.image() }
         let display = stage()
         let owner = SessionCaptureWork()
         let first = Task { try await capture.capture(stage: display, rect: display.bounds, foreign: .none, lease: owner.begin()) }
@@ -67,7 +70,8 @@ final class RecordingFrameCaptureTests: XCTestCase {
         provider.release()
         // Wait for the already-running worker to retire; do not restart a pending capture.
         var recovered = false
-        for _ in 0..<100 {
+        let recoveryDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !recovered, ContinuousClock.now < recoveryDeadline {
             do {
                 let data = try await capture.capture(stage: display, rect: display.bounds, foreign: .none, lease: owner.begin())
                 XCTAssertFalse(data.isEmpty)

@@ -24,6 +24,16 @@ Status definitions:
 
 ## Active milestone
 
+### October 4 qualification test follow-up
+
+- Adopt the native postflight safeguard and missing evacuation destination regression from PR
+  #37. Its broader headless/inactive-display changes still require #38's live qualification.
+- Recording timeout coverage uses a deliberately suspended provider with the production deadline;
+  PNG encoding is warmed outside that deadline so recovery is not a 30 ms encoding benchmark.
+- Host CLI, daemon, Viewer and configured client executables now agree on the signed 1.0.6 release.
+  Doctor passes. Live admission still refuses diagnostic history and recent system timeouts;
+  RA-057 remains open. See [verification record](docs/validation/2026-10-04-qualification-followup.md).
+
 ### October 3 user-reported regressions
 
 - #29: screenshot output now creates missing parents and identifies a blocked directory.
