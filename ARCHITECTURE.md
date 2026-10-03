@@ -80,7 +80,7 @@ or production display-origin mutation; see [DISPLAY_SAFETY.md](docs/DISPLAY_SAFE
 let pool = DisplayPool(sessionsPerDisplay: 4,
                        displaySize: CGSize(width: 2560, height: 1600))
 let slot = try pool.allocate()      // reuses a display with a free tile
-pool.release(slot)                  // releases the reservation; retention is caller-controlled
+pool.release(slot)                  // releases the tile; attempts retirement if the display is empty
 ```
 
 A virtual display is an entire framebuffer for the WindowServer to composite, so one per agent
@@ -93,11 +93,13 @@ because re-tiling underneath a running agent would move its windows out from und
 caller does not pin a size, the CLI grows the display to match the requested density. The daemon
 keeps one empty display warm for its lifetime so rapid agent churn reuses a stable framebuffer;
 excess empty displays from a larger peak are retired after a grace period.
+Direct pool callers pass `retainEmpty: true` to keep an empty display available for reuse;
+the default `release(_:)` attempts immediate retirement when the last reservation is released.
 
 **Runtime geometry — `ResourceBudget`.** `allocate()` validates positive whole-pixel geometry
 representable by Swift and CoreGraphics and enforces configured session, display, framebuffer,
 and creation limits. Operator resource overrides do not lift the separate persistent lifecycle
-creation budget or host-health checks. `pool` and `doctor` report usage and effective limits.
+creation budget or host-health checks. `pool` reports usage and effective limits.
 The convenience full-layout API materializes at most
 `TileLayout.maximumMaterializedCapacity` entries. That allocation bound is not a density limit:
 production per-tile lookup stays O(1) and allocation-free for any positive technically
