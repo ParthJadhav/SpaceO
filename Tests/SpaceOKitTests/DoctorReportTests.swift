@@ -195,6 +195,28 @@ final class DoctorReportTests: XCTestCase {
         XCTAssertTrue(report.blockers[0].next.contains("launchctl kickstart -k gui/"))
         XCTAssertTrue(report.blockers[0].next.contains("`spaceo daemon status`"))
     }
+
+    func testPermissionRemediesUseDaemonAttributionAndNeverGuessTheCallerForAnUnknownDaemon() {
+        var runtime = Self.runtime()
+        runtime.responsibleProcess = "spaceo (/Users/me/.local/bin/spaceo)"
+        runtime.screenRecordingGranted = false
+        runtime.canCapture = false
+        var report = Self.report(daemon: .running(runtime), matches: true)
+        XCTAssertEqual(report.permissionGrantTarget, runtime.responsibleProcess)
+        let capture = report.blockers.first { $0.code == "daemon_capture_unavailable" }
+        XCTAssertTrue(capture?.next.contains("spaceo (/Users/me/.local/bin/spaceo)") == true)
+        XCTAssertFalse(capture?.next.contains("Terminal") == true)
+
+        runtime.responsibleProcess = nil
+        for state in [DoctorReport.DaemonState.running(runtime), .running(nil), .unresponsive(timeoutSeconds: 1)] {
+            report.daemon = state
+            XCTAssertEqual(report.permissionGrantTarget, "the app or executable hosting the daemon")
+        }
+        report.daemon = .notRunning
+        XCTAssertEqual(report.permissionGrantTarget, report.callerAttribution)
+        report.callerAttribution = nil
+        XCTAssertEqual(report.permissionGrantTarget, "the terminal or app running spaceo")
+    }
     func testLifecycleLatchBlocksReadinessEvenWhenDaemonPermissionsAreHealthy() throws {
         var runtime = Self.runtime()
         runtime.displaySafety = DisplaySafetyStatus(state: .blocked, reason: "injected timeout")

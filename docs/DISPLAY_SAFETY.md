@@ -122,6 +122,12 @@ and the locked file's identity. An owner that relaunches or still holds the file
 recovery; stop its supervision first. Doctor remains read-only. Memory pressure, incidents and
 unknown/stale health still refuse; this command neither qualifies the host nor clears RA-057.
 
+The LaunchAgent uses `KeepAlive`, and Viewer or MCP clients can start a daemon on demand.
+Stopping one daemon PID does not stop those launchers. Quit Viewer and disconnect MCP clients,
+and stop LaunchAgent supervision during the reserved recovery window. Repeated "already
+listening" messages mean another daemon owns the socket; they do not authorize killing it or
+removing its socket/journal. Restore the intended single daemon launcher after recovery.
+
 After a trip, stop further display work, retain the log and journal, and plan recovery on a
 reserved host. Establish that all display-owning SpaceO processes have exited, no orphan display
 remains, and physical-only display operation is stable. Owner termination may itself trigger

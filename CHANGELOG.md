@@ -19,6 +19,8 @@ All notable user-visible changes are recorded here. SpaceO follows
   never repeated through synthetic input.
 - Create missing parent directories for screenshot file output and identify the directory
   when creation fails.
+- Point `doctor --fix` permission guidance at the daemon's reported app or executable rather
+  than the terminal running doctor; unknown daemon attribution stays explicit.
 
 The WindowServer/ColorSync freeze (RA-057) remains unresolved. No new live or exact-artifact
 behavior qualification is claimed; see [release notes](docs/RELEASE_NOTES_1.0.6.md).

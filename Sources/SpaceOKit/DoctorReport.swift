@@ -147,6 +147,16 @@ public struct DoctorReport: Sendable {
         return nil
     }
 
+    /// Permission remedies must name the process doing the work. An old or silent daemon
+    /// cannot inherit this terminal's attribution merely because its own is unavailable.
+    public var permissionGrantTarget: String {
+        switch daemon {
+        case .notRunning: return callerAttribution ?? "the terminal or app running spaceo"
+        case .running, .unresponsive:
+            return runtime?.responsibleProcess ?? "the app or executable hosting the daemon"
+        }
+    }
+
     // MARK: - Rendering
 
     static func ids(_ values: [UInt32]) -> String {
@@ -337,7 +347,7 @@ public struct DoctorReport: Sendable {
                 next: "Retry `spaceo doctor` in a few seconds; if it stays silent, read the daemon "
                     + "log at \(logPath).")]
         }
-        let grantee = runtime?.responsibleProcess ?? "the app that started the daemon"
+        let grantee = permissionGrantTarget
         return safetyBlockers + readiness.blockers.map { code in
             switch code {
             case "daemon_not_running":

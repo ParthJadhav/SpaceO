@@ -15,6 +15,8 @@ This update fixes the issues reported in #29, #30, #34 and #36.
   into that selection edit the selected text and verify the result. Unsupported native replacement
   refuses before typing; an unconfirmed edit must not be retried blindly.
 - Screenshot file output creates missing parent directories and names the directory if it fails.
+- `doctor --fix` names the daemon's reported permission target, including a launchd executable,
+  instead of telling users to enable the terminal running doctor.
 
 ## Validation and limits
 

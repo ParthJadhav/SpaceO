@@ -40,6 +40,12 @@ Screenshot output creates its parent chain only after timely capture/encoding an
 validation. Parent creation errors name the parent path. Existing capture timeout and late-write
 protections remain covered.
 
+The secondary permission-remediation report in #34 also reproduced in source: `doctor --fix`
+chose the daemon's missing grant, then named the caller's app after opening Settings. It now
+uses the daemon's reported attribution; unavailable or silent-daemon attribution stays unknown
+rather than falling back to Terminal. Deterministic tests cover a launchd executable, missing
+attribution, an old/silent daemon and an absent daemon.
+
 ## Host and release boundaries
 
 The read-only preflight on macOS 27.2 build 26B5091g, Apple Silicon, refused
@@ -54,7 +60,7 @@ limits disclosed; future versions retain the default release gates.
 
 ## Verification status
 
-`make verify-release` passed all 1,725 deterministic Swift tests, the supporting Python, shell
+`make verify-release` passed all 1,726 deterministic Swift tests, the supporting Python, shell
 and Node checks, and MCP smoke for 35 tools. The focused health suites passed 16 Swift and
 17 Python tests; guard-removal checks caused the relevant suites to fail and were restored.
 `Tests/ReleaseSecurityTests.sh`, `Tests/LiveTestGateTests.sh`, release configuration/dry-run,
