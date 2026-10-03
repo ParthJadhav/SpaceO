@@ -26,7 +26,8 @@ Status definitions:
 
 ### October 4 ColorSync root-cause follow-up
 
-- Deterministically verified; live verification pending: correct CPU-observation timestamps, retain the most recently used valid
+- Deterministically verified, with one focused native workflow pass: correct CPU-observation
+  timestamps, retain the most recently used valid
   idle display, and avoid already-satisfied window mutations. Add deterministic regressions
   and content-free launch failure attribution; remove a refusal-only live display cycle.
 - These fix confirmed measurement and churn defects. They do not establish the initiating

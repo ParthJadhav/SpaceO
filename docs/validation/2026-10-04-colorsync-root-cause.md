@@ -68,8 +68,37 @@ three seconds, and its runtime assertions remain driven by the injected clock. T
 
 Regression mutations reproduced the old measurement and pacing errors. Reverting idle retention
 to the old policy made the repeated-geometry case create six displays instead of two; restoring
-the fix passed all six pool tests. No new live run has been performed on these production fixes.
+the fix passed all six pool tests.
+
+## Focused native follow-up
+
+One owner-authorized `testFullWorkflowHasNoCoveredIsolationBreach` case passed without skips
+in 111.308 seconds, including the required pacing interval. This used the corrected production
+source plus private experimental overrides: historical diagnostic/timeout admission and page-ins
+alone were waived. New diagnostics, new timeout evidence, swap-outs, memory pressure, the 50% CPU
+limit and all lifecycle/identity checks remained required. This is modified-build evidence, not
+signed-release qualification or a full live-suite result.
+
+TextEdit launch, placement, typed-text readback, Accessibility addressing, covered isolation
+checks, application ownership and display retirement passed. The independent helper measured
+28.20% before the run, 28.16% after pacing and 31.15% in final postflight. There was no swap activity,
+new diagnostic report or new system-service timeout. One display was created and retired, and
+physical online/active IDs and mirror membership matched the baseline afterward. This single
+native case does not establish that repeated workloads or Chromium avoid the prior CPU event.
+
+Numeric observation of the existing 1600×1000 HiDPI display found 1600×1000 logical bounds and
+`CGDisplayPixelsWide/High` of 1600×1000. `CGDisplayCopyDisplayMode` returned no mode, so its backing
+pixel dimensions remain unknown. No assumed fourfold framebuffer-accounting change is made.
+Protected ColorSync process stack sampling was permission-refused; no function-level cause was
+obtained, and no privilege escalation or profile/preferences change occurred.
+
+The private driver's final budget merge initially failed on a Python `Path.stat` compatibility
+error after the live wrapper passed. A separate exclusive-lock operation then merged the one new
+attempt using the runtime's existing expiry rules, verified persistence, and preserved the original
+failure latch. The signed 1.0.6 daemon was restored with zero sessions/displays/orphans and matching
+CLI provenance. Experimental source was stashed privately and its executables removed.
+
 The 50% CPU threshold, current-health checks,
 creation budgets, randomized identities, sticky refusal and owner retention remain enforced.
-RA-057 and [#38](https://github.com/ParthJadhav/SpaceO/issues/38) remain open. Full live input and
-candidate qualification remain incomplete.
+RA-057 and [#38](https://github.com/ParthJadhav/SpaceO/issues/38) remain open. The full live suite,
+Chromium/MCP action matrix and candidate qualification remain incomplete.
