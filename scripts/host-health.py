@@ -57,7 +57,7 @@ def cpu_seconds(value):
     return result
 
 
-def parse_services(text):
+def process_services(text):
     result = {}
     for line in text.splitlines():
         parts = line.split(None, 2)
@@ -67,9 +67,58 @@ def parse_services(text):
         if service in result or not pid.isdecimal() or int(pid) <= 0:
             raise ValueError("ambiguous service identity")
         result[service] = (int(pid), cpu_seconds(counter))
+    return result
+
+
+def parse_services(text):
+    result = process_services(text)
     if set(result) != set(SERVICES):
         raise ValueError("service counters unavailable")
     return result
+
+
+def idle_service(text, service):
+    """Accept only top-level launchd evidence of a pressured-exit idle service."""
+    fields = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"\t([^\t=]+?) = (.+)", line)
+        if not match:
+            continue
+        key, value = match.groups()
+        if key in fields:
+            raise ValueError("ambiguous service state")
+        fields[key] = value
+    if (fields.get("program") != service or fields.get("state") != "not running"
+            or fields.get("active count") != "0"
+            or fields.get("last exit reason") != "JETSAM_REASON_MEMORY_IDLE_EXIT"
+            or fields.get("last jetsam exit details", "JETSAM_REASON_MEMORY_IDLE_EXIT")
+                != "JETSAM_REASON_MEMORY_IDLE_EXIT"
+            or "supports pressured exit" not in fields.get("properties", "").split(" | ")
+            or any(key in fields for key in ("pid", "last terminating signal", "last exit code"))
+            or not re.fullmatch(r"[0-9]{1,20}", fields.get("runs", ""))):
+        raise ValueError("service idle state unavailable")
+    # None is an explicit idle state, not a fabricated PID or CPU counter. The launch
+    # count must stay equal across samples, so a run/exit between them is unknown.
+    return (None, int(fields["runs"]))
+
+
+def service_sample():
+    command = ["/bin/ps", "-axo", "pid=,time=,comm="]
+    running = process_services(read_command(command))
+    missing = set(SERVICES) - set(running)
+    if not missing:
+        return running
+    idle = {}
+    for service in SERVICES:
+        if service in missing:
+            label = "com.apple." + service.rsplit("/", 1)[1]
+            idle[service] = idle_service(read_command(["/bin/launchctl", "print", "system/" + label]), service)
+    # Reconcile process visibility after launchd reads; a service appearing or a
+    # running PID changing makes the observation inconsistent rather than idle.
+    latest = process_services(read_command(command))
+    if set(latest) != set(running) or any(latest[name][0] != running[name][0] for name in running):
+        raise ValueError("service changed during sampling")
+    return dict(latest, **idle)
 
 
 def diagnostic_cutoff(boot_text, now):
@@ -124,7 +173,7 @@ def snapshot():
         if len(values) != 1:
             raise ValueError("swap counters unavailable")
         counters[name] = int(values[0])
-    services = parse_services(read_command(["/bin/ps", "-axo", "pid=,time=,comm="]))
+    services = service_sample()
     return dict(at=time.monotonic(), pressure=int(pressure), swap=counters, services=services)
 
 
@@ -150,9 +199,15 @@ def assess(before, after, diagnostic_reports=0):
     if not math.isfinite(elapsed) or not 4 <= elapsed <= 10:
         raise ValueError("insufficient sampling interval")
     cpu = 0
+    idle_count = 0
     for service in SERVICES:
         old_pid, old = before["services"][service]
         pid, new = after["services"][service]
+        if pid is None or old_pid is None:
+            if pid is not None or old_pid is not None or new != old:
+                raise ValueError("service changed during sampling")
+            idle_count += 1
+            continue
         if pid != old_pid or new < old or not math.isfinite(new-old):
             raise ValueError("service changed during sampling")
         cpu += (new-old) / elapsed * 100
@@ -171,6 +226,7 @@ def assess(before, after, diagnostic_reports=0):
         reasons.append("recent_windowserver_diagnostic")
     return dict(schemaVersion=1, admitted=not reasons, reasons=reasons,
                 intervalSeconds=round(elapsed, 3), colorsyncCPUPercent=round(cpu, 2),
+                colorsyncIdleServices=idle_count,
                 memoryPressureBefore=before["pressure"], memoryPressureAfter=after["pressure"],
                 swapinsDelta=swap["Swapins"], swapoutsDelta=swap["Swapouts"],
                 windowServerDiagnosticReports=diagnostic_reports)

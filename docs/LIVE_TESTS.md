@@ -58,7 +58,7 @@ The XCTest wrapper, MCP matrix, and performance workload run a read-only
 memory pressure, swap-counter changes, and the two ColorSync services for five seconds.
 Admission requires normal memory pressure, no swap activity in the interval, and combined
 ColorSync CPU below 50% of one core. These conservative test thresholds are not a macOS health
-diagnosis. Missing counters, a service restart, or a diagnostic timeout refuse admission.
+diagnosis. A missing process counter is accepted only when bounded launchd reads identify that exact registered service as not running, with zero active count, support for pressured exit, and `JETSAM_REASON_MEMORY_IDLE_EXIT`; no PID, terminating signal or exit-code ambiguity is accepted. Process visibility is reconciled after the launchd reads. Both samples must retain the same idle state and launch count; running services still require stable PIDs and readable CPU counters. The report includes an idle-service count, and its CPU percentage measures running services only. Other missing counters, service transitions/restarts, or diagnostic timeouts refuse admission.
 Reports contain numeric counters and reason codes, not process lists or content.
 
 Admission also checks bounded WindowServer report metadata in system/user diagnostic directories
