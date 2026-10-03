@@ -6,6 +6,11 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Require live XCTest postflight to retain a ready native lifecycle and health circuit, even
+  when the independent host helper passes. Preserve the initial unused sampler for cases that
+  never create a Stage. Add missing-destination window cleanup coverage and stabilize the
+  recording timeout regression's healthy recovery capture.
+
 ## [1.0.6] - 2026-10-03
 
 - Fix host-health admission when ColorSync services are running on demand and absent from the
