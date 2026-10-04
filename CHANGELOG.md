@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.7] - 2026-10-04
+
 - Pair ColorSync CPU counters with their actual process observation time so slow follow-up
   launchd queries cannot inflate CPU usage and falsely stop display work.
 - Keep the most recently used valid idle display, reducing repeated display creation when
@@ -18,6 +20,10 @@ All notable user-visible changes are recorded here. SpaceO follows
   when the independent host helper passes. Preserve the initial unused sampler for cases that
   never create a Stage. Add missing-destination window cleanup coverage and stabilize the
   recording timeout regression's healthy recovery capture.
+
+The WindowServer/ColorSync freeze remains unresolved. One modified-build native workflow passed;
+full live and signed-artifact behavior qualification remain incomplete. See the
+[release notes](docs/RELEASE_NOTES_1.0.7.md).
 
 ## [1.0.6] - 2026-10-03
 
