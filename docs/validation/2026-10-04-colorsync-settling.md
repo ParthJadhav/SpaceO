@@ -39,12 +39,48 @@ not an established crash or hang. It continues to refuse admission. The existing
 New native/Python fixtures prevent interpreting passage of time as recovery.
 
 Read-only protected-service sampling could not proceed: the unprivileged attempt was denied
-and noninteractive elevated sampling required authorization unavailable to this task. The first numeric admission check for a small UUID timing probe refused before any call ran.
+and noninteractive elevated sampling required authorization unavailable to this task. A later
+supported Activity Monitor Inspector sample succeeded without an authorization change; the
+service-only reports were retained privately, as described below. The first numeric admission
+check for a small UUID timing probe refused before any call ran.
 A later guarded, non-mutating run completed ten lookups, one second apart; the maximum latency
 was 1.606 ms. Combined CPU was 30.81% before and 30.59% / 30.57% during the probe, with normal
 pressure and no swap. This weakens a lookup-cost hypothesis for that interval; it does not
 attribute the residual load or qualify display mutation. Historical diagnostic checks were
 not part of this numeric guard, and the known diagnostic remains relevant to live admission.
+
+### Escalation and protected-service samples
+
+A later full host check measured 71.96% combined ColorSync CPU, with normal pressure, no swap
+activity, the same current-boot diagnostic and no detected service timeouts. Doctor reported
+zero SpaceO and orphan displays. Stopping the idle 1.0.7 daemon normally did not relieve the
+load: a numeric-only observation measured 69.94% (41.45% display services and 28.49% colorsyncd),
+with the daemon stopped and no SpaceO displays. That numeric observation deliberately excluded
+historical diagnostics for attribution; it is not a live-admission result.
+
+Activity Monitor's supported Inspector → Sample control captured both root-owned ColorSync
+services and WindowServer without changing permissions. Only function names and aggregate
+observations are recorded here; raw reports remain private. The display-services XPC worker
+enters `ColorSyncProfileCreateDeviceProfile`, device-registration lookups and
+`ColorSyncDeviceRegistryCopyInfo`, then parses binary property lists or waits for synchronous
+registry replies. The colorsyncd XPC worker also spends sampled time decoding binary property
+lists. WindowServer's main timer pass enters `WS::Displays::CAWSManager::restore_color_preferences()`
+and waits on a semaphore; eight sampled worker threads execute its restoration block through
+`ColorSyncXPCAcquireDisplayInfo` and synchronous XPC waits. A separate one-second user-agent
+sample was idle in its Mach-message wait.
+
+These observations establish an active WindowServer color-restoration / ColorSync profile and
+registry bottleneck. They do not establish request frequency, the responsible device or
+profile, malformed data, or accumulated registry entries as the cause. Recursive property-list
+frames are ordinary deserialization and cannot prove an infinite loop. The observations were
+sequential samples, not a trace linking individual requests across processes. No service was
+killed and no profile, preference, diagnostic or safety record was modified.
+
+After Activity Monitor quit normally, a full five-second host check still measured 68.69%
+combined ColorSync CPU. It also detected memory pressure and four swap-ins; no service timeout
+was detected. Further host probes stopped at that refusal. This observation does not attribute
+the pressure to sampling or to ColorSync. The existing incident is not repaired by the
+settling guard, and no new live workload or release qualification is claimed.
 
 ## Decision and implementation
 
