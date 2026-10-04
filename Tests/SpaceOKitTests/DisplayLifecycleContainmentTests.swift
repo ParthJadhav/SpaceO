@@ -3,6 +3,43 @@ import CoreGraphics
 @testable import SpaceOKit
 
 final class DisplayLifecycleContainmentTests: XCTestCase {
+    func testDeferredFallbackIsVisibleWithoutTrippingAndRefusesNewCreation() throws {
+        let coordinator = DisplayLifecycleCoordinator()
+        coordinator.quarantineDeferred(Backing(), displayID: 99_111)
+        coordinator.quarantineDeferred(Backing(), displayID: 99_111)
+        XCTAssertNil(coordinator.failureReason)
+        XCTAssertNoThrow(try coordinator.check(), "ongoing use is separate from new creation")
+        XCTAssertThrowsError(try coordinator.requireNoDeferredRetirements())
+        let status = coordinator.annotatingDeferredRetirements(.init(state: .ready))
+        XCTAssertEqual(status.state, .blocked, "older clients must also refuse new creation")
+        XCTAssertEqual(status.deferredRetirementDisplayIDs, [99_111])
+        XCTAssertFalse(status.allowsCreation)
+        let encoded = try JSONEncoder().encode(status)
+        XCTAssertEqual(try JSONDecoder().decode(DisplaySafetyStatus.self, from: encoded), status)
+        coordinator.clearDeferredRetirement(99_111)
+        XCTAssertNoThrow(try coordinator.requireNoDeferredRetirements())
+        XCTAssertTrue(coordinator.annotatingDeferredRetirements(.init(state: .ready)).allowsCreation)
+    }
+
+    func testFinalCreationAdmissionLinearizesWithFallbackRegistration() throws {
+        let coordinator = DisplayLifecycleCoordinator()
+        XCTAssertNoThrow(try coordinator.admitCreation())
+        // Registration after the admission point cannot retroactively cancel that attachment,
+        // and is visible to every subsequent admission without holding a lock across display IPC.
+        coordinator.quarantineDeferred(Backing(), displayID: 99_111)
+        XCTAssertThrowsError(try coordinator.admitCreation()) {
+            XCTAssertTrue($0 is DisplayLifecycleCoordinator.CreationDeferred)
+        }
+        XCTAssertNil(coordinator.failureReason)
+    }
+
+    func testOlderSafetyStatusDecodesWithoutDeferredFallbacks() throws {
+        let status = try JSONDecoder().decode(DisplaySafetyStatus.self,
+                                             from: Data(#"{"state":"ready"}"#.utf8))
+        XCTAssertNil(status.deferredRetirementDisplayIDs)
+        XCTAssertTrue(status.allowsCreation)
+    }
+
     private final class Backing: StageDisplayBacking, @unchecked Sendable {
         let displayID: CGDirectDisplayID = 99_111
         private let lock = NSLock()

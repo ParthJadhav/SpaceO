@@ -148,6 +148,28 @@ final class DoctorReportTests: XCTestCase {
         XCTAssertTrue(blockers[0].next.contains("Retry `spaceo doctor`"))
     }
 
+    func testDeferredDaemonOwnersAreNotOrphansAndRemainExplicit() {
+        var runtime = Self.runtime()
+        var safety = DisplaySafetyStatus(state: .blocked, reason: "retirement deferred")
+        safety.deferredRetirementDisplayIDs = [9, 7, 9]
+        runtime.displaySafety = safety
+        let state = DoctorReport.DaemonState.running(runtime)
+        let orphans = DoctorReport.orphanedDisplays(
+            attached: [7, 9, 11, 13], daemon: state, daemonDisplayIDs: [11])
+        XCTAssertEqual(orphans, [13], "both retained fallback owners and pooled owners belong to the daemon")
+        let report = Self.report(daemon: state, spaceO: [7, 9], orphaned: [])
+        XCTAssertEqual(report.deferredRetirementDisplayIDs, [7, 9])
+        XCTAssertTrue(report.render().contains("deferred retirement : 7, 9 — retained by the daemon; cleanup is incomplete"))
+        XCTAssertFalse(report.render().contains("no running daemon owns them"))
+        XCTAssertTrue(DoctorRemedy.remedies(for: DoctorFindings(orphanedDisplayIDs:
+            DoctorReport.orphanedDisplays(attached: [7, 9], daemon: state, daemonDisplayIDs: []))).isEmpty)
+
+        XCTAssertEqual(DoctorReport.orphanedDisplays(attached: [7, 9], daemon: .notRunning,
+                                                   daemonDisplayIDs: []), [7, 9])
+        XCTAssertEqual(DoctorReport.orphanedDisplays(attached: [7, 9], daemon: .running(Self.runtime()),
+                                                   daemonDisplayIDs: [7]), [9], "older runtime metadata remains compatible")
+    }
+
     func testBlockersAreSentencesWithANextLine() {
         let text = Self.report(daemon: .notRunning).render()
         XCTAssertTrue(text.contains("Readiness: blocked\n  - No daemon is running at /tmp/spaceo-501.sock."))

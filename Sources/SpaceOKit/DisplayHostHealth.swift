@@ -10,6 +10,9 @@ public struct DisplayHostHealthReport: Codable, Sendable, Equatable {
     public var swapoutsDelta: UInt64?
     public var windowServerDiagnosticReports: Int?
     public var unavailableInput: String?
+    /// Separate graph-change readiness from health permitted for ongoing display use.
+    public var reconfigurationSettled: Bool? = nil
+    public var reconfigurationCPUThresholdPercent: Double? = nil
 }
 
 struct DisplayHostHealthSample: Sendable {
@@ -86,7 +89,21 @@ struct DisplayHostHealthSample: Sendable {
 /// One sampler and an independent watchdog. Nothing here queries or mutates WindowServer.
 /// A stuck sampler is never replaced; late results cannot clear the sticky failure.
 final class DisplayHostHealth: @unchecked Sendable {
+    static let reconfigurationCPUThresholdPercent = 25.0
+    /// Bound retained synchronization objects and synchronous sampler fan-out independently
+    /// of the later display creation rate limit. One caller keeps one slot across wakeups.
+    static let maximumReconfigurationWaiters = 32
+
+    /// Internal control flow distinguishes a ready-but-warm host from a hard health fault.
+    /// Stage unwraps this error at the public boundary to preserve the existing error code.
+    struct ReconfigurationSettlingRefusal: Error, LocalizedError, CustomStringConvertible {
+        let underlyingError: SpaceOError
+        var errorDescription: String? { underlyingError.errorDescription }
+        var description: String { underlyingError.description }
+    }
+
     private let lock = NSLock()
+    private var reconfigurationWaiters: [UUID: DispatchSemaphore] = [:]
     private let worker = DispatchQueue(label: "spaceo.host-health-sampler")
     private let watchdog = DispatchQueue(label: "spaceo.host-health-watchdog")
     private var timer: DispatchSourceTimer?
@@ -97,26 +114,39 @@ final class DisplayHostHealth: @unchecked Sendable {
     private var lastAttempt: TimeInterval?
     private var previous: DisplayHostHealthSample?
     private var reportedAt: TimeInterval?
+    private var consecutiveSettledSamples = 0
+    private var settlingAfter: TimeInterval?
     private var current = DisplayHostHealthReport(state: .unknown, reasons: ["not_sampled"])
     private let sample: @Sendable () throws -> DisplayHostHealthSample
     private let now: @Sendable () -> TimeInterval
     private let onFailure: @Sendable (String) -> Void
+    private let waitForReconfiguration: @Sendable (DispatchSemaphore, DispatchTime) -> Void
 
     init(sample: @escaping @Sendable () throws -> DisplayHostHealthSample = { try DisplayHostHealthSampler.capture() },
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-         onFailure: @escaping @Sendable (String) -> Void = { _ in }) {
+         onFailure: @escaping @Sendable (String) -> Void = { _ in },
+         waitForReconfiguration: @escaping @Sendable (DispatchSemaphore, DispatchTime) -> Void = {
+             _ = $0.wait(timeout: $1)
+         }) {
         self.sample = sample
         self.now = now
         self.onFailure = onFailure
+        self.waitForReconfiguration = waitForReconfiguration
         initialDecision.enter()
     }
 
     var report: DisplayHostHealthReport {
         expireIfNeeded()
-        return lock.withLock { current }
+        return lock.withLock {
+            var report = current
+            report.reconfigurationSettled = current.state == .ready && consecutiveSettledSamples >= 2
+            report.reconfigurationCPUThresholdPercent = Self.reconfigurationCPUThresholdPercent
+            return report
+        }
     }
 
     var hasStarted: Bool { lock.withLock { started } }
+    var reconfigurationWaiterCount: Int { lock.withLock { reconfigurationWaiters.count } }
 
     func requireHealthy() throws {
         start()
@@ -130,6 +160,97 @@ final class DisplayHostHealth: @unchecked Sendable {
                 + (observed.unavailableInput.map { " (unavailable input: \($0))" } ?? "")
                 + "; retain the display owner and inspect docs/DISPLAY_SAFETY.md")
         }
+    }
+
+    /// Reconfiguration is more conservative than ongoing use: two distinct assessed CPU
+    /// intervals must both be below 25%. Reading a cached report cannot advance this count.
+    var isSettledForReconfiguration: Bool {
+        expireIfNeeded()
+        return lock.withLock { current.state == .ready && consecutiveSettledSamples >= 2 }
+    }
+
+    /// Both endpoints of qualifying intervals must follow this graph-change fence,
+    /// including captures which were still being reconciled when the graph changed.
+    func resetReconfigurationSettling() {
+        lock.withLock {
+            consecutiveSettledSamples = 0
+            settlingAfter = now()
+            signalReconfigurationWaiters()
+        }
+    }
+
+    func requireStillSettledForReconfiguration() throws {
+        expireIfNeeded()
+        try lock.withLock {
+            guard current.state == .ready, consecutiveSettledSamples >= 2 else {
+                throw reconfigurationRefusal()
+            }
+        }
+    }
+
+    /// Caller holds the state lock.
+    private func reconfigurationRefusal() -> Error {
+        if current.state != .ready {
+            return SpaceOError.stageCreationFailed("host health refused: " + current.reasons.joined(separator: ", ")
+                + (current.unavailableInput.map { " (unavailable input: \($0))" } ?? "")
+                + "; retain the display owner and inspect docs/DISPLAY_SAFETY.md")
+        }
+        let error = SpaceOError.stageCreationFailed("display reconfiguration refused: ColorSync has not settled "
+            + "below \(Int(Self.reconfigurationCPUThresholdPercent))% for two consecutive observations; "
+            + "retain the display owner; wait for ColorSync to settle before another request.")
+        return ReconfigurationSettlingRefusal(underlyingError: error)
+    }
+
+    /// Wait on the existing sampler. A settling deadline is a transient refusal, while the
+    /// normal monitor still owns all hard/sticky health failures and its independent watchdog.
+    func requireSettledForReconfiguration(timeout: TimeInterval = 15) throws {
+        guard timeout.isFinite, (0...30).contains(timeout) else {
+            throw SpaceOError.badRequest("display settling timeout must be between zero and thirty seconds")
+        }
+        let deadline = DispatchTime.now() + timeout
+        if isSettledForReconfiguration { return }
+        if timeout > 0 { start() }
+        let waiterID = UUID()
+        defer { lock.withLock { _ = reconfigurationWaiters.removeValue(forKey: waiterID) } }
+        while true {
+            expireIfNeeded()
+            lock.lock()
+            if current.state == .blocked || DispatchTime.now().uptimeNanoseconds >= deadline.uptimeNanoseconds {
+                let refusal = reconfigurationRefusal()
+                lock.unlock()
+                throw refusal
+            }
+            if current.state == .ready, consecutiveSettledSamples >= 2 {
+                lock.unlock()
+                return
+            }
+            // Register under the state lock before unlocking. A signal arriving before wait
+            // remains queued, and every caller has its own semaphore so wakeups cannot be
+            // consumed by another caller. One absolute DispatchTime bounds all waits without
+            // depending on Date, clock adjustments, subsequent samples, or watchdog signals.
+            let signal: DispatchSemaphore
+            if let registered = reconfigurationWaiters[waiterID] {
+                signal = registered
+            } else {
+                guard reconfigurationWaiters.count < Self.maximumReconfigurationWaiters else {
+                    lock.unlock()
+                    throw ReconfigurationSettlingRefusal(underlyingError: .resourceLimit(
+                        kind: .displays,
+                        detail: "display reconfiguration wait limit: at most \(Self.maximumReconfigurationWaiters) "
+                            + "concurrent requests; retain the display owner and wait for an existing request to finish",
+                        retryAfter: nil))
+                }
+                signal = DispatchSemaphore(value: 0)
+                reconfigurationWaiters[waiterID] = signal
+            }
+            lock.unlock()
+            waitForReconfiguration(signal, deadline)
+        }
+    }
+
+    /// Caller holds the state lock. Both sample decisions and sticky faults wake every waiter.
+    private func signalReconfigurationWaiters() {
+        for signal in reconfigurationWaiters.values { signal.signal() }
     }
 
     private func start() {
@@ -169,6 +290,12 @@ final class DisplayHostHealth: @unchecked Sendable {
         expireIfNeeded()
         var failed: String?
         lock.withLock {
+            defer {
+                // fail() publishes the sticky fault after releasing this lock. Revoke quiet
+                // evidence first so a woken reconfiguration waiter cannot pass in between.
+                if failed != nil { consecutiveSettledSamples = 0 }
+                signalReconfigurationWaiters()
+            }
             guard current.state != .blocked else { return }
             inFlightSince = nil
             guard next.uptime.isFinite, abs(now() - next.uptime) <= 3,
@@ -187,6 +314,11 @@ final class DisplayHostHealth: @unchecked Sendable {
                     let assessment = try DisplayHostHealthSample.assess(previous, next)
                     current = assessment
                     reportedAt = next.uptime
+                    if assessment.state == .ready, let cpu = assessment.colorsyncCPUPercent,
+                       cpu < Self.reconfigurationCPUThresholdPercent,
+                       settlingAfter.map({ previous.uptime > $0 && next.uptime > $0 }) ?? true {
+                        consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+                    } else { consecutiveSettledSamples = 0 }
                     if assessment.state == .blocked {
                         // fail() owns publishing a sticky failure and its notification.
                         current.state = .unknown
@@ -226,6 +358,8 @@ final class DisplayHostHealth: @unchecked Sendable {
         let first = lock.withLock { () -> Bool in
             guard current.state != .blocked else { return false }
             current.state = .blocked
+            consecutiveSettledSamples = 0
+            signalReconfigurationWaiters()
             if let unavailableInput { current.unavailableInput = unavailableInput }
             current.reasons = reason.split(separator: ",").map(String.init)
             timer?.cancel()

@@ -6,7 +6,9 @@ public struct DisplaySafetyStatus: Codable, Sendable, Equatable {
     public enum State: String, Codable, Sendable { case ready, blocked, unknown }
     public let state: State
     public let reason: String?
-    public var allowsCreation: Bool { state == .ready }
+    /// Backings retained after a fallback settling refusal, without a sticky circuit fault.
+    public var deferredRetirementDisplayIDs: [UInt32]? = nil
+    public var allowsCreation: Bool { state == .ready && (deferredRetirementDisplayIDs ?? []).isEmpty }
 
     public init(state: State, reason: String? = nil) {
         self.state = state

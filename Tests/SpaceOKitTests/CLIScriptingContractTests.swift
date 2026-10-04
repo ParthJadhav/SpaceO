@@ -463,6 +463,31 @@ final class CLIScriptingContractTests: XCTestCase {
         XCTAssertTrue(result.stderr.contains("nothing to fix"), "fix prose goes to stderr in --json mode")
     }
 
+    func testDoctorJSONIncludesDeferredDaemonOwnersOutsideThePool() throws {
+        try withDaemon({ _ in
+            var response = Response.success()
+            response.displays = []
+            var runtime = Self.runtime(SpaceOVersion.current)
+            var safety = DisplaySafetyStatus(state: .blocked, reason: "retirement deferred")
+            safety.deferredRetirementDisplayIDs = [9002, 9001, 9002]
+            runtime.displaySafety = safety
+            response.daemon = runtime
+            return response
+        }) { socket, recorder in
+            let result = try run(["doctor", "--json", "--socket", socket])
+            let object = try json(result.stdout)
+            let displays = try XCTUnwrap(object["displays"] as? [String: Any])
+            XCTAssertEqual(displays["daemonDeferredRetirement"] as? [UInt32], [9001, 9002])
+            let daemon = try XCTUnwrap(object["daemon"] as? [String: Any])
+            let safety = try XCTUnwrap(daemon["displaySafety"] as? [String: Any])
+            XCTAssertEqual(safety["deferredRetirementDisplayIDs"] as? [UInt32], [9002, 9001, 9002])
+            XCTAssertEqual(recorder.all.map(\.cmd), ["pool", "clean"])
+            let hygieneProbe = try XCTUnwrap(recorder.all.last)
+            XCTAssertEqual(hygieneProbe.dryRun, true, "doctor's existing hygiene probe remains read-only")
+            XCTAssertEqual(hygieneProbe.operatorScope, true)
+        }
+    }
+
     func testDoctorReadsSafetyJournalFromFixtureHome() throws {
         let directory = fixtureHome.appendingPathComponent("Library/Application Support/SpaceO")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

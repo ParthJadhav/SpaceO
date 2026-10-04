@@ -138,8 +138,16 @@ public struct DoctorReport: Sendable {
         switch daemon {
         case .unresponsive: return []
         case .notRunning: return attached
-        case .running: return attached.filter { !daemonDisplayIDs.contains($0) }
+        case .running(let runtime):
+            // Fallback and failed-publication owners live outside the display pool. They
+            // remain daemon-owned even when the pool's inventory is empty.
+            let owned = daemonDisplayIDs.union(runtime?.displaySafety?.deferredRetirementDisplayIDs ?? [])
+            return attached.filter { !owned.contains($0) }
         }
+    }
+
+    public var deferredRetirementDisplayIDs: [UInt32] {
+        Array(Set(runtime?.displaySafety?.deferredRetirementDisplayIDs ?? [])).sorted()
     }
 
     public var runtime: DaemonRuntimeInfo? {
@@ -202,6 +210,10 @@ public struct DoctorReport: Sendable {
         lines.append(Self.row("display mirroring", mirroredDisplayIDs.isEmpty ? "off"
             : "on (display ids \(Self.ids(mirroredDisplayIDs)))"))
         lines.append(Self.row("SpaceO display ids", Self.ids(spaceODisplayIDs)))
+        if !deferredRetirementDisplayIDs.isEmpty {
+            lines.append(Self.row("deferred retirement", Self.ids(deferredRetirementDisplayIDs)
+                + " — retained by the daemon; cleanup is incomplete"))
+        }
         if !orphanedDisplayIDs.isEmpty {
             lines.append(Self.row("orphaned displays", Self.ids(orphanedDisplayIDs)
                 + " — no running daemon owns them; see `spaceo doctor --fix`"))

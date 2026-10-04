@@ -67,7 +67,25 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   launch contributes its whole lifetime CPU; hidden relaunches, exits, restarts and malformed
   or unavailable evidence remain unknown. All sampler work shares a bounded deadline.
   Unknown reports expose the unavailable input in `hostHealth.unavailableInput`.
-  Initial admission waits up to 15 seconds for the two bounded observations.
+  Display attachment waits up to 15 seconds for two consecutive assessed CPU intervals below
+  **25%**. This settling gate is stricter than the ongoing-use 50% hard limit: a warm host
+  refuses graph changes without treating the wait itself as an OS failure. After each graph
+  change, both endpoints of the next two qualifying intervals must be newer than that change.
+  Cached health reads do not count as new observations. Retirement uses the same gate before
+  invalidation, with a default **30-second total budget**, reserving 10 seconds for removal.
+  Explicit shorter deadlines require already-settled evidence without waiting. Bulk retirement
+  shares one 25-second deadline and stops at the first refusal, reporting unattempted owners.
+  A settling refusal before mutation keeps the display valid and owned; cleanup reports its ID as
+  still attached. Deinitialization also retains the backing when settling cannot be verified.
+  Pending or deferred fallback owners appear in `deferredRetirementDisplayIDs`, block new display creation
+  without a sticky circuit fault, and remain in shutdown attachment reports until verified
+  retirement. Fallback owners have no pool handle and no automatic retry after refusal.
+  Retain the owning process and inspect safety; ending it removes its displays through macOS
+  and is not evidence of orderly recovery. Failed publication also records its retained ID.
+  JSON separately reports `hostHealth.reconfigurationSettled` and
+  `hostHealth.reconfigurationCPUThresholdPercent`. Normal cleanup uses this gate. Forced
+  process exit still removes owned virtual displays through macOS, so this cannot guarantee orderly retirement after SIGKILL or a crash.
+  Multi-display stop may require retries after ColorSync settles.
   Observations continue every five seconds; a separate watchdog trips on a sampler exceeding
   three seconds or a passing result older than ten seconds. There is one sampler, no replacement
   worker, no automatic reset, and no acceptance of a late result after refusal.

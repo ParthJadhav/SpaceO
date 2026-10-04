@@ -119,6 +119,13 @@ public final class Stage: @unchecked Sendable {
         let display: any StageDisplayBacking
         let displayID: CGDirectDisplayID
         let onlineDisplayIDs: @Sendable () throws -> [CGDirectDisplayID]
+        private let lock = NSLock()
+        private var started = false
+        private var confirmed = false
+        var removalConfirmed: Bool { lock.withLock { confirmed } }
+        func markRemovalConfirmed() { lock.withLock { confirmed = true } }
+        var mutationStarted: Bool { lock.withLock { started } }
+        func markMutationStarted() { lock.withLock { started = true } }
 
         init(
             display: any StageDisplayBacking,
@@ -149,14 +156,20 @@ public final class Stage: @unchecked Sendable {
 
     /// Includes in-memory circuit failures even if the asynchronous journal write is stalled.
     public static func displaySafetyStatus() -> DisplaySafetyStatus {
-        if let reason = lifecycle.failureReason { return .init(state: .blocked, reason: reason) }
-        return DisplayLifecycleLease.status()
+        if let reason = lifecycle.failureReason {
+            return lifecycle.annotatingDeferredRetirements(.init(state: .blocked, reason: reason))
+        }
+        return lifecycle.annotatingDeferredRetirements(DisplayLifecycleLease.status())
     }
 
     /// Socket responses must never perform journal I/O or wait for the journal owner's mutex.
     public static func runtimeDisplaySafetyStatus() -> DisplaySafetyStatus? {
-        if let reason = lifecycle.failureReason { return .init(state: .blocked, reason: reason) }
-        return lease.cachedStatus
+        if let reason = lifecycle.failureReason {
+            return lifecycle.annotatingDeferredRetirements(.init(state: .blocked, reason: reason))
+        }
+        if let cached = lease.cachedStatus { return lifecycle.annotatingDeferredRetirements(cached) }
+        guard !lifecycle.deferredRetirementDisplayIDs.isEmpty else { return nil }
+        return lifecycle.annotatingDeferredRetirements(.init(state: .unknown))
     }
 
     /// XCTest's first recorded live failure also stops focused reruns through the shared latch.
@@ -185,6 +198,12 @@ public final class Stage: @unchecked Sendable {
     private let backing: any StageDisplayBacking
     private let onlineDisplayIDsProvider: @Sendable () throws -> [CGDirectDisplayID]
     private let configurationProvider: @Sendable () throws -> UserDisplayConfiguration?
+    private let reconfigurationReadiness: @Sendable (TimeInterval) throws -> Void
+    private let reconfigurationCheck: @Sendable () throws -> Void
+    private let retirementNow: @Sendable () -> DispatchTime
+    private let fallbackRetirementCompletion: (@Sendable () -> Void)?
+    private let mutationLease: DisplayLifecycleLease?
+    private let mutationMarkerDidPersist: (@Sendable () -> Void)?
     private let coordinator: DisplayLifecycleCoordinator
     private let usesLiveLease: Bool
     let retirementSpaces: [UInt64]
@@ -193,6 +212,8 @@ public final class Stage: @unchecked Sendable {
     private var cachedScale: Double?
     private var cachedSpaces: [UInt64]
     private var didInvalidate = false
+    private var retirementConfirmed = false
+    private var retirementInProgress = false
     private var invalidatedDisplayID: CGDirectDisplayID = 0
     public var backingScale: Double? {
         stateLock.withLock {
@@ -252,11 +273,16 @@ public final class Stage: @unchecked Sendable {
                     ?? "virtual-display is unavailable on this host"
             )
         }
+        // A Stage lost during deferred fallback cleanup no longer has a pool retry owner.
+        // Refuse another framebuffer until its retained ownership is explicitly resolved.
+        try Self.lifecycle.requireNoDeferredRetirements()
         // Acquire the persistent owner before sampling so refusal survives a daemon restart.
         // Sampling stays outside the display worker and its mutation deadline.
         try Self.lifecycle.perform(timeout: 2) { _ in try Self.lease.acquire() }
-        try Self.hostHealth.requireHealthy()
+        do { try Self.hostHealth.requireSettledForReconfiguration(timeout: 15) }
+        catch let refusal as DisplayHostHealth.ReconfigurationSettlingRefusal { throw refusal.underlyingError }
         let published: (SPOVirtualDisplay, [UInt64], CGRect, Double?) = try Self.lifecycle.perform(timeout: 10) { operation in
+            try Self.lifecycle.requireNoDeferredRetirements()
             try Self.lease.acquire()
             try operation.check()
             let userConfigurationBefore: UserDisplayConfiguration
@@ -275,18 +301,36 @@ public final class Stage: @unchecked Sendable {
                 throw SpaceOError.stageCreationFailed(failure)
             }
             try operation.check()
-            try Self.lease.begin(creation: true)
-            var completed = false
-            defer {
-                if !completed { Self.lifecycle.trip("display creation did not complete safely") }
+            do { try Self.hostHealth.requireStillSettledForReconfiguration() }
+            catch let refusal as DisplayHostHealth.ReconfigurationSettlingRefusal { throw refusal.underlyingError }
+            do {
+                try Self.beginCheckedMutation(
+                    creation: true, operation: operation, coordinator: Self.lifecycle,
+                    lease: Self.lease,
+                    readiness: { try Self.hostHealth.requireStillSettledForReconfiguration() })
+            } catch let refusal as DisplayHostHealth.ReconfigurationSettlingRefusal {
+                throw refusal.underlyingError
+            } catch let refusal as DisplayLifecycleCoordinator.CreationDeferred {
+                throw refusal.underlyingError
             }
-            try operation.check()
+            var completed = false
+            var attachedDisplay: SPOVirtualDisplay?
+            defer {
+                if !completed {
+                    if let attachedDisplay {
+                        Self.lifecycle.quarantineDeferred(attachedDisplay, displayID: attachedDisplay.displayID)
+                    }
+                    Self.lifecycle.trip("display creation did not complete safely")
+                }
+            }
             guard let display = SPOVirtualDisplay(name: name, width: width,
                                                   height: height, hiDPI: hiDPI) else {
                 Self.lifecycle.trip("CGVirtualDisplay creation failed; attachment state is unknown")
                 throw SpaceOError.stageCreationFailed("CGVirtualDisplay refused \(width)x\(height)")
             }
+            attachedDisplay = display
             operation.retain(display)
+            Self.hostHealth.resetReconfigurationSettling()
             try operation.check()
 
             let deadline = ContinuousClock.now + .seconds(3)
@@ -299,11 +343,10 @@ public final class Stage: @unchecked Sendable {
                 usleep(200_000)
             } while ContinuousClock.now < deadline
             guard publicationFailure == nil else {
-                // A known unhealthy publication is one failed lifecycle, never an automatic
-                // create/destroy/retry loop. The same deadline/circuit also bounds rollback.
-                _ = try Self.invalidateUnpublished(display, operation: operation)
-                Self.lifecycle.trip(publicationFailure ?? "unsafe display publication")
-                throw SpaceOError.stageCreationFailed(publicationFailure ?? "unsafe display publication")
+                // Attachment reset the settling fence. Immediate rollback cannot safely pass
+                // it; retain the owner and preserve the actual publication failure for recovery.
+                try Self.rejectPublication(display, reason: publicationFailure ?? "unsafe display publication",
+                                           coordinator: Self.lifecycle)
             }
             try operation.check()
             let spaces = (SPOSpacesForDisplay(display.displayID) ?? []).map { $0.uint64Value }
@@ -328,6 +371,15 @@ public final class Stage: @unchecked Sendable {
         cachedScale = published.3
         self.onlineDisplayIDsProvider = { try Self.checkedOnlineDisplayIDs() }
         self.configurationProvider = { try Self.checkedUserDisplayConfiguration() }
+        self.reconfigurationReadiness = { try Self.hostHealth.requireSettledForReconfiguration(timeout: $0) }
+        self.reconfigurationCheck = {
+            try Self.checkActiveHostHealth()
+            try Self.hostHealth.requireStillSettledForReconfiguration()
+        }
+        self.retirementNow = { DispatchTime.now() }
+        self.fallbackRetirementCompletion = nil
+        self.mutationLease = Self.lease
+        self.mutationMarkerDidPersist = nil
         self.coordinator = Self.lifecycle
         self.usesLiveLease = true
         self.name = name
@@ -339,11 +391,23 @@ public final class Stage: @unchecked Sendable {
         name: String = "test display",
         onlineDisplayIDs: @escaping @Sendable () throws -> [CGDirectDisplayID],
         coordinator: DisplayLifecycleCoordinator = DisplayLifecycleCoordinator(),
-        configuration: @escaping @Sendable () throws -> UserDisplayConfiguration? = { nil }
+        configuration: @escaping @Sendable () throws -> UserDisplayConfiguration? = { nil },
+        reconfigurationReadiness: @escaping @Sendable (TimeInterval) throws -> Void = { _ in },
+        reconfigurationCheck: @escaping @Sendable () throws -> Void = {},
+        retirementNow: @escaping @Sendable () -> DispatchTime = { DispatchTime.now() },
+        fallbackRetirementCompletion: (@Sendable () -> Void)? = nil,
+        mutationLease: DisplayLifecycleLease? = nil,
+        mutationMarkerDidPersist: (@Sendable () -> Void)? = nil
     ) {
         backing = testingBacking
         onlineDisplayIDsProvider = onlineDisplayIDs
         configurationProvider = configuration // Safe tests inject values, never WindowServer.
+        self.reconfigurationReadiness = reconfigurationReadiness
+        self.reconfigurationCheck = reconfigurationCheck
+        self.retirementNow = retirementNow
+        self.fallbackRetirementCompletion = fallbackRetirementCompletion
+        self.mutationLease = mutationLease
+        self.mutationMarkerDidPersist = mutationMarkerDidPersist
         self.coordinator = coordinator
         usesLiveLease = false
         retirementSpaces = []
@@ -401,6 +465,17 @@ public final class Stage: @unchecked Sendable {
         if usesLiveLease { try Self.checkActiveHostHealth() }
     }
 
+    private struct RetirementBudgetDeferral: Error {}
+
+    private static func retirementTimeRemaining(until deadline: DispatchTime, now: DispatchTime) -> TimeInterval {
+        deadline.uptimeNanoseconds > now.uptimeNanoseconds
+            ? Double(deadline.uptimeNanoseconds - now.uptimeNanoseconds) / 1e9 : 0
+    }
+
+    private static func isRetirementDeferral(_ error: Error) -> Bool {
+        error is DisplayHostHealth.ReconfigurationSettlingRefusal || error is RetirementBudgetDeferral
+    }
+
     /// Drop the display.
     ///
     /// WindowServer removes a virtual display asynchronously, so by default we wait for it to
@@ -408,45 +483,144 @@ public final class Stage: @unchecked Sendable {
     /// phantom can still poison the next display-graph change. The timeout is one total budget
     /// covering queueing, preflight, invalidation, removal and final verification.
     @discardableResult
-    public func invalidate(waitingForRemoval timeout: TimeInterval = 10.0) -> Bool {
-        let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 10
-        let id = stateLock.withLock { () -> CGDirectDisplayID in
-            if !didInvalidate {
+    public func invalidate(waitingForRemoval timeout: TimeInterval = 30.0) -> Bool {
+        // Confirmed teardown is idempotent, even while a later host interval is unsettled.
+        if stateLock.withLock({ retirementConfirmed }) { return true }
+        let safeTimeout = timeout.isFinite ? min(max(timeout, 0), 30) : 30
+        // Short explicit budgets (including zero's synchronous removal check) never wait for
+        // settling. Normal live retirement reserves ten seconds for queueing/removal checks.
+        let removalReserve: TimeInterval = safeTimeout > 10 ? 10 : 0
+        let deadline = retirementNow() + max(safeTimeout, 0.1)
+        do {
+            try coordinator.check()
+            try reconfigurationReadiness(max(0, safeTimeout - 10))
+            guard Self.retirementTimeRemaining(until: deadline, now: retirementNow()) > 0,
+                  Self.retirementTimeRemaining(until: deadline, now: retirementNow()) >= removalReserve else {
+                throw RetirementBudgetDeferral()
+            }
+        } catch {
+            coordinator.quarantine(backing)
+            if !Self.isRetirementDeferral(error) {
+                coordinator.trip("display retirement readiness failed")
+            }
+            return false
+        }
+        let state = stateLock.withLock { () -> (id: CGDirectDisplayID, newlyInvalidated: Bool)? in
+            guard !retirementInProgress else { return nil }
+            retirementInProgress = true
+            let newlyInvalidated = !didInvalidate
+            if newlyInvalidated {
                 didInvalidate = true
                 invalidatedDisplayID = backing.displayID
             }
-            return invalidatedDisplayID
+            return (invalidatedDisplayID, newlyInvalidated)
         }
+        guard let state else { return false }
         let pending = PendingInvalidation(
-            display: backing, displayID: id, onlineDisplayIDs: onlineDisplayIDsProvider)
+            display: backing, displayID: state.id, onlineDisplayIDs: onlineDisplayIDsProvider)
+        defer {
+            stateLock.withLock {
+                retirementInProgress = false
+                if pending.removalConfirmed { retirementConfirmed = true }
+            }
+        }
         do {
-            return try coordinator.perform(timeout: max(safeTimeout, 0.1), retaining: backing) {
-                [configurationProvider, usesLiveLease, coordinator] operation in
-                try Self.retire(pending, timeout: safeTimeout, operation: operation,
-                                configuration: configurationProvider,
+            let remaining = Self.retirementTimeRemaining(until: deadline, now: retirementNow())
+            guard remaining > 0, remaining >= removalReserve else { throw RetirementBudgetDeferral() }
+            return try coordinator.perform(timeout: remaining, retaining: backing) {
+                [configurationProvider, reconfigurationCheck, retirementNow, mutationLease,
+                 mutationMarkerDidPersist, usesLiveLease, coordinator] operation in
+                try Self.retire(pending, timeout: safeTimeout, deadline: deadline, operation: operation,
+                                configuration: configurationProvider, readiness: reconfigurationCheck,
+                                removalReserve: removalReserve, now: retirementNow,
+                                mutationLease: mutationLease, markerDidPersist: mutationMarkerDidPersist,
                                 liveLease: usesLiveLease, coordinator: coordinator)
             }
         } catch {
-            // Unknown is not removed. Keep the original id and refuse reuse/creation.
             coordinator.quarantine(backing)
-            coordinator.trip("display \(id) retirement was not confirmed")
+            if !pending.mutationStarted, Self.isRetirementDeferral(error) {
+                // The worker can observe a new warm interval after preflight. Restore only a
+                // previously valid owner; an earlier attempted teardown remains invalid.
+                if state.newlyInvalidated {
+                    stateLock.withLock {
+                        didInvalidate = false
+                        invalidatedDisplayID = 0
+                    }
+                }
+            } else {
+                coordinator.trip("display \(state.id) retirement was not confirmed")
+            }
             return false
         }
     }
 
+    /// A durable pending marker can take long enough for health/admission to change. Recheck
+    /// after its acknowledged write, and clear it only after a no-mutation abort is acknowledged.
+    static func beginCheckedMutation(
+        creation: Bool, operation: DisplayLifecycleCoordinator.Operation,
+        coordinator: DisplayLifecycleCoordinator, lease: DisplayLifecycleLease?,
+        markerDidPersist: (() -> Void)? = nil,
+        readiness: () throws -> Void,
+        requireRemovalBudget: () throws -> Void = {}
+    ) throws {
+        var markerPersisted = false
+        do {
+            try operation.check()
+            try lease?.begin(creation: creation)
+            markerPersisted = lease != nil
+            markerDidPersist?()
+            try readiness()
+            try requireRemovalBudget()
+            try operation.check()
+            // This is the last synchronized check before the caller's attach. It shares the
+            // registration lock, and leaves no blocking work between admission and private IPC.
+            if creation { try coordinator.admitCreation() }
+        } catch {
+            let deferred = isRetirementDeferral(error) || error is DisplayLifecycleCoordinator.CreationDeferred
+            if deferred {
+                do {
+                    try operation.check()
+                    if markerPersisted { try lease?.finish() }
+                    try operation.check()
+                } catch {
+                    coordinator.trip("display mutation abort was not acknowledged safely")
+                    throw error
+                }
+            } else if !markerPersisted, case SpaceOError.resourceLimit = error {
+                // A creation-rate refusal happens before any pending marker or OS mutation.
+            } else {
+                coordinator.trip("display mutation preparation did not complete safely")
+            }
+            throw error
+        }
+    }
+
     private static func retire(
-        _ pending: PendingInvalidation, timeout: TimeInterval,
+        _ pending: PendingInvalidation, timeout: TimeInterval, deadline: DispatchTime,
         operation: DisplayLifecycleCoordinator.Operation,
         configuration: () throws -> UserDisplayConfiguration?,
+        readiness: () throws -> Void, removalReserve: TimeInterval,
+        now: () -> DispatchTime,
+        mutationLease: DisplayLifecycleLease?, markerDidPersist: (() -> Void)?,
         liveLease: Bool, coordinator: DisplayLifecycleCoordinator
     ) throws -> Bool {
-        if liveLease { try checkActiveHostHealth() }
+        // Refuse a blocked host before querying its display server, then recheck immediately
+        // before mutation because configuration sampling can span a new CPU interval.
+        try readiness()
         let before = try configuration()
-        try operation.check()
-        if liveLease { try lease.begin(creation: false) }
-        try operation.check()
+        try readiness()
+        let remaining = retirementTimeRemaining(until: deadline, now: now())
+        guard remaining > 0, remaining >= removalReserve else { throw RetirementBudgetDeferral() }
+        try beginCheckedMutation(
+            creation: false, operation: operation, coordinator: coordinator, lease: mutationLease,
+            markerDidPersist: markerDidPersist, readiness: readiness,
+            requireRemovalBudget: {
+                let remaining = retirementTimeRemaining(until: deadline, now: now())
+                guard remaining > 0, remaining >= removalReserve else { throw RetirementBudgetDeferral() }
+            })
+        pending.markMutationStarted()
         pending.display.invalidate()
-        let deadline = operation.deadline
+        if liveLease { hostHealth.resetReconfigurationSettling() }
         repeat {
             try operation.check()
             let retired = displayIsRetired(
@@ -455,14 +629,16 @@ public final class Stage: @unchecked Sendable {
                 if let before, let after = try configuration() {
                     let changes = after.changes(from: before)
                     if !changes.isEmpty {
-                        if DispatchTime.now() < deadline { usleep(200_000); continue }
+                        if now() < deadline { usleep(200_000); continue }
                         coordinator.trip("user display configuration changed during retirement")
                         return false
                     }
                 }
                 try operation.check()
-                if liveLease { try lease.finish() }
+                try mutationLease?.finish()
                 recordReleased(pending.displayID)
+                coordinator.clearDeferredRetirement(pending.displayID, releasing: pending.display)
+                pending.markRemovalConfirmed()
                 return true
             }
             if timeout == 0 {
@@ -470,7 +646,7 @@ public final class Stage: @unchecked Sendable {
                 return false
             }
             usleep(200_000)
-        } while DispatchTime.now() < deadline
+        } while now() < deadline
         coordinator.trip("display \(pending.displayID) removal was not confirmed")
         return false
     }
@@ -687,20 +863,15 @@ public final class Stage: @unchecked Sendable {
         id == 0 || !onlineDisplayIDs.contains(id)
     }
 
-    @discardableResult
-    private static func invalidateUnpublished(
-        _ display: any StageDisplayBacking, operation: DisplayLifecycleCoordinator.Operation
-    ) throws -> Bool {
-        try operation.check()
-        let id = display.displayID
-        display.invalidate()
-        let deadline = ContinuousClock.now + .seconds(3)
-        repeat {
-            try operation.check()
-            if displayIsRetired(id, onlineDisplayIDs: try checkedOnlineDisplayIDs()) { return true }
-            usleep(200_000)
-        } while ContinuousClock.now < deadline
-        return false
+    /// Keep failed publication owned: destroying it before the post-attachment settling fence
+    /// clears would be a second unsafe graph change and would erase the useful failure reason.
+    static func rejectPublication(
+        _ display: any StageDisplayBacking, reason: String,
+        coordinator: DisplayLifecycleCoordinator
+    ) throws -> Never {
+        coordinator.quarantineDeferred(display, displayID: display.displayID)
+        coordinator.trip(reason)
+        throw SpaceOError.stageCreationFailed(reason)
     }
 
     deinit {
@@ -714,19 +885,38 @@ public final class Stage: @unchecked Sendable {
         }
         guard let pending else { return }
         let coordinator = coordinator
+        // Transfer and report ownership before scheduling: shutdown must see this display
+        // throughout the readiness wait, even before the fallback worker has started.
+        coordinator.quarantineDeferred(pending.display, displayID: pending.displayID)
         let configuration = configurationProvider
         let liveLease = usesLiveLease
+        let reconfigurationReadiness = reconfigurationReadiness
+        let reconfigurationCheck = reconfigurationCheck
+        let retirementNow = retirementNow
+        let completion = fallbackRetirementCompletion
+        let mutationLease = mutationLease
+        let mutationMarkerDidPersist = mutationMarkerDidPersist
         // Never query or mutate the display server synchronously from deinit.
         DispatchQueue.global(qos: .utility).async {
+            defer { completion?() }
             do {
-                _ = try coordinator.perform(timeout: 10, retaining: pending.display) { operation in
-                    try Self.retire(pending, timeout: 10, operation: operation,
-                                    configuration: configuration, liveLease: liveLease,
-                                    coordinator: coordinator)
+                let deadline = retirementNow() + .seconds(30)
+                try reconfigurationReadiness(20)
+                let remaining = Self.retirementTimeRemaining(until: deadline, now: retirementNow())
+                guard remaining >= 10 else { throw RetirementBudgetDeferral() }
+                _ = try coordinator.perform(timeout: remaining, retaining: pending.display) { operation in
+                    try Self.retire(pending, timeout: 30, deadline: deadline, operation: operation,
+                                    configuration: configuration, readiness: reconfigurationCheck,
+                                    removalReserve: 10, now: retirementNow,
+                                    mutationLease: mutationLease, markerDidPersist: mutationMarkerDidPersist,
+                                    liveLease: liveLease, coordinator: coordinator)
                 }
             } catch {
-                coordinator.quarantine(pending.display)
-                coordinator.trip("fallback display retirement was not confirmed")
+                // The registered owner stays visible for every failure. Only a pre-mutation
+                // settling/budget deferral avoids the persistent health circuit.
+                if pending.mutationStarted || !Self.isRetirementDeferral(error) {
+                    coordinator.trip("fallback display retirement was not confirmed")
+                }
             }
         }
     }

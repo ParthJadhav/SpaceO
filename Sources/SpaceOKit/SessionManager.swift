@@ -1084,6 +1084,7 @@ public actor SessionManager {
         let attachedDisplayIDs = pool.retireEmptyDisplays()
         report.stillAttachedDisplayIDs = Array(
             Set(report.stillAttachedDisplayIDs).union(attachedDisplayIDs)
+                .union(Stage.runtimeDisplaySafetyStatus()?.deferredRetirementDisplayIDs ?? [])
         ).sorted()
         displayLifecycleFailures.formUnion(attachedDisplayIDs)
         return report

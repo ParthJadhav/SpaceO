@@ -75,6 +75,13 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 ### RA-057 — September 29 freeze after passing live assertions
 
+October 4 continued investigation measured approximately 31% combined ColorSync CPU with
+no SpaceO daemon, Viewer or virtual displays. Profile metadata stayed unchanged; ten guarded
+public display-UUID lookups were fast and did not increase CPU. A bounded settling gate before
+display reconfiguration is under verification. It is preventive containment, not a confirmed
+fix for the residual OS work; RA-057 remains open. See the
+[follow-up record](docs/validation/2026-10-04-colorsync-settling.md).
+
 October 4 investigation found a reproducible CPU timestamp defect and avoidable display/window
 churn. A timing regression can report true 40% CPU as 55.69% when trailing launchd validation
 is delayed; the native/Python samplers now pair the timestamp with the CPU observation. Idle

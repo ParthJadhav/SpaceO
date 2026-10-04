@@ -6,6 +6,18 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Wait for two consecutive ColorSync CPU intervals below 25% before changing the display
+  graph. A settling refusal retains the display without invalidating it; ordinary use keeps
+  the existing 50% hard health limit. Report reconfiguration readiness separately in health
+  JSON. Retirement's default total budget is 30 seconds, reserving 10 seconds for removal. Bulk
+  retirement shares a 25-second deadline and stops at the first refusal. Pending fallback owners
+  stay visible in safety, doctor and shutdown reports without being mislabeled as orphans;
+  confirmed retirement is an immediate no-op on
+  subsequent calls.
+- Recheck display admission after persisting its pending marker; acknowledge a safe
+  pre-mutation abort before allowing retries. Bound settling waits by a monotonic deadline
+  and a 32-caller limit; saturation returns a transient structured resource limit.
+
 ## [1.0.7] - 2026-10-04
 
 - Pair ColorSync CPU counters with their actual process observation time so slow follow-up
