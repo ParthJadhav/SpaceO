@@ -22,12 +22,14 @@ import { dirname, resolve, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { arch, platform, release, tmpdir } from "node:os";
-import { toolResult, imagesChanged, isolationStatus } from "./computer-use-evidence.mjs";
+import { toolResult, imagesChanged, isolationStatus, isolationDiagnostics,
+  fixturePageState, pageElementFor } from "./computer-use-evidence.mjs";
 
 const argv = process.argv.slice(2);
 const binary = argv.find((a) => !a.startsWith("--")) ?? `${process.env.HOME}/.local/bin/spaceo`;
 const suiteArg = (argv.find((a) => a.startsWith("--suite")) ?? "--suite=all").split("=")[1];
 const suites = suiteArg === "all" ? ["native", "web", "electron"] : [suiteArg];
+const testingOverride = process.env.SPACEO_LIVE_TESTS === "1" && process.env.SPACEO_TESTING_HOST === "1";
 const requireFull = argv.includes("--require-full");
 // Release conformance always proves that the virtual monitor goes away again and that the
 // user's physical topology survived the run. Smaller development suites can opt into the same
@@ -120,12 +122,22 @@ async function call(name, args = {}) {
   try {
     const r = await rpc("tools/call", { name, arguments: args });
     const result = toolResult(r);
-    toolCalls.push({
+    const observation = {
       tool: name,
       ms: Math.round(performance.now() - started),
       ok: result.ok,
       unconfirmed: result.unconfirmed,
-    });
+    };
+    toolCalls.push(observation);
+    if (!result.ok && /\[isolation_breached\]/.test(result.text)) {
+      observation.errorCode = "isolation_breached";
+      if (name !== "spaceo_verify_isolation" && typeof args.session === "string") {
+        try {
+          const followUp = await call("spaceo_verify_isolation", { session: args.session, verbose: true });
+          observation.followUpIsolation = isolationDiagnostics(followUp);
+        } catch { observation.followUpIsolation = { observed: false }; }
+      }
+    }
     return result;
   } catch (error) {
     toolCalls.push({
@@ -246,7 +258,7 @@ writeFileSync(pageFixture, `<!doctype html><meta charset="utf-8"><title>SpaceO C
 </style>
 <div id=pad>
  <button id=btn>CLICK ME</button>
- <div id=hover>HOVER ME</div>
+ <div id=hover role=button tabindex=0>HOVER ME</div>
  <input id=field placeholder="type here">
  <input id=slider type=range min=0 max=100 value=20 aria-label="Slider">
  <select id=multi multiple size=2 aria-label="Multi-select">
@@ -296,23 +308,17 @@ async function destroy(session) {
 /// surface exposes. Reading it back is how a web step proves its action had an effect.
 async function pageState(session) {
   const windows = await call("spaceo_list_windows", { session });
-  const match = windows.text.match(/CU ev=([\w+]+) y=(\d+)/);
-  if (!match) return { events: [], scrollY: 0, raw: windows.text };
-  return {
-    events: match[1] === "none" ? [] : match[1].split("+"),
-    scrollY: Number(match[2]),
-    raw: match[0],
-  };
+  const state = fixturePageState(windows);
+  if (!state.ok) step("[web] fixture window state is readable", false,
+    state.reason === "tool_failed" ? windows.text : "fixture state is missing from the window observation");
+  return state;
 }
 
 function pointFor(listing, label) {
   // Native AX controls and DevTools page elements can share the same label. Only the wN rows
   // publish CSS viewport coordinates; accepting the first labelled AX row makes a healthy page
   // look coordinate-less whenever Chrome also exposes that control through accessibility.
-  const line = listing.text.split("\n").find((candidate) =>
-    /^\s*\[w\d+\]/.test(candidate) && candidate.includes(`— ${label}`));
-  const match = line?.match(/at \((\d+),(\d+)\)/);
-  return match ? { x: Number(match[1]), y: Number(match[2]) } : null;
+  return pageElementFor(listing, label);
 }
 
 // ---------------------------------------------------------------- suites
@@ -434,13 +440,15 @@ async function webSuite() {
     await sleep(700);
 
     const listing = await call("spaceo_read_screen", { session: s });
-    const button = listing.text.match(/\[w0\][^\n]*at \((\d+),(\d+)\)/);
+    if (!listing.ok) step("[web] page observation completes", false, listing.text);
+    const button = pointFor(listing, "CLICK ME");
     step("[web] page elements carry usable coordinates", Boolean(button),
-         button ? `w0 at (${button[1]},${button[2]})` : listing.text);
+         button ? `${button.element} at (${button.x},${button.y})` : listing.text);
 
-    // The hover target sits just below the button in the fixture.
-    const hx = Number(button?.[1] ?? 70);
-    const hy = Number(button?.[2] ?? 37) + 45;
+    const hover = pointFor(listing, "HOVER ME");
+    step("[web] hover target exposes usable viewport coordinates", Boolean(hover), listing.text);
+    const hx = hover.x;
+    const hy = hover.y;
     const hoverTarget = await call("spaceo_move", { session: s, x: hx, y: hy, web: true });
     await sleep(500);
     state = await pageState(s);
@@ -453,7 +461,10 @@ async function webSuite() {
     state = await pageState(s);
     step("[web] drag selects text in the page", dragged.ok && state.events.includes("drag"), state.raw);
 
-    await call("spaceo_click", { session: s, element: "w1" });
+    const field = pointFor(listing, "type here");
+    step("[web] input field exposes a usable page reference", Boolean(field), listing.text);
+    const focused = await call("spaceo_click", { session: s, element: field.element });
+    step("[web] input field click is accepted", focused.ok, focused.text);
     const typed = await call("spaceo_type", { session: s, text: "WEB-OK", web: true });
     await sleep(500);
     state = await pageState(s);
@@ -620,7 +631,7 @@ try {
     execFileSync("python3", [fileURLToPath(new URL("./host-health.py", import.meta.url)),
       "--since", String(runStartedAt.getTime() / 1000)],
       { stdio: ["ignore", "inherit", "inherit"], timeout: 30_000 });
-    recordStep("[postflight] system health", true, "health and system-service timeout checks passed");
+    recordStep("[postflight] system health", true, testingOverride ? "diagnostic testing override active; observed health retained in helper output" : "health and system-service timeout checks passed");
   } catch {
     recordStep("[postflight] system health", false, "host health refused; functional passes do not qualify this run");
   }
@@ -660,7 +671,7 @@ try {
           bytes: statSync(binary).size,
           sha256: createHash("sha256").update(binaryBytes).digest("hex"),
         },
-        configuration: { suite: suiteArg, requireFull, verifyDisplayCleanup },
+        configuration: { suite: suiteArg, requireFull, verifyDisplayCleanup, testingOverride },
         summary: {
           passed: passed.length,
           failed: failed.length,

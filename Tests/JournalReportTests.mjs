@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { analyze, parseArguments, renderMarkdown } from "../scripts/journal-report.mjs";
+import { analyze, parseArguments, renderMarkdown, readJSONLines } from "../scripts/journal-report.mjs";
 
 const script = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "journal-report.mjs");
 
@@ -73,4 +73,158 @@ test("the CLI reads a journal directory recursively and prints JSON", () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+
+test("failed creates and observer calls are not acquired sessions", () => {
+  const report = analyze([
+    call(1, "spaceo_session_create", { outcome: "tool_error", error: { code: "display_creation_failed" } }),
+    call(2, "spaceo_open_app", { outcome: "invalid_arguments", error: { code: "invalid_arguments" } }),
+    call(3, "spaceo_list_windows"),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+  ]);
+  assert.equal(report.signals.sessions_not_destroyed, 0);
+  assert.equal(report.signals.sessions_still_open, 0);
+  assert.ok(!report.candidates.some((candidate) => /cleanup|janitor/.test(candidate.title)));
+});
+
+test("only confirmed destroys end observed ownership", () => {
+  for (const outcome of ["tool_error", "invalid_arguments", "transport_error", "mcp_error"]) {
+    const report = analyze([
+      call(1, "spaceo_session_create"), call(2, "spaceo_session_destroy", { outcome }),
+      { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+    ]);
+    assert.equal(report.signals.sessions_not_destroyed, 1, outcome);
+  }
+  for (const extra of [{}, { outcome: "warning" }, { session: undefined }, { session: undefined, args: { all: true } }]) {
+    assert.equal(analyze([
+      call(1, "spaceo_session_create"), call(2, "spaceo_session_destroy", extra),
+      { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+    ]).signals.sessions_not_destroyed, 0);
+  }
+});
+
+test("active connections, recreation and connection ownership stay distinct", () => {
+  assert.equal(analyze([call(1, "spaceo_session_create")]).signals.sessions_still_open, 1);
+  assert.equal(analyze([call(1, "spaceo_session_create")]).signals.sessions_not_destroyed, 0);
+  const report = analyze([
+    call(1, "spaceo_session_create"), call(2, "spaceo_session_destroy"), call(3, "spaceo_session_create"),
+    call(4, "spaceo_session_destroy", { conn: "c2" }),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+  ].reverse());
+  assert.equal(report.signals.sessions_not_destroyed, 1, "recreating the same name starts a new lifetime");
+  assert.match(report.candidates.find((candidate) => /cleanup/.test(candidate.title)).evidence, /actual janitor cleanup is unknown/);
+});
+
+test("since retains earlier client and ownership context without counting unrelated lifetimes", () => {
+  const report = analyze([
+    ...fixture().slice(0, 2),
+    call(5, "spaceo_click"),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+    call(1, "spaceo_session_create", { conn: "unrelated" }),
+  ], [], { since: "2026-09-23T10:00:05Z" });
+  assert.equal(report.scope.calls, 1);
+  assert.deepEqual(report.scope.clients, ["claude-code 2.1"]);
+  assert.equal(report.signals.sessions_not_destroyed, 1);
+  assert.equal(report.signals.sessions_still_open, 0);
+});
+
+test("explicit lifecycle covers failed create-and-open and partial bulk teardown", () => {
+  const report = analyze([
+    call(1, "spaceo_session_create", { outcome: "tool_error", error: { code: "launch_failed" }, session_lifecycle: { acquired: "retained" } }),
+    call(2, "spaceo_session_create", { session: "second" }),
+    call(3, "spaceo_session_destroy", { session: undefined, args: { all: true }, outcome: "tool_error", session_lifecycle: { released: ["second"] } }),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+  ]);
+  assert.equal(report.signals.sessions_not_destroyed, 1);
+  assert.equal(analyze([
+    call(1, "spaceo_session_create"), call(2, "spaceo_open_app", { outcome: "daemon_restarted" }),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+  ]).signals.sessions_not_destroyed, 0);
+});
+
+test("malformed dates and missing daemon paths are refused", () => {
+  for (const arguments_ of [["--since="], ["--since=2026-02-30"], ["--since=yesterday"],
+                            ["--daemon-log"], ["--daemon-log="], ["--daemon-log", "--json"]]) {
+    assert.throws(() => parseArguments(arguments_));
+  }
+  assert.equal(parseArguments(["--since=2024-02-29"]).since, "2024-02-29");
+});
+
+test("input reader bounds regular-file bytes, line length and record counts", () => {
+  const root = mkdtempSync(join(tmpdir(), "spaceo-journal-bounds-"));
+  try {
+    const file = join(root, "input.jsonl");
+    writeFileSync(file, '{"kind":"tool_call","result":{"text":"private content","first_line":"summary"}}\nnull\n[]\n1\n');
+    const read = readJSONLines([file], { bytes: 0 });
+    assert.equal(read.invalid, 3);
+    assert.equal(read.records.length, 1);
+    assert.equal(read.records[0].result.text, undefined);
+    assert.equal(read.records[0].result.first_line, "summary");
+    assert.throws(() => readJSONLines([file], { bytes: 512 * 1_048_576 }), /byte budget/);
+    assert.throws(() => readJSONLines([file], { bytes: 0, lines: 500_000 }), /records/);
+    writeFileSync(file, "x".repeat(1_048_577));
+    assert.throws(() => readJSONLines([file], { bytes: 0 }), /line larger/);
+    truncateSync(file, 64 * 1_048_576 + 1);
+    assert.throws(() => readJSONLines([file], { bytes: 0 }), /file larger/);
+    assert.throws(() => readJSONLines([root], { bytes: 0 }), /regular files/);
+    if (process.platform !== "win32") {
+      const fifo = join(root, "fifo.jsonl");
+      execFileSync("mkfifo", [fifo]);
+      assert.throws(() => execFileSync(process.execPath, [script, fifo, "--json"], { timeout: 2_000, stdio: "pipe" }),
+                    (error) => !error.killed && /regular files/.test(error.stderr.toString()));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("discovery deduplicates aliases and refuses deep trees without recursing links", () => {
+  const root = mkdtempSync(join(tmpdir(), "spaceo-journal-discovery-"));
+  try {
+    const file = join(root, "input.jsonl");
+    const alias = join(root, "alias.jsonl");
+    writeFileSync(file, JSON.stringify(call(1, "spaceo_session_create")) + "\n");
+    symlinkSync(file, alias);
+    symlinkSync(root, join(root, "cycle"));
+    const report = JSON.parse(execFileSync(process.execPath, [script, root, file, alias, "--json"], { encoding: "utf8", timeout: 2_000 }));
+    assert.equal(report.scope.calls, 1);
+    assert.equal(report.sources.journal_files, 1);
+    let deep = root;
+    for (let index = 0; index < 17; index += 1) { deep = join(deep, "nested"); mkdirSync(deep); }
+    assert.throws(() => execFileSync(process.execPath, [script, root, "--json"], { stdio: "pipe" }),
+                  (error) => /directories deeper/.test(error.stderr.toString()));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+test("a connection ending after since retains outstanding acquisitions from earlier calls", () => {
+  const report = analyze([
+    call(1, "spaceo_session_create"),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+  ], [], { since: "2026-09-23T10:00:05Z" });
+  assert.equal(report.scope.calls, 0);
+  assert.equal(report.signals.sessions_not_destroyed, 1);
+});
+
+
+test("guard refusals and non-schema validation do not recommend bypasses or aliases", () => {
+  const report = analyze([
+    call(1, "spaceo_session_create", { outcome: "tool_error", error: { code: "display_creation_failed" } }),
+    call(2, "spaceo_open_app", { outcome: "invalid_arguments", error: { code: "invalid_arguments", message: "No controller lease is available" } }),
+  ]);
+  assert.match(report.candidates.find((candidate) => /display_creation_failed/.test(candidate.title)).title, /Inspect protected refusal/);
+  const validation = report.candidates.find((candidate) => /other validation/.test(candidate.title));
+  assert.match(validation.evidence, /inspect ownership and prerequisites/);
+  assert.ok(!validation.evidence.includes("alias"));
+});
+
+
+test("a successful bulk destroy remains conclusive when the released-ID list is bounded", () => {
+  const report = analyze([
+    call(1, "spaceo_session_create"),
+    call(2, "spaceo_session_create", { session: "second" }),
+    call(3, "spaceo_session_destroy", { session: undefined, args: { all: true },
+      session_lifecycle: { released: ["second"], released_truncated: true } }),
+    { kind: "connection.end", conn: "c1", ts: "2026-09-23T10:00:09Z" },
+  ]);
+  assert.equal(report.signals.sessions_not_destroyed, 0);
 });

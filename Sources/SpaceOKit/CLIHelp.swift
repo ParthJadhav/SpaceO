@@ -150,7 +150,7 @@ public enum CLIHelp {
         "completions": "Print a shell completion script generated from the command table.",
         "setup": "Guided first run: permission grants, daemon, self-test, and MCP registration.",
         "safety": "Operator recovery for a false host-health admission latch.",
-        "safety.clear-host-health": "Clear an idle host_health_unknown latch only after verified owner exclusion and healthy host observations.",
+        "safety.clear-host-health": "Clear an idle unknown-health, memory-pressure or swap latch only after verified owner exclusion and settled healthy host observations.",
         "doctor": "Check host capabilities, permissions, the daemon, MCP clients, the Viewer, and disk use.",
         "skill": "Print the SKILL.md playbook for agents.",
         "logging.status": "Show local diagnostic logging: the MCP agent journal and daemon request records.",

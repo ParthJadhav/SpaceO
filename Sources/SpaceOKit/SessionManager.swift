@@ -3044,10 +3044,19 @@ public actor SessionManager {
                 subRect = CGRect(x: x, y: y, width: Double(width), height: Double(height))
             }
             let initialDisplayBounds = session.frame
+            let initialBackingScale = session.stage.backingScale
             let source: ScreenshotCapture.Source
             let label: String
             if let windowID = request.window, subRect == nil {
-                let window = try session.resolveWindow(windowID)
+                // Known targets need only their own live identity/geometry. An unknown target
+                // must still be discovered under the same screenshot deadline.
+                if session.window(id: windowID) == nil {
+                    let limits = try AXWindowDiscovery.limits(remaining: budget.remaining())
+                    let discovery = try AXTraversalBudget(limits: limits,
+                        now: { DispatchTime.now().uptimeNanoseconds }, isCancelled: { Task.isCancelled })
+                    _ = try session.refreshWindows(forWait: discovery)
+                }
+                let window = try session.resolveDiscoveredWindow(windowID)
                 source = .window(window, scale: scale)
                 label = "window \(windowID)"
             } else if subRect != nil {
@@ -3087,30 +3096,18 @@ public actor SessionManager {
             if request.annotate == true, case .region = source {
                 throw SpaceOError.badRequest("annotate works on a window capture; drop full/region or name a window")
             }
-            let initialGeometry: GeometryReceipt?
-            if case .window(let window, _) = source { initialGeometry = geometry(session, window: window) }
-            else { initialGeometry = nil }
             func validateGeometry() throws {
                 try budget.check()
-                guard session.frame == initialDisplayBounds else {
+                guard session.frame == initialDisplayBounds,
+                      session.stage.backingScale == initialBackingScale else {
                     throw SpaceOError.staleGeometry("display topology changed during capture; capture again")
                 }
-                if case .window(let window, _) = source, let initialGeometry {
-                    do {
-                        let limits = try AXWindowDiscovery.limits(remaining: budget.remaining())
-                        let discovery = try AXTraversalBudget(limits: limits,
-                            now: { DispatchTime.now().uptimeNanoseconds }, isCancelled: { Task.isCancelled })
-                        _ = try session.refreshWindows(forWait: discovery)
-                    } catch let stopped as AXTraversalStopped where stopped.reason == .deadline {
-                        throw ScreenshotCapture.Budget.expired
-                    }
-                    let current = try session.resolveDiscoveredWindow(window.windowID)
-                    guard geometry(session, window: current).token == initialGeometry.token else {
-                        throw SpaceOError.staleGeometry("window changed during capture; capture again")
-                    }
+                if case .window(let window, _) = source {
+                    try session.validateCaptureWindow(window)
                 }
                 try budget.check()
             }
+            try validateGeometry()
             let captured = try await screenshotCapture.capture(source, budget: budget, lease: session.beginCaptureWork())
             try validateGeometry()
             let image = captured.image

@@ -348,7 +348,7 @@ spaceo — give each agent its own screen, and leave the user's alone.
                                          write the MCP registration for that client
   spaceo safety <subcommand>             local operator recovery
   spaceo safety clear-host-health --operator
-                                         recover an idle host_health_unknown latch after stopping owners
+                                         recover an idle unknown-health, pressure or swap latch after stopping owners
   spaceo doctor --fix [--yes]            apply the safe remediations doctor found
   spaceo clean [--dry-run] --operator    remove orphaned browser profiles and control roots
   spaceo events [--follow] [--since-seq N]  daemon event stream (agent actions, pauses, verdicts)

@@ -136,6 +136,53 @@ final class LoggingJournalTests: XCTestCase {
                                                            "isError": outcome != "ok"])
     }
 
+
+    func testLifecycleRecordsOwnershipFactsWithoutLeaseCredentials() throws {
+        let journal = MCPJournal(monitor: try monitor(LoggingSettings(journal: .metadata)), directory: directory)
+        let json = """
+        {"id":"retained","displayID":7,"x":0,"y":0,"width":1280,"height":800,
+         "tileIndex":0,"tileCapacity":1,"exclusiveDisplay":true,"spaces":[],
+         "hasOwnSpace":false,"apps":[],"windows":[],
+         "createdAt":"2026-07-28T00:00:00Z","teardownPending":false}
+        """
+        let credential = UUID()
+        var response = Response.failure(SpaceOError.badRequest("synthetic launch failure"))
+        response.session = try Wire.decoder.decode(SessionInfo.self, from: Data(json.utf8))
+        var create = call("spaceo_session_create", outcome: "tool_error", response: response)
+        create.request = Request(cmd: "session.create")
+        journal.toolCall(create)
+        response.controllerLeaseID = credential
+        create.response = response
+        journal.toolCall(create)
+        var destroy = call("spaceo_session_destroy", response: Response(ok: true))
+        destroy.request = Request(cmd: "session.destroy")
+        destroy.request?.session = "retained"
+        journal.toolCall(destroy)
+        destroy.response = Response(ok: false)
+        destroy.outcome = "tool_error"
+        journal.toolCall(destroy)
+        destroy.releasedSessions = ["second"]
+        journal.toolCall(destroy)
+        let written = try records(in: journal)
+        XCTAssertNil(written[0]["session_lifecycle"], "a response with no lease is not acquired ownership")
+        XCTAssertEqual((written[1]["session_lifecycle"] as? [String: Any])?["acquired"] as? String, "retained")
+        XCTAssertEqual((written[2]["session_lifecycle"] as? [String: Any])?["released"] as? [String], ["retained"])
+        XCTAssertNil(written[3]["session_lifecycle"], "a failed destroy is not cleanup")
+        XCTAssertEqual((written[4]["session_lifecycle"] as? [String: Any])?["released"] as? [String], ["second"],
+                       "bulk failure still records its successful subset")
+        let raw = try String(contentsOf: try XCTUnwrap(journal.fileURL), encoding: .utf8)
+        XCTAssertFalse(raw.contains(credential.uuidString))
+        XCTAssertFalse(raw.lowercased().contains(credential.uuidString.lowercased()))
+    }
+
+    func testControllerFailuresAreDistinctFromSchemaValidation() {
+        let missing = MCPControllerError.missingLease("synthetic")
+        XCTAssertEqual(missing.code, "lease_required")
+        XCTAssertTrue(missing.description.contains("If creation failed"))
+        XCTAssertTrue(missing.description.contains("retained-session receipt"))
+        XCTAssertEqual(MCPControllerError.ambiguousSession(["a", "b"]).code, "ambiguous_session")
+    }
+
     func testToolCallsCarryLoopContextErrorsAndCost() throws {
         let journal = MCPJournal(monitor: try monitor(LoggingSettings(journal: .full)), directory: directory)
         journal.connectionStarted(clientName: "claude-code", clientVersion: "2.1", protocolVersion: "2025-06-18")

@@ -61,6 +61,7 @@ enum AXWindowDiscovery {
     /// budget and recompute its timeout. A retry must not reuse an expired messaging timeout.
     static func boundedProviderCall<P: AXTraversalProviding, T>(
         _ app: P.Element, provider: P, budget: AXTraversalBudget,
+        preserveInvalidUIElement: Bool = false,
         pause: (useconds_t) -> Void = { usleep($0) }, _ call: () throws -> T
     ) throws -> T {
         for attempt in 0..<3 {
@@ -69,6 +70,9 @@ enum AXWindowDiscovery {
             } catch let failure as ProviderFailure {
                 // A thrown IPC result still consumes time, and cancellation wins over retries.
                 try budget.check()
+                if preserveInvalidUIElement, failure.status == .invalidUIElement {
+                    throw failure
+                }
                 guard failure.status == .cannotComplete, attempt < 2 else {
                     throw incomplete("\(failure.operation) is unavailable (AXError \(failure.status.rawValue))")
                 }
@@ -116,6 +120,7 @@ enum AXWindowDiscovery {
         guard count <= budget.limits.maxNodes - budget.nodes else {
             throw AXTraversalStopped(reason: .nodes, detail: "window discovery exceeds its window limit")
         }
+        var identityFailure: ProviderFailure?
         var start = 0
         while start < count {
             let size = min(budget.limits.childPageSize, count - start)
@@ -126,12 +131,21 @@ enum AXWindowDiscovery {
             try budget.consumeAllocation(page.count * MemoryLayout<P.Element>.stride)
             for element in page {
                 try budget.consumeNode()
-                let id = try boundedProviderCall(element, provider: provider, budget: budget) {
-                    try provider.identifiedWindowID(element)
+                do {
+                    let id = try boundedProviderCall(element, provider: provider, budget: budget,
+                                                     preserveInvalidUIElement: true) {
+                        try provider.identifiedWindowID(element)
+                    }
+                    if id != 0 { return true }
+                } catch let failure as ProviderFailure where failure.status == .invalidUIElement {
+                    // Readiness is existential; a stale member does not rule out a later ID.
+                    if identityFailure == nil { identityFailure = failure }
                 }
-                if id != 0 { return true }
             }
             start += page.count
+        }
+        if let failure = identityFailure {
+            throw incomplete("\(failure.operation) is unavailable (AXError \(failure.status.rawValue))")
         }
         return false
     }

@@ -346,7 +346,8 @@ final class ScreenshotCaptureTests: XCTestCase {
             name: "fixture", url: URL(fileURLWithPath: "/fixture"), startedByUs: true,
             devToolsPort: nil, temporaryProfile: nil)
         let windows = SessionWindowDriver(windows: { _ in state.hasSecond ? [first, second] : [first] },
-            userDisplayBounds: { nil }, move: { _, _ in }, liveBounds: { $0 == first.windowID ? first.frame : second.frame })
+            userDisplayBounds: { nil }, move: { _, _ in }, liveBounds: { $0 == first.windowID ? first.frame : second.frame },
+            liveOwnerPID: { _ in identity.pid })
         let capture = ScreenshotCapture(provider: { try Self.frame($0) })
         let (manager, session) = try await manager(capture, apps: [app], windowDriver: windows)
         _ = try session.refreshWindowsChecked()
@@ -359,6 +360,155 @@ final class ScreenshotCaptureTests: XCTestCase {
         XCTAssertTrue(response.ok, response.error ?? "")
         XCTAssertEqual(response.image?.windowID, second.windowID)
         XCTAssertEqual(response.image?.originX, second.frame.minX)
+        _ = try await manager.destroyAll(quitApps: false)
+    }
+
+    private final class TargetState: @unchecked Sendable {
+        let lock = NSLock()
+        let target: SpaceOKit.WindowRef
+        private var owner: pid_t?
+        private var bounds: CGRect?
+        private var discoveries = 0
+        init(_ target: SpaceOKit.WindowRef) { self.target = target; owner = target.pid; bounds = target.frame }
+        var count: Int { lock.withLock { discoveries } }
+        var liveOwner: pid_t? { lock.withLock { owner } }
+        var liveBounds: CGRect? { lock.withLock { bounds } }
+        func changeOwner(_ value: pid_t?) { lock.withLock { owner = value } }
+        func move() { lock.withLock { bounds?.origin.x += 1 } }
+        func disappear() { lock.withLock { bounds = nil } }
+        func discover() throws -> [SpaceOKit.WindowRef] {
+            try lock.withLock {
+                discoveries += 1
+                guard discoveries == 1 else {
+                    throw AXWindowDiscovery.incomplete("window page is unavailable (AXError -25204)")
+                }
+                return [target]
+            }
+        }
+    }
+
+    private func targetFixture(_ capture: ScreenshotCapture, state: TargetState) async throws -> (SessionManager, AgentSession) {
+        let identity = try XCTUnwrap(ProcessIdentity.current(of: getpid()))
+        let app = LaunchedApp(pid: identity.pid, identity: identity, bundleIdentifier: "dev.spaceo.capture-fixture",
+            name: "fixture", url: URL(fileURLWithPath: "/fixture"), startedByUs: true,
+            devToolsPort: nil, temporaryProfile: nil)
+        let driver = SessionWindowDriver(windows: { _ in [] }, userDisplayBounds: { nil }, move: { _, _ in },
+            liveBounds: { _ in state.liveBounds }, liveOwnerPID: { _ in state.liveOwner },
+            checkedWindows: { _, budget, _ in try budget.check(); return try state.discover() })
+        let result = try await manager(capture, apps: [app], windowDriver: driver)
+        _ = try result.1.refreshWindowsChecked()
+        return result
+    }
+
+    func testKnownWindowCaptureDoesNotDependOnGlobalAXDiscovery() async throws {
+        ProcessOwnership.reset()
+        defer { ProcessOwnership.reset() }
+        let target = WindowRef(windowID: 10, pid: getpid(), title: "fixture", frame: CGRect(x: 0, y: 0, width: 160, height: 120))
+        let state = TargetState(target)
+        let capture = ScreenshotCapture(provider: { try Self.frame($0) })
+        let (manager, session) = try await targetFixture(capture, state: state)
+        for explicit in [false, true] {
+            var request = request(session)
+            request.full = false
+            if explicit { request.window = target.windowID }
+            let response = await manager.handle(request)
+            XCTAssertTrue(response.ok, response.error ?? "")
+            XCTAssertEqual(response.image?.windowID, target.windowID)
+        }
+        XCTAssertEqual(state.count, 1, "a healthy target must not depend on another AX window-list read")
+        _ = try await manager.destroyAll(quitApps: false)
+    }
+
+    func testWindowCaptureRefusesImpreciseProcessIdentityBeforeNativeWork() async throws {
+        ProcessOwnership.reset()
+        defer { ProcessOwnership.reset() }
+        let identity = ProcessIdentity(pid: getpid(), startedAtMicroseconds: 0)
+        let window = WindowRef(windowID: 10, pid: identity.pid, title: "fixture",
+            frame: CGRect(x: 0, y: 0, width: 160, height: 120))
+        let app = LaunchedApp(pid: identity.pid, identity: identity, bundleIdentifier: "dev.spaceo.capture-fixture",
+            name: "fixture", url: URL(fileURLWithPath: "/fixture"), startedByUs: true,
+            devToolsPort: nil, temporaryProfile: nil)
+        let windows = SessionWindowDriver(windows: { _ in [window] }, userDisplayBounds: { nil },
+            move: { _, _ in }, liveBounds: { _ in window.frame }, liveOwnerPID: { _ in identity.pid })
+        let capture = ScreenshotCapture(provider: { _ in
+            XCTFail("a PID without its start time must not establish capture ownership")
+            throw CancellationError()
+        })
+        let (manager, session) = try await manager(capture, apps: [app], windowDriver: windows)
+        _ = try session.refreshWindowsChecked()
+        var request = request(session)
+        request.full = false
+        let response = await manager.handle(request)
+        XCTAssertEqual(response.errorCode, "window_not_ready")
+        _ = try await manager.destroyAll(quitApps: false)
+    }
+
+    func testWindowCaptureRefusesChangedOrUnknownOwnershipBeforeAndAfterWork() async throws {
+        ProcessOwnership.reset()
+        defer { ProcessOwnership.reset() }
+        let target = WindowRef(windowID: 10, pid: getpid(), title: "fixture", frame: CGRect(x: 0, y: 0, width: 160, height: 120))
+        for phase in ["before", "capture", "encoding"] {
+            for owner in [nil, target.pid + 1] as [pid_t?] {
+                let state = TargetState(target)
+                let calls = Counter()
+                let capture = ScreenshotCapture(provider: {
+                    calls.record(1)
+                    if phase == "capture" { state.changeOwner(owner) }
+                    return try Self.frame($0)
+                }, encoder: { image, limit in
+                    if phase == "encoding" { state.changeOwner(owner) }
+                    return try Capture.pngData(image, maximumBytes: limit)
+                })
+                let (manager, session) = try await targetFixture(capture, state: state)
+                if phase == "before" { state.changeOwner(owner) }
+                let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                defer { try? FileManager.default.removeItem(at: path) }
+                try Data("preserve".utf8).write(to: path)
+                var request = request(session, output: path)
+                request.full = false
+                let response = await manager.handle(request)
+                XCTAssertEqual(response.errorCode, "window_not_ready", phase)
+                XCTAssertNil(response.imageBase64)
+                XCTAssertEqual(try Data(contentsOf: path), Data("preserve".utf8))
+                XCTAssertEqual(calls.values.count, phase == "before" ? 0 : 1)
+                _ = try await manager.destroyAll(quitApps: false)
+            }
+        }
+    }
+
+    func testWindowCaptureRefusesMovementOrDisappearanceDuringEncoding() async throws {
+        ProcessOwnership.reset()
+        defer { ProcessOwnership.reset() }
+        let target = WindowRef(windowID: 10, pid: getpid(), title: "fixture", frame: CGRect(x: 0, y: 0, width: 160, height: 120))
+        for disappears in [false, true] {
+            let state = TargetState(target)
+            let capture = ScreenshotCapture(provider: { try Self.frame($0) }, encoder: { image, limit in
+                if disappears { state.disappear() } else { state.move() }
+                return try Capture.pngData(image, maximumBytes: limit)
+            })
+            let (manager, session) = try await targetFixture(capture, state: state)
+            var request = request(session)
+            request.full = false
+            let response = await manager.handle(request)
+            XCTAssertEqual(response.errorCode, disappears ? "window_not_ready" : "stale_geometry")
+            XCTAssertNil(response.imageBase64)
+            _ = try await manager.destroyAll(quitApps: false)
+        }
+    }
+
+    func testUnknownCaptureWindowStillRequiresSuccessfulDiscovery() async throws {
+        ProcessOwnership.reset()
+        defer { ProcessOwnership.reset() }
+        let target = WindowRef(windowID: 10, pid: getpid(), title: "fixture", frame: CGRect(x: 0, y: 0, width: 160, height: 120))
+        let state = TargetState(target)
+        let capture = ScreenshotCapture(provider: { _ in XCTFail("unknown target must not capture"); throw CancellationError() })
+        let (manager, session) = try await targetFixture(capture, state: state)
+        var request = request(session)
+        request.full = false
+        request.window = 11
+        let response = await manager.handle(request)
+        XCTAssertFalse(response.ok)
+        XCTAssertEqual(state.count, 2)
         _ = try await manager.destroyAll(quitApps: false)
     }
 

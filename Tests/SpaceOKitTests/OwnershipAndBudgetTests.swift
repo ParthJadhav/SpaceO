@@ -6,6 +6,19 @@ import Darwin
 
 /// Regressions for exclusive process ownership and runtime geometry/accounting.
 final class OwnershipAndBudgetTests: XCTestCase {
+    func testDiagnosticLimitsReportSeparatesPersistentOverrideFromPoolLimits() throws {
+        let diagnostic = ResourceLimitsReport(.default, testingOverride: true)
+        XCTAssertEqual(diagnostic.creationRateTestingOverride, true)
+        XCTAssertNil(diagnostic.maximumCreationsPerTenMinutes)
+        XCTAssertNil(diagnostic.maximumCreationsPerDay)
+        XCTAssertEqual(diagnostic.maximumCreationsPerMinute, ResourceBudget.default.maximumCreationsPerMinute)
+        XCTAssertFalse(diagnostic.unsafeOperatorMode)
+        XCTAssertEqual(try Wire.decoder.decode(ResourceLimitsReport.self, from: Wire.encoder.encode(diagnostic)), diagnostic)
+        let normal = ResourceLimitsReport(.default, testingOverride: false)
+        XCTAssertNil(normal.creationRateTestingOverride)
+        XCTAssertEqual(normal.maximumCreationsPerTenMinutes, 12)
+        XCTAssertEqual(normal.maximumCreationsPerDay, 32)
+    }
 
     func testWireLimitsIncludePersistentLifecycleCapsEvenInUnrestrictedMode() throws {
         for budget in [ResourceBudget.default, .unrestricted] {

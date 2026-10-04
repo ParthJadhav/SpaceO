@@ -228,8 +228,9 @@ make verify-release
 `doctor` reports virtual-display, input-routing, capture, permission, and display-graph state. It
 never calls the incompatible private key/typing-focus getters.
 
-If `doctor` reports **orphaned displays**, creation is still allowed. Treat the report as evidence
-that the current graphical login session may need a reset rather than as a software lockout.
+If `doctor` reports **orphaned displays**, new attachment is refused. Treat the report as evidence
+to inspect the surviving owner and lifecycle state before recovery; do not attach another
+display while the unowned display remains online. See [display safety](DISPLAY_SAFETY.md).
 
 ## Viewer app
 
@@ -487,14 +488,25 @@ For readiness, menu-bar apps, explicit placement, stable selectors, memory captu
 handoffs, see [Reliable interactive testing](TRANSCRIPT_WORKFLOWS.md). Discover the current
 command surface offline with `spaceo schema --json` or any subcommand's `--help`.
 
-### Recover a false host-health latch
+### Recover an idle host-health latch
 
 `spaceo safety clear-host-health --operator` is local operator recovery for an idle
-`host_health_unknown` latch, after upgrading and stopping all display owners. It preserves
-creation budgets and refuses other faults, pending work, online SpaceO displays, or unhealthy
-observations. Follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md) first.
+unknown-health, memory-pressure or swap latch, after upgrading and stopping all display owners.
+Current health must be ready and settled. It preserves creation budgets and refuses incident
+or timeout faults, pending work, online SpaceO displays, or unhealthy observations. Follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md) first.
 
 Native `type --replace` and typing into a selection use Accessibility selected-text editing
 with readback. Unsupported native replacement refuses before typing; a failed postcondition
 reports unconfirmed delivery and must not be retried blindly. Screenshot file output creates
 missing parent directories and names the directory if it cannot be created.
+
+### Run on an operator-designated testing Mac
+
+Set both `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the changed source CLI,
+its daemon and the test command. This diagnostic mode bypasses host-health admission and
+the persistent rolling creation-rate limit. It retains bounded attempt history, pending-work
+checks, ownership, pool resource limits and cleanup requirements. Native safety/limits JSON
+exposes `creationRateTestingOverride: true`; health JSON exposes `testingOverride: true`.
+Normal runs keep their existing limits and may still be refused by diagnostic attempt history.
+See [display safety](DISPLAY_SAFETY.md#explicit-reserved-testing-host) and
+[live tests](LIVE_TESTS.md); these results are recorded as diagnostic override runs.

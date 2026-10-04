@@ -53,6 +53,27 @@ whatever holds focus. Use a reserved machine and a dedicated login. Preserve unr
 display topology. Do not switch users or change displays during a run. Stop and inspect failed
 or interrupted runs; do not automatically repeat them.
 
+An explicitly designated testing Mac may use the health and rolling creation-rate override described in
+[DISPLAY_SAFETY.md](DISPLAY_SAFETY.md#explicit-reserved-testing-host):
+
+```sh
+SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1 spaceo safety clear-host-health --operator
+SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1 make test-live-full
+```
+
+Use the changed source binary for recovery and the MCP matrix; the environment must reach
+its daemon too. Retain these as diagnostic override runs. The helper records the observed
+refusal alongside overridden admission; normal host-health qualification remains separate.
+Host-helper JSON also retains `consoleSessionDiagnostic`: timestamped on-console,
+login-complete and lock observations, without user identity data. The IORegistry lock keys
+are undocumented diagnostics; missing/malformed observations remain unknown. This metadata
+changes neither health admission nor the testing override. Record console state when native
+AX identities fail, and compare an unlocked run before attributing a failure to screen lock.
+
+Creation attempt history stays bounded and still constrains subsequent normal runs. Safety
+status reports the creation-rate override; ownership, pending mutations, deadlines and pool
+resource limits remain enforced.
+
 The XCTest wrapper, MCP matrix, and performance workload run a read-only
 `python3 scripts/host-health.py` admission check before starting their workload. It samples
 memory pressure, swap-counter changes, and the two ColorSync services for five seconds.

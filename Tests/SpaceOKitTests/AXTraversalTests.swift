@@ -4,6 +4,131 @@ import CoreGraphics
 @testable import SpaceOKit
 
 final class AXTraversalTests: XCTestCase {
+    private func rootWindow(_ id: CGWindowID = 1) -> SpaceOKit.WindowRef {
+        SpaceOKit.WindowRef(windowID: id, pid: 42, title: "", frame: .zero)
+    }
+
+    private func rootBudget(_ limits: AXTraversalLimits = AXTraversalLimits()) throws -> AXTraversalBudget {
+        try AXTraversalBudget(limits: limits, now: { 0 }, isCancelled: { false })
+    }
+
+    func testRootWithoutWindowReturnsAppWithoutProviderCalls() throws {
+        let provider = FakeAXProvider()
+        provider.discoveryCountFails = true
+        XCTAssertEqual(try AXTraversal.root(app: 0, window: nil, provider: provider,
+                                            budget: rootBudget()), 0)
+        XCTAssertTrue(provider.timeouts.isEmpty)
+    }
+
+    func testRootPreservesCountPageAndIdentityFailures() throws {
+        for operation in ["count", "page", "identity"] {
+            for status in [AXError.cannotComplete, .invalidUIElement, .apiDisabled] {
+                let provider = FakeAXProvider()
+                provider.childCounts[0] = 1
+                let statuses = Array(repeating: status, count: status == .cannotComplete ? 3 : 1)
+                if operation == "count" { provider.rootCountStatuses = statuses }
+                if operation == "page" { provider.rootPageStatuses = statuses }
+                if operation == "identity" { provider.identityStatuses = statuses }
+                XCTAssertThrowsError(try AXTraversal.root(app: 0, window: rootWindow(),
+                    provider: provider, budget: rootBudget())) {
+                    XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                    XCTAssertTrue(($0 as? AXTraversalStopped)?.detail.contains("AXError \(status.rawValue)") == true)
+                }
+                XCTAssertEqual(provider.timeouts.count,
+                               (operation == "count" ? 0 : operation == "page" ? 1 : 2) + statuses.count)
+            }
+        }
+    }
+
+    func testRootRecoversTransientFailuresAtEveryStrictOperation() throws {
+        let provider = FakeAXProvider()
+        provider.childCounts[0] = 2
+        provider.rootCountStatuses = [.cannotComplete, .success]
+        provider.rootPageStatuses = [.cannotComplete, .success]
+        provider.identityStatuses = [.cannotComplete, .success]
+        let budget = try rootBudget()
+        XCTAssertEqual(try AXTraversal.root(app: 0, window: rootWindow(), provider: provider, budget: budget), 1)
+        XCTAssertEqual(budget.axCalls, 6)
+        XCTAssertEqual(budget.nodes, 1)
+        XCTAssertTrue(provider.timeouts.allSatisfy { $0 <= 0.25 })
+        XCTAssertTrue(provider.stringRequests.isEmpty)
+        XCTAssertTrue(provider.textRequests.isEmpty)
+    }
+
+    func testRootRejectsMalformedCountsPagesAndIdentities() throws {
+        for malformed in ["negative", "short", "oversized", "zero", "duplicate"] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = malformed == "negative" ? -1 : 2
+            provider.discoveryShortPage = malformed == "short"
+            provider.rootOversizedPage = malformed == "oversized"
+            if malformed == "zero" { provider.forcedWindowID = 0 }
+            if malformed == "duplicate" { provider.forcedWindowID = 7 }
+            XCTAssertThrowsError(try AXTraversal.root(app: 0, window: rootWindow(99),
+                provider: provider, budget: rootBudget())) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+            }
+        }
+    }
+
+    func testRootValidEmptyAndMissingListsReportWindowNotFound() throws {
+        for count in [0, 2] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = count
+            XCTAssertThrowsError(try AXTraversal.root(app: 0, window: rootWindow(99),
+                provider: provider, budget: rootBudget())) {
+                guard case SpaceOError.windowNotFound = $0 else { return XCTFail("expected windowNotFound: \($0)") }
+            }
+        }
+    }
+
+    func testRootRejectsChangedCountBeforeReportingMissing() throws {
+        let provider = FakeAXProvider()
+        provider.childCounts[0] = 1
+        provider.afterProviderCall = {
+            if provider.providerCallCount == 3 { provider.childCounts[0] = 2 }
+        }
+        XCTAssertThrowsError(try AXTraversal.root(app: 0, window: rootWindow(99),
+            provider: provider, budget: rootBudget())) {
+            XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+        }
+    }
+
+    func testRootHonorsDeadlineAndCancellationBeforeReturningHandle() throws {
+        for reason in [AXTraversalStopReason.deadline, .cancelled] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 1
+            let clock = TestMonotonicClock()
+            var cancelled = false
+            let budget = try AXTraversalBudget(limits: AXTraversalLimits(), now: { clock.value },
+                                               isCancelled: { cancelled })
+            provider.afterProviderCall = {
+                if provider.providerCallCount == 3 {
+                    if reason == .deadline { clock.advance(by: 3_000_000_000) }
+                    else { cancelled = true }
+                }
+            }
+            XCTAssertThrowsError(try AXTraversal.root(app: 0, window: rootWindow(), provider: provider, budget: budget)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, reason)
+            }
+        }
+    }
+
+    func testRootHonorsSharedNodeCallAndAllocationCaps() throws {
+        for reason in [AXTraversalStopReason.nodes, .axCalls, .allocation] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = reason == .nodes ? Int.max : 1
+            var limits = AXTraversalLimits()
+            if reason == .axCalls { limits.maxAXCalls = 2; provider.rootCountStatuses = [.cannotComplete, .cannotComplete] }
+            if reason == .allocation { limits.maxAllocatedBytes = 1 }
+            let budget = try rootBudget(limits)
+            XCTAssertThrowsError(try AXTraversal.root(app: 0, window: rootWindow(), provider: provider, budget: budget)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, reason)
+            }
+            if reason == .nodes { XCTAssertTrue(provider.pageRequests.isEmpty) }
+            XCTAssertLessThanOrEqual(budget.axCalls, limits.maxAXCalls)
+        }
+    }
+
     func testWindowPresenceNeedsOnlyOneCheckedCountRegardlessOfListSize() throws {
         for count in [0, 70, Int.max] {
             let provider = FakeAXProvider()
@@ -56,6 +181,99 @@ final class AXTraversalTests: XCTestCase {
                                                now: { 0 }, isCancelled: { false })
             XCTAssertThrowsError(try AXWindowDiscovery.hasIdentifiedWindow(app: 0, provider: provider, budget: budget)) {
                 XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, tooLarge ? .nodes : .provider)
+            }
+        }
+    }
+
+    func testLaunchPresenceContinuesPastInvalidIdentitiesIncludingLaterPages() throws {
+        for invalidCount in [1, 32] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = invalidCount + 1
+            provider.identityStatuses = Array(repeating: .invalidUIElement, count: invalidCount) + [.success]
+            let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                               now: { 0 }, isCancelled: { false })
+            XCTAssertTrue(try AXWindowDiscovery.hasIdentifiedWindow(app: 0, provider: provider, budget: budget))
+            XCTAssertEqual(budget.nodes, invalidCount + 1)
+            XCTAssertEqual(provider.providerCallCount, invalidCount + 2 + provider.pageRequests.count)
+            XCTAssertEqual(provider.pageRequests.map(\.start), invalidCount == 1 ? [0] : [0, 32])
+            XCTAssertTrue(provider.textRequests.isEmpty)
+        }
+    }
+
+    func testLaunchPresenceDoesNotSkipOtherIdentityProviderFailures() throws {
+        for status in [AXError.illegalArgument, .apiDisabled, .notImplemented] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 2
+            provider.identityStatuses = [status, .success]
+            let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                               now: { 0 }, isCancelled: { false })
+            XCTAssertThrowsError(try AXWindowDiscovery.hasIdentifiedWindow(app: 0, provider: provider, budget: budget)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.detail,
+                    "incomplete window discovery: window identity is unavailable (AXError \(status.rawValue))")
+            }
+            XCTAssertEqual(provider.identityStatuses, [.success])
+            XCTAssertEqual(budget.nodes, 1)
+        }
+    }
+
+    func testLaunchPresencePreservesInvalidIdentityFailureWhenNoIDResolves() throws {
+        for finalStatus in [AXError.invalidUIElement, .success] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 2
+            provider.identityStatuses = [.invalidUIElement, finalStatus]
+            provider.forcedWindowID = 0
+            let budget = try AXTraversalBudget(limits: AXWindowDiscovery.limits(remaining: 1),
+                                               now: { 0 }, isCancelled: { false })
+            XCTAssertThrowsError(try AXWindowDiscovery.hasIdentifiedWindow(app: 0, provider: provider, budget: budget)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.detail,
+                    "incomplete window discovery: window identity is unavailable (AXError \(AXError.invalidUIElement.rawValue))")
+            }
+            XCTAssertEqual(provider.providerCallCount, 4)
+            XCTAssertEqual(budget.nodes, 2)
+        }
+    }
+
+    func testLaunchPresenceContinuationHonorsBudgetsAndCancellation() throws {
+        for reason in [AXTraversalStopReason.cancelled, .axCalls, .nodes, .deadline, .allocation] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 2
+            provider.identityStatuses = [.invalidUIElement, .success]
+            let clock = TestMonotonicClock()
+            var cancelled = false
+            var limits = try AXWindowDiscovery.limits(remaining: 1)
+            limits.childPageSize = 1
+            if reason == .axCalls { limits.maxAXCalls = 3 }
+            if reason == .nodes { limits.maxNodes = 2 }
+            let budget = try AXTraversalBudget(limits: limits, now: { clock.value },
+                                               isCancelled: { cancelled })
+            provider.afterProviderCall = {
+                guard provider.providerCallCount == 3 else { return }
+                switch reason {
+                case .cancelled: cancelled = true
+                case .deadline: clock.advance(by: 1_000_000_000)
+                case .nodes: try? budget.consumeNode()
+                case .allocation: try? budget.consumeAllocation(limits.maxAllocatedBytes - budget.allocatedBytes)
+                default: break
+                }
+            }
+            XCTAssertThrowsError(try AXWindowDiscovery.hasIdentifiedWindow(app: 0, provider: provider, budget: budget)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, reason)
+            }
+            XCTAssertEqual(provider.identityStatuses, [.success])
+        }
+    }
+
+    func testFullWindowDiscoveryRemainsStrictForMixedIdentityLists() throws {
+        for statuses in [[AXError.invalidUIElement, .success], [.success, .invalidUIElement]] {
+            let provider = FakeAXProvider()
+            provider.childCounts[0] = 2
+            provider.identityStatuses = statuses
+            XCTAssertThrowsError(try discover(provider)) {
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.reason, .provider)
+                XCTAssertEqual(($0 as? AXTraversalStopped)?.detail,
+                    "incomplete window discovery: window identity is unavailable (AXError \(AXError.invalidUIElement.rawValue))")
             }
         }
     }
@@ -979,6 +1197,16 @@ private final class FakeAXProvider: AXWindowDiscoveryProviding {
     var discoveryShortPage = false
     var forcedWindowID: CGWindowID?
     var identityStatuses: [AXError] = []
+    var rootCountStatuses: [AXError] = []
+    var rootPageStatuses: [AXError] = []
+    var rootOversizedPage = false
+
+    private func rootStatus(_ statuses: inout [AXError], operation: String) throws {
+        let status = statuses.isEmpty ? AXError.success : statuses.removeFirst()
+        if status != .success {
+            throw AXWindowDiscovery.ProviderFailure(status: status, operation: operation)
+        }
+    }
 
     func identifiedWindowID(_ element: Int) throws -> CGWindowID {
         let id = windowID(element)
@@ -990,13 +1218,16 @@ private final class FakeAXProvider: AXWindowDiscoveryProviding {
     }
 
     func windowCount(_ app: Int) throws -> Int {
+        try rootStatus(&rootCountStatuses, operation: "window count")
         if discoveryCountFails { throw AXWindowDiscovery.incomplete("fixture count failure") }
         return arrayCount(app, attribute: kAXWindowsAttribute as String)
     }
 
     func windowElements(_ app: Int, start: Int, count: Int) throws -> [Int] {
+        try rootStatus(&rootPageStatuses, operation: "window page")
         if discoveryPageFails { throw AXWindowDiscovery.incomplete("fixture page failure") }
         let page = elements(app, attribute: kAXWindowsAttribute as String, start: start, maxValues: count)
+        if rootOversizedPage { return page + [999] }
         return discoveryShortPage ? Array(page.dropLast()) : page
     }
     var afterProviderCall: () -> Void = {}

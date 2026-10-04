@@ -10,9 +10,17 @@ public struct DisplayHostHealthReport: Codable, Sendable, Equatable {
     public var swapoutsDelta: UInt64?
     public var windowServerDiagnosticReports: Int?
     public var unavailableInput: String?
+    /// Explicit reserved-host diagnostic run; ready is overridden, not sampled health.
+    public var testingOverride: Bool? = nil
     /// Separate graph-change readiness from health permitted for ongoing display use.
     public var reconfigurationSettled: Bool? = nil
     public var reconfigurationCPUThresholdPercent: Double? = nil
+}
+
+enum DisplayTestingPolicy {
+    static func enabled(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment["SPACEO_LIVE_TESTS"] == "1" && environment["SPACEO_TESTING_HOST"] == "1"
+    }
 }
 
 struct DisplayHostHealthSample: Sendable {
@@ -102,6 +110,7 @@ final class DisplayHostHealth: @unchecked Sendable {
         var description: String { underlyingError.description }
     }
 
+    private let testingOverride: Bool
     private let lock = NSLock()
     private var reconfigurationWaiters: [UUID: DispatchSemaphore] = [:]
     private let worker = DispatchQueue(label: "spaceo.host-health-sampler")
@@ -122,17 +131,24 @@ final class DisplayHostHealth: @unchecked Sendable {
     private let onFailure: @Sendable (String) -> Void
     private let waitForReconfiguration: @Sendable (DispatchSemaphore, DispatchTime) -> Void
 
-    init(sample: @escaping @Sendable () throws -> DisplayHostHealthSample = { try DisplayHostHealthSampler.capture() },
+    init(testingOverride: Bool = DisplayTestingPolicy.enabled(),
+         sample: @escaping @Sendable () throws -> DisplayHostHealthSample = { try DisplayHostHealthSampler.capture() },
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          onFailure: @escaping @Sendable (String) -> Void = { _ in },
          waitForReconfiguration: @escaping @Sendable (DispatchSemaphore, DispatchTime) -> Void = {
              _ = $0.wait(timeout: $1)
          }) {
+        self.testingOverride = testingOverride
         self.sample = sample
         self.now = now
         self.onFailure = onFailure
         self.waitForReconfiguration = waitForReconfiguration
         initialDecision.enter()
+        if testingOverride {
+            current = .init(state: .ready, reasons: ["testing_override"], testingOverride: true)
+            consecutiveSettledSamples = 2
+            finishInitialDecision()
+        }
     }
 
     var report: DisplayHostHealthReport {
@@ -173,6 +189,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     /// including captures which were still being reconciled when the graph changed.
     func resetReconfigurationSettling() {
         lock.withLock {
+            if testingOverride { return }
             consecutiveSettledSamples = 0
             settlingAfter = now()
             signalReconfigurationWaiters()
@@ -254,6 +271,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     }
 
     private func start() {
+        guard !testingOverride else { return }
         lock.withLock {
             guard !started, current.state != .blocked else { return }
             started = true
@@ -267,6 +285,7 @@ final class DisplayHostHealth: @unchecked Sendable {
 
     /// Also driven directly by deterministic tests, without starting a timer or host sampler.
     func tick() {
+        guard !testingOverride else { return }
         expireIfNeeded()
         let time = now()
         let shouldSample = lock.withLock { () -> Bool in
@@ -286,6 +305,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     }
 
     func accept(_ next: DisplayHostHealthSample) {
+        guard !testingOverride else { return }
         // Check the independent deadline even when the watchdog has not had its next tick.
         expireIfNeeded()
         var failed: String?

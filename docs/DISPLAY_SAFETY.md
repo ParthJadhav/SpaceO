@@ -8,17 +8,22 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
 
 - The private shim checks runtime class/symbol availability on every supported OS version; the
   OS version alone never refuses creation.
-- Creation refuses missing, inactive, or unreadable user displays and online SpaceO displays not
-  owned by this process. Mirrored displays and any refresh rate are admitted.
+- A successfully read zero-count display inventory is distinguished from provider failure.
+  Empty/all-inactive user graphs receive a pre-mutation refusal while their attachment remains
+  unqualified, without being mislabeled as an unreadable inventory or tripping the persistent
+  failure latch. Creation also refuses malformed user display metadata and online SpaceO displays
+  not owned by this process. Mirrored displays and any refresh rate are admitted.
 - A per-user file lock admits one SpaceO display-owning process for that process's lifetime.
   Daemon, XCTest, and library users of Stage share the same journal. It does not coordinate old
   binaries, other users, third-party virtual-display software, or direct users of private APIs.
-- A persistent budget allows at most **4 creation attempts per minute, 12 per ten minutes,
+- Normal admission's persistent budget allows at most **4 creation attempts per minute, 12 per ten minutes,
   and 32 per rolling day**. Budget refusals report the actual remaining wait across all windows.
   CLI/MCP limits report the effective `maximumCreationsPerMinute` and the persistent
   `maximumCreationsPerTenMinutes` and `maximumCreationsPerDay`; stricter pool limits still apply.
   Attempts, including failures, count before creation; changing pools or restarting the process
   cannot reset the window. `SPACEO_UNRESTRICTED_RESOURCES` does not lift this safety budget.
+  Only the [explicit diagnostic testing mode](#explicit-reserved-testing-host) bypasses its
+  admission limit while retaining the bounded history.
 - Before a mutation, the journal records it as pending. Success clears pending only after
   verification. Interrupted mutation, unknown removal, configuration drift, or a service timeout
   leaves a latch that prevents subsequent work and survives process restarts.
@@ -118,6 +123,32 @@ graph. The log reports the suspended process-group ID. Stop the qualification at
 it during a reserved recovery window; do not automatically rerun or resume it. A failed, stopped,
 or skipped run is never release evidence. Direct `swift test` invocations do not have its external deadline.
 
+## Explicit reserved testing host
+
+When the operator explicitly designates this Mac for diagnostic testing, set both
+`SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the source CLI and test commands.
+This bypasses host-health admission, including historical WindowServer reports, CPU settling,
+pressure, swap and unavailable samples. Native health reports carry `testingOverride: true`
+and `testing_override`, with no invented CPU measurements. The independent helper still
+samples and retains its actual reasons and counters as `observedAdmitted`; it marks admission
+as overridden. One flag alone has no effect.
+
+In this mode explicit `safety clear-host-health --operator` may archive any idle host-health
+latch, including a diagnostic/timeout latch. It still requires the existing exclusive journal
+lock, no pending mutation/live case, and no SpaceO display. Ownership, topology checks,
+operation deadlines, pool resource limits, live-case pacing and failure cleanup remain enforced.
+The same explicit mode bypasses the persistent rolling creation-rate admission limit for
+diagnostic workloads. It still records the latest 12 ten-minute and 32 daily attempts, which
+fully determine normal admission after the mode is removed. The bounded journal is not reset;
+normal runs can remain rate-limited by these diagnostic attempts. Native safety status exposes
+`creationRateTestingOverride: true`. Clock rollback and unfinished mutations remain refused.
+Limits reports omit the inactive persistent ten-minute/daily caps, retain the pool's effective
+minute cap, and expose the same override flag.
+The flags apply only to processes which inherit them; an already-running daemon must exit
+before starting the source daemon in this mode. Diagnostic results are retained as override
+runs, not normal host-health or signed-release qualification. Neither diagnostic files nor
+system preferences are erased.
+
 ## Recovery and requalification
 
 The per-user journal is `~/Library/Application Support/SpaceO/display-safety.json`. A corrupt or
@@ -125,20 +156,26 @@ non-private journal fails closed. There is intentionally no automatic reset, exp
 or retry loop. Do not unlink it while any SpaceO owner is running or suspended: replacing a locked
 file would defeat cross-process exclusion.
 
-For the false `host health: host_health_unknown` latch produced by 1.0.5 when on-demand
-ColorSync services were absent, upgrade the CLI, stop **all** SpaceO owners (including Viewer
-and the supervised LaunchAgent), then run:
+An idle `host health: host_health_unknown`, `host health: memory_pressure` or
+`host health: swap_activity` latch can be recovered after the underlying condition resolves.
+This includes the false unknown latch produced by 1.0.5 when on-demand ColorSync services
+were absent. Upgrade to a CLI containing this recovery support, stop **all** SpaceO owners
+(including Viewer, MCP clients and the supervised LaunchAgent), then run:
 
 ```sh
 spaceo safety clear-host-health --operator
 ```
 
 This local operator command locks the existing journal, refuses a pending mutation/live case
-or any other failure class, requires no online SpaceO display and two healthy host observations,
-and archives the old journal before clearing only its failure. It preserves creation budgets
+or any other failure class, requires no online SpaceO display and two consecutive healthy
+ColorSync intervals below 25%, and archives the old journal before clearing only its failure.
+A combined memory-pressure/swap latch is eligible; any combination containing another reason
+is refused. ColorSync incidents, system diagnostics, sampler timeouts and stale-health faults
+remain outside this recovery path. It preserves creation budgets
 and the locked file's identity. An owner that relaunches or still holds the file lock prevents
-recovery; stop its supervision first. Doctor remains read-only. Memory pressure, incidents and
-unknown/stale health still refuse; this command neither qualifies the host nor clears RA-057.
+recovery; stop its supervision first. Doctor remains read-only. Current memory pressure, swap
+activity, incidents and unknown/stale health still refuse; this command neither qualifies the
+host nor clears RA-057.
 
 Recovery first saves a blocking marker, then commits a private, complete receipt. Its bounded
 wait can end before a stalled filesystem operation returns. A confirmed abort retains the latch;
@@ -168,7 +205,10 @@ reserved host. Establish that all display-owning SpaceO processes have exited, n
 remains, and physical-only display operation is stable. Owner termination may itself trigger
 teardown; it is an operator recovery decision, not a watchdog action. Only then may an operator
 archive/remove the journal to permit a fresh admission. That does not make the host qualified or clear any release blocker. Do not erase WindowServer/ColorSync preferences as a
-routine reset.
+routine reset. Recovery does not change the swap rule: any newly observed swap-in or swap-out
+still refuses work. Occasional page-ins on a lightly swapped host therefore remain an admission
+limitation. Recovering an idle latch does not allow live-owner teardown through an unhealthy
+host, and no command automatically kills an owner to make recovery possible.
 
 Release qualification requires the complete live and computer-use gates in
 [RELEASE_POLICY.md](RELEASE_POLICY.md) for the candidate source.

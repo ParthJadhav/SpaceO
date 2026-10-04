@@ -1,6 +1,51 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { imagesChanged, isolationStatus, toolResult } from "../scripts/computer-use-evidence.mjs";
+import { imagesChanged, isolationStatus, isolationDiagnostics, toolResult,
+  fixturePageState, pageElementFor } from "../scripts/computer-use-evidence.mjs";
+
+test("failed window observations never become absent fixture events", () => {
+  assert.deepEqual(fixturePageState({ ok: false, text: "CU ev=hover y=0" }),
+    { ok: false, reason: "tool_failed" });
+  assert.deepEqual(fixturePageState({ ok: true, text: "other window" }),
+    { ok: false, reason: "fixture_state_missing" });
+  assert.deepEqual(fixturePageState({ ok: true, text: "CU ev=none y=0" }),
+    { ok: true, events: [], scrollY: 0, raw: "CU ev=none y=0" });
+  assert.deepEqual(fixturePageState({ ok: true, text: "CU ev=click+hover y=123" }),
+    { ok: true, events: ["click", "hover"], scrollY: 123, raw: "CU ev=click+hover y=123" });
+});
+
+test("page targets use exact labels and current web references without coordinate guesses", () => {
+  const text = "  [2] button — HOVER ME  at (1,2)\n"
+    + "  [w1] div — HOVER ME TOO  at (3,4)\n"
+    + "  [w7] div — HOVER ME  at (90,110)\n"
+    + "  [w9] input type=text — type here  at (200,150)";
+  assert.deepEqual(pageElementFor({ ok: true, text }, "HOVER ME"),
+    { element: "w7", x: 90, y: 110 });
+  assert.deepEqual(pageElementFor({ ok: true, text }, "type here"),
+    { element: "w9", x: 200, y: 150 });
+  assert.equal(pageElementFor({ ok: false, text }, "HOVER ME"), null);
+  assert.equal(pageElementFor({ ok: true, text }, "missing"), null);
+  for (const suffix of ["at (-1,3)", "at (1,3)  (disabled)", "without coordinates"]) {
+    assert.equal(pageElementFor({ ok: true, text: "[w0] div — HOVER ME  " + suffix }, "HOVER ME"), null);
+  }
+});
+
+test("isolation follow-up retains fixed codes without private evidence", () => {
+  const result = isolationDiagnostics({ ok: false, text: "ISOLATION BREACH\n"
+    + "- cursor_location: failed [observed] — private coordinates\n  failure: private data\n"
+    + "- key_input_route: unknown [unknown] — private process\n"
+    + "- window_server_front_process: passed [inferred] — private process\n"
+    + "- private_name: passed [observed] — app content" });
+  assert.deepEqual(result, { observed: true, checks: {
+    cursor_location: { status: "failed", coverage: "observed" },
+    key_input_route: { status: "unknown", coverage: "unknown" },
+    window_server_front_process: { status: "passed", coverage: "inferred" },
+  }});
+  assert.equal(JSON.stringify(result).includes("private"), false);
+  assert.deepEqual(isolationDiagnostics(null), { observed: false });
+  assert.deepEqual(isolationDiagnostics({ text: "- cursor_location: failed [observed]\n"
+    + "- cursor_location: passed [observed]" }), { observed: false });
+});
 
 test("JSON-RPC errors and missing tool results never count as success", () => {
   for (const response of [null, {}, { result: {} }, { result: { content: null } },

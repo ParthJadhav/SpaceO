@@ -118,6 +118,15 @@ try {
     && typoText.includes("did you mean 'session_id' → 'session'?"),
     `a misspelled argument did not name the accepted ones: ${typoText}`);
 
+  const unowned = await request("tools/call", {
+    name: "spaceo_open_app",
+    arguments: { session: "synthetic-unowned", app: "TextEdit" },
+  });
+  const unownedText = unowned.result?.content?.[0]?.text ?? "";
+  assert(unowned.result?.isError === true && unownedText.includes("[lease_required]")
+    && unownedText.includes("If creation failed"),
+    "an unowned session was not refused with lease and failed-creation guidance");
+
   // Without these an agent cannot reach anything below the fold, cannot open a hover-only menu,
   // and cannot move a slider — the ordinary steps a computer-use agent takes on real UI.
   for (const required of ["spaceo_scroll", "spaceo_move", "spaceo_drag"]) {

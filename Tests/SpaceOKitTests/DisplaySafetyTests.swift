@@ -213,6 +213,17 @@ final class DisplaySafetyTests: XCTestCase {
         XCTAssertNotNil(failure([userDisplay()], foreign: [99_222]))
     }
 
+    func testCheckedInventoryDistinguishesReadableEmptyFromFailure() throws {
+        XCTAssertEqual(try Stage.validatedDisplayIDs(result: .success, buffer: [0, 0], count: 0), [])
+        XCTAssertEqual(try Stage.validatedDisplayIDs(result: .success, buffer: [1, 0], count: 1), [1])
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .failure, buffer: [0, 0], count: 0))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: [], count: 0))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: [1], count: 1))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: [1], count: 2))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: [0, 0], count: 1))
+        XCTAssertThrowsError(try Stage.validatedDisplayIDs(result: .success, buffer: [1, 1, 0], count: 2))
+    }
+
     func testMirroredAndHighRefreshDisplaysAreAdmitted() {
         let mirrored = configuration([
             userDisplay(id: 1, active: false, mirroredTo: 2, refreshRate: 0),
