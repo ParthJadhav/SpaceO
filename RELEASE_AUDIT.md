@@ -93,6 +93,12 @@ refused host preflight and missing new live/artifact behavior evidence.
 The [1.0.6 publication record](docs/validation/2026-10-03-release-1.0.6.md) retains signed
 candidate/public-download verification and reporter replies; it does not close this finding.
 
+October 4 release direction: after reviewing the merged measurement/churn fixes and open
+incident, the owner requested a new release. Version 1.0.7's release-specific qualification
+exception is recorded in the [preparation record](docs/validation/2026-10-04-release-1.0.7.md).
+The focused native workflow pass does not close RA-057 or replace full signed-candidate behavior
+qualification. Runtime limits and protected signing/distribution/publication remain required.
+
 The owner confirmed a forced restart at 23:03. An earlier 20:28 watchdog/spin captured
 WindowServer's main thread unresponsive and 75 sampled threads blocked through ColorSync.
 System synchronization timeouts recurred during later performance, MCP and XCTest work, even
