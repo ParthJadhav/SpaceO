@@ -82,6 +82,22 @@ was detected. Further host probes stopped at that refusal. This observation does
 the pressure to sampling or to ColorSync. The existing incident is not repaired by the
 settling guard, and no new live workload or release qualification is claimed.
 
+A subsequent read-only ColorSync Utility Devices inspection listed one physical display.
+Its current and factory profiles referenced the same file. That bounded 4,076-byte profile
+returned exit zero from the system `sips --verify` query. The utility then quit normally.
+No profile was assigned, repaired or removed. This weakens the related investigation's
+custom-profile explanation for this host; it does not exclude another restoration trigger
+or qualify the host. Only content-free observations were retained privately.
+
+The supported recovery assessment identifies a
+[normal macOS restart](https://support.apple.com/guide/mac-help/shut-down-or-restart-your-mac-mchlp2522/mac) as the strongest
+remaining reset for this system-service state, not a demonstrated fix. A logout/login does
+not establish that the system ColorSync service restarted. Even after a restart, a diagnostic
+less than 24 hours old remains relevant to admission; the original report must remain intact.
+Fresh full admission, native settling evidence and retained complete workloads are still
+required before claiming recovery or qualification. No restart or logout was performed in
+this observation.
+
 ## Decision and implementation
 
 The [primary XREAL investigation](https://github.com/dripster82/ar_workspace_manager_for_xreal/blob/main/Docs/ColorSync-AirII-investigation.md)
@@ -121,7 +137,10 @@ attachment, without holding that lock across filesystem work or private display 
 includes the daemon's deferred owners even when its pool is empty, reports them explicitly,
 and does not offer orphan-display recovery for those owned displays. Settling waits now use
 one absolute monotonic DispatchTime deadline and separate semaphores for concurrent callers,
-so wall-clock changes cannot extend their deadline or lose a wakeup.
+so wall-clock changes cannot extend their deadline or lose a wakeup. Locked admission caps
+the registry at 32 callers, independently of display creation's later rate limit. An existing
+waiter keeps its slot across wakeups; saturation is a transient structured resource limit
+that retains retirement ownership, and every exit releases its slot.
 Creation attempts remain conservatively counted in the pool, including failed factories: a
 factory may already have attached a display before throwing. Refused cleanup can still appear
 as incomplete teardown even when the safety circuit has not tripped. Forced process exit is
@@ -149,6 +168,12 @@ budget exhaustion, concurrent wakeups, monotonic timeout and fake-daemon doctor 
 The updated full deterministic gate passed 1,809 Swift tests, script checks and MCP smoke
 across 35 tools. The updated release warnings-as-errors build, release-security policy tests
 and live-test gate policy tests also passed.
+The later waiter-cap review found an unbounded synchronization registry before the creation
+rate limiter. Its correction passed independent review and 125 focused tests, including a
+32-caller saturation/re-wait/wake-all fixture and timeout slot release. The updated full
+deterministic gate passed 1,810 Swift tests, installation/script checks and MCP smoke across
+35 tools. The release warnings-as-errors build and both release-security and live-gate
+policy suites also passed on this correction.
 No display mutation or input workload has run in this follow-up. The installed release remains
 1.0.7; these source changes have not been installed or published. Full live/matrix and exact
 signed-artifact behavior qualification remain required. This host still has a current-boot

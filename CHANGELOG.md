@@ -15,7 +15,8 @@ All notable user-visible changes are recorded here. SpaceO follows
   confirmed retirement is an immediate no-op on
   subsequent calls.
 - Recheck display admission after persisting its pending marker; acknowledge a safe
-  pre-mutation abort before allowing retries. Bound settling waits by a monotonic deadline.
+  pre-mutation abort before allowing retries. Bound settling waits by a monotonic deadline
+  and a 32-caller limit; saturation returns a transient structured resource limit.
 
 ## [1.0.7] - 2026-10-04
 

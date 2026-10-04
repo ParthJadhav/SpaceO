@@ -90,6 +90,9 @@ struct DisplayHostHealthSample: Sendable {
 /// A stuck sampler is never replaced; late results cannot clear the sticky failure.
 final class DisplayHostHealth: @unchecked Sendable {
     static let reconfigurationCPUThresholdPercent = 25.0
+    /// Bound retained synchronization objects and synchronous sampler fan-out independently
+    /// of the later display creation rate limit. One caller keeps one slot across wakeups.
+    static let maximumReconfigurationWaiters = 32
 
     /// Internal control flow distinguishes a ready-but-warm host from a hard health fault.
     /// Stage unwraps this error at the public boundary to preserve the existing error code.
@@ -208,7 +211,6 @@ final class DisplayHostHealth: @unchecked Sendable {
         if isSettledForReconfiguration { return }
         if timeout > 0 { start() }
         let waiterID = UUID()
-        let signal = DispatchSemaphore(value: 0)
         defer { lock.withLock { _ = reconfigurationWaiters.removeValue(forKey: waiterID) } }
         while true {
             expireIfNeeded()
@@ -226,7 +228,21 @@ final class DisplayHostHealth: @unchecked Sendable {
             // remains queued, and every caller has its own semaphore so wakeups cannot be
             // consumed by another caller. One absolute DispatchTime bounds all waits without
             // depending on Date, clock adjustments, subsequent samples, or watchdog signals.
-            reconfigurationWaiters[waiterID] = signal
+            let signal: DispatchSemaphore
+            if let registered = reconfigurationWaiters[waiterID] {
+                signal = registered
+            } else {
+                guard reconfigurationWaiters.count < Self.maximumReconfigurationWaiters else {
+                    lock.unlock()
+                    throw ReconfigurationSettlingRefusal(underlyingError: .resourceLimit(
+                        kind: .displays,
+                        detail: "display reconfiguration wait limit: at most \(Self.maximumReconfigurationWaiters) "
+                            + "concurrent requests; retain the display owner and wait for an existing request to finish",
+                        retryAfter: nil))
+                }
+                signal = DispatchSemaphore(value: 0)
+                reconfigurationWaiters[waiterID] = signal
+            }
             lock.unlock()
             waitForReconfiguration(signal, deadline)
         }

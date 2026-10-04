@@ -21,6 +21,12 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         var value: Double { ProcessInfo.processInfo.systemUptime + offset }
     }
 
+    private final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        func next() -> Int { lock.withLock { defer { value += 1 }; return value } }
+    }
+
     private func observation(_ time: Double, cpu: Double, swap: UInt64 = 0,
                              pressure: UInt32 = 1, reports: Int = 0) -> DisplayHostHealthSample {
         let services = DisplayHostHealthSampler.services
@@ -128,6 +134,12 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         XCTAssertEqual(health.report.reconfigurationCPUThresholdPercent, 25)
         XCTAssertEqual(health.report.reasons, [])
         XCTAssertFalse(health.isSettledForReconfiguration)
+        XCTAssertEqual(health.reconfigurationWaiterCount, 0)
+        // A timeout releases admission rather than retaining a synchronization object.
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0.02)) {
+            XCTAssertTrue($0 is DisplayHostHealth.ReconfigurationSettlingRefusal)
+        }
+        XCTAssertEqual(health.reconfigurationWaiterCount, 0)
     }
 
     func testSettlingWaitUsesRealMonotonicDeadlineWithoutSignals() {
@@ -190,6 +202,84 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         wait(for: [finished], timeout: 2)
         XCTAssertTrue(health.isSettledForReconfiguration)
         XCTAssertEqual(health.reconfigurationWaiterCount, 0)
+    }
+
+    func testWaiterCapIsTransientAndExistingWaitersCanRewaitAndAllFinish() {
+        let clock = Clock()
+        let limit = DisplayHostHealth.maximumReconfigurationWaiters
+        XCTAssertEqual(limit, 32)
+        let calls = Counter()
+        let registered = expectation(description: "waiter capacity reached")
+        registered.expectedFulfillmentCount = limit
+        let reregistered = expectation(description: "existing waiters rewait at capacity")
+        reregistered.expectedFulfillmentCount = limit
+        let finished = expectation(description: "all admitted waiters settle")
+        finished.expectedFulfillmentCount = limit
+        let firstWait = DispatchSemaphore(value: 0)
+        let secondWait = DispatchSemaphore(value: 0)
+        let health = DisplayHostHealth(
+            sample: { throw DisplayHostHealthSample.Unknown("inert_fixture") },
+            now: { clock.value },
+            waitForReconfiguration: { signal, deadline in
+                let call = calls.next()
+                if call < limit {
+                    registered.fulfill()
+                    XCTAssertEqual(firstWait.wait(timeout: .now() + 5), .success)
+                } else {
+                    XCTAssertLessThan(call, limit * 2, "only one explicit non-settled wake is issued")
+                    reregistered.fulfill()
+                    XCTAssertEqual(secondWait.wait(timeout: .now() + 5), .success)
+                }
+                XCTAssertEqual(signal.wait(timeout: deadline), .success)
+            })
+        feed(health, clock, 100, 10)
+        feed(health, clock, 104, 10.96)
+        clock.value = 106.9
+        for _ in 0..<limit {
+            DispatchQueue.global().async {
+                do { try health.requireSettledForReconfiguration(timeout: 5) }
+                catch { XCTFail("an admitted waiter must retain its slot and settle: \(error)") }
+                finished.fulfill()
+            }
+        }
+        wait(for: [registered], timeout: 3)
+        XCTAssertEqual(health.reconfigurationWaiterCount, limit)
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 1)) { error in
+            guard let refusal = error as? DisplayHostHealth.ReconfigurationSettlingRefusal else {
+                return XCTFail("saturation must retain retirement ownership without a hard fault")
+            }
+            guard case let .resourceLimit(kind, _, retryAfter) = refusal.underlyingError else {
+                return XCTFail("creation saturation must preserve its structured resource limit")
+            }
+            XCTAssertEqual(kind, .displays)
+            XCTAssertNil(retryAfter)
+        }
+        // An expired budget keeps its existing settling refusal instead of resource_limit.
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0)) { error in
+            guard let refusal = error as? DisplayHostHealth.ReconfigurationSettlingRefusal else {
+                return XCTFail("ready health remains a transient refusal")
+            }
+            guard case .stageCreationFailed = refusal.underlyingError else {
+                return XCTFail("deadline refusal must precede capacity admission")
+            }
+        }
+        XCTAssertEqual(health.report.state, .ready)
+        health.resetReconfigurationSettling()
+        for _ in 0..<limit { firstWait.signal() }
+        wait(for: [reregistered], timeout: 3)
+        XCTAssertEqual(health.reconfigurationWaiterCount, limit)
+        // All intervals remain below the sampler's five-second spacing. The graph fence
+        // excludes the old endpoint, so three fresh observations establish settling.
+        feed(health, clock, 108, 11.92)
+        feed(health, clock, 112, 12.88)
+        feed(health, clock, 116, 13.84)
+        XCTAssertTrue(health.isSettledForReconfiguration)
+        XCTAssertNoThrow(try health.requireSettledForReconfiguration(timeout: 0))
+        XCTAssertEqual(health.reconfigurationWaiterCount, limit, "settled reads consume no slot")
+        for _ in 0..<limit { secondWait.signal() }
+        wait(for: [finished], timeout: 3)
+        XCTAssertEqual(health.reconfigurationWaiterCount, 0)
+        XCTAssertEqual(health.report.state, .ready)
     }
 
     func testSettledEvidenceStillExpiresAndLateReadsCannotRestoreIt() {
