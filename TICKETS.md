@@ -24,6 +24,16 @@ Status definitions:
 
 ## Active milestone
 
+### October 4 maintenance release 1.0.7
+
+- Published 1.0.7 as latest after source/CI, protected candidate construction, independent
+  signed-distribution verification and protected publication. All five unauthenticated public
+  downloads matched the retained candidate and passed verification again.
+- The release-specific owner exception retains open RA-057 and missing full live/matrix and
+  exact-artifact behavior qualification. No experimental waiver ships; no finding is relabeled
+  as passed. Host-health reporters #34/#36 received brief latest-version replies.
+- Evidence: [publication record](docs/validation/2026-10-04-publication-1.0.7.md).
+
 ### October 4 ColorSync root-cause follow-up
 
 - Deterministically verified, with one focused native workflow pass: correct CPU-observation
