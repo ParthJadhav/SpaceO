@@ -146,8 +146,9 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.7` is being prepared as an **owner-directed maintenance release with a qualification
-exception**. After the fixes merged and the owner was told that the earlier ColorSync spike
+Version `1.0.7` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.7)
+as an **owner-directed maintenance release with a qualification exception**. After the fixes
+merged and the owner was told that the earlier ColorSync spike
 remains open and no new release had been published, the owner instructed: **"Create a new release"**.
 This is recorded as GO to construct and publish 1.0.7, conditional on passing source, CI, signing,
 notarization, immutable-candidate and distribution checks. The exception covers the missing full
@@ -157,9 +158,11 @@ passed under private historical-admission/page-in waivers; that is modified-buil
 qualification of the signed candidate. Runtime refusal, owner retention and protected publication
 remain intact. The exception applies only to 1.0.7; future versions retain the default gates.
 See the [1.0.7 notes](RELEASE_NOTES_1.0.7.md) and
-[preparation record](validation/2026-10-04-release-1.0.7.md).
+[preparation record](validation/2026-10-04-release-1.0.7.md). The exact signed candidate and all
+five unauthenticated public downloads passed provenance and distribution verification through
+the normal protected approvals; see the [publication record](validation/2026-10-04-publication-1.0.7.md).
 
-Version `1.0.6` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.6)
+Version `1.0.6` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.6)
 as an **owner-directed maintenance release with a qualification exception**. On October 3, 2026 the owner requested fixes for the open user issues, a new release,
 deployment and issue replies, and authorized testing this computer without follow-up questions.
 That release-specific direction is recorded as GO to construct and publish 1.0.6 with the missing
