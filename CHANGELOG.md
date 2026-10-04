@@ -11,8 +11,11 @@ All notable user-visible changes are recorded here. SpaceO follows
   the existing 50% hard health limit. Report reconfiguration readiness separately in health
   JSON. Retirement's default total budget is 30 seconds, reserving 10 seconds for removal. Bulk
   retirement shares a 25-second deadline and stops at the first refusal. Pending fallback owners
-  stay visible in safety and shutdown reports; confirmed retirement is an immediate no-op on
+  stay visible in safety, doctor and shutdown reports without being mislabeled as orphans;
+  confirmed retirement is an immediate no-op on
   subsequent calls.
+- Recheck display admission after persisting its pending marker; acknowledge a safe
+  pre-mutation abort before allowing retries. Bound settling waits by a monotonic deadline.
 
 ## [1.0.7] - 2026-10-04
 

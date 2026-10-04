@@ -202,6 +202,8 @@ public final class Stage: @unchecked Sendable {
     private let reconfigurationCheck: @Sendable () throws -> Void
     private let retirementNow: @Sendable () -> DispatchTime
     private let fallbackRetirementCompletion: (@Sendable () -> Void)?
+    private let mutationLease: DisplayLifecycleLease?
+    private let mutationMarkerDidPersist: (@Sendable () -> Void)?
     private let coordinator: DisplayLifecycleCoordinator
     private let usesLiveLease: Bool
     let retirementSpaces: [UInt64]
@@ -301,7 +303,16 @@ public final class Stage: @unchecked Sendable {
             try operation.check()
             do { try Self.hostHealth.requireStillSettledForReconfiguration() }
             catch let refusal as DisplayHostHealth.ReconfigurationSettlingRefusal { throw refusal.underlyingError }
-            try Self.lease.begin(creation: true)
+            do {
+                try Self.beginCheckedMutation(
+                    creation: true, operation: operation, coordinator: Self.lifecycle,
+                    lease: Self.lease,
+                    readiness: { try Self.hostHealth.requireStillSettledForReconfiguration() })
+            } catch let refusal as DisplayHostHealth.ReconfigurationSettlingRefusal {
+                throw refusal.underlyingError
+            } catch let refusal as DisplayLifecycleCoordinator.CreationDeferred {
+                throw refusal.underlyingError
+            }
             var completed = false
             var attachedDisplay: SPOVirtualDisplay?
             defer {
@@ -312,7 +323,6 @@ public final class Stage: @unchecked Sendable {
                     Self.lifecycle.trip("display creation did not complete safely")
                 }
             }
-            try operation.check()
             guard let display = SPOVirtualDisplay(name: name, width: width,
                                                   height: height, hiDPI: hiDPI) else {
                 Self.lifecycle.trip("CGVirtualDisplay creation failed; attachment state is unknown")
@@ -368,6 +378,8 @@ public final class Stage: @unchecked Sendable {
         }
         self.retirementNow = { DispatchTime.now() }
         self.fallbackRetirementCompletion = nil
+        self.mutationLease = Self.lease
+        self.mutationMarkerDidPersist = nil
         self.coordinator = Self.lifecycle
         self.usesLiveLease = true
         self.name = name
@@ -383,7 +395,9 @@ public final class Stage: @unchecked Sendable {
         reconfigurationReadiness: @escaping @Sendable (TimeInterval) throws -> Void = { _ in },
         reconfigurationCheck: @escaping @Sendable () throws -> Void = {},
         retirementNow: @escaping @Sendable () -> DispatchTime = { DispatchTime.now() },
-        fallbackRetirementCompletion: (@Sendable () -> Void)? = nil
+        fallbackRetirementCompletion: (@Sendable () -> Void)? = nil,
+        mutationLease: DisplayLifecycleLease? = nil,
+        mutationMarkerDidPersist: (@Sendable () -> Void)? = nil
     ) {
         backing = testingBacking
         onlineDisplayIDsProvider = onlineDisplayIDs
@@ -392,6 +406,8 @@ public final class Stage: @unchecked Sendable {
         self.reconfigurationCheck = reconfigurationCheck
         self.retirementNow = retirementNow
         self.fallbackRetirementCompletion = fallbackRetirementCompletion
+        self.mutationLease = mutationLease
+        self.mutationMarkerDidPersist = mutationMarkerDidPersist
         self.coordinator = coordinator
         usesLiveLease = false
         retirementSpaces = []
@@ -512,10 +528,12 @@ public final class Stage: @unchecked Sendable {
             let remaining = Self.retirementTimeRemaining(until: deadline, now: retirementNow())
             guard remaining > 0, remaining >= removalReserve else { throw RetirementBudgetDeferral() }
             return try coordinator.perform(timeout: remaining, retaining: backing) {
-                [configurationProvider, reconfigurationCheck, retirementNow, usesLiveLease, coordinator] operation in
+                [configurationProvider, reconfigurationCheck, retirementNow, mutationLease,
+                 mutationMarkerDidPersist, usesLiveLease, coordinator] operation in
                 try Self.retire(pending, timeout: safeTimeout, deadline: deadline, operation: operation,
                                 configuration: configurationProvider, readiness: reconfigurationCheck,
                                 removalReserve: removalReserve, now: retirementNow,
+                                mutationLease: mutationLease, markerDidPersist: mutationMarkerDidPersist,
                                 liveLease: usesLiveLease, coordinator: coordinator)
             }
         } catch {
@@ -536,12 +554,54 @@ public final class Stage: @unchecked Sendable {
         }
     }
 
+    /// A durable pending marker can take long enough for health/admission to change. Recheck
+    /// after its acknowledged write, and clear it only after a no-mutation abort is acknowledged.
+    static func beginCheckedMutation(
+        creation: Bool, operation: DisplayLifecycleCoordinator.Operation,
+        coordinator: DisplayLifecycleCoordinator, lease: DisplayLifecycleLease?,
+        markerDidPersist: (() -> Void)? = nil,
+        readiness: () throws -> Void,
+        requireRemovalBudget: () throws -> Void = {}
+    ) throws {
+        var markerPersisted = false
+        do {
+            try operation.check()
+            try lease?.begin(creation: creation)
+            markerPersisted = lease != nil
+            markerDidPersist?()
+            try readiness()
+            try requireRemovalBudget()
+            try operation.check()
+            // This is the last synchronized check before the caller's attach. It shares the
+            // registration lock, and leaves no blocking work between admission and private IPC.
+            if creation { try coordinator.admitCreation() }
+        } catch {
+            let deferred = isRetirementDeferral(error) || error is DisplayLifecycleCoordinator.CreationDeferred
+            if deferred {
+                do {
+                    try operation.check()
+                    if markerPersisted { try lease?.finish() }
+                    try operation.check()
+                } catch {
+                    coordinator.trip("display mutation abort was not acknowledged safely")
+                    throw error
+                }
+            } else if !markerPersisted, case SpaceOError.resourceLimit = error {
+                // A creation-rate refusal happens before any pending marker or OS mutation.
+            } else {
+                coordinator.trip("display mutation preparation did not complete safely")
+            }
+            throw error
+        }
+    }
+
     private static func retire(
         _ pending: PendingInvalidation, timeout: TimeInterval, deadline: DispatchTime,
         operation: DisplayLifecycleCoordinator.Operation,
         configuration: () throws -> UserDisplayConfiguration?,
         readiness: () throws -> Void, removalReserve: TimeInterval,
         now: () -> DispatchTime,
+        mutationLease: DisplayLifecycleLease?, markerDidPersist: (() -> Void)?,
         liveLease: Bool, coordinator: DisplayLifecycleCoordinator
     ) throws -> Bool {
         // Refuse a blocked host before querying its display server, then recheck immediately
@@ -551,9 +611,13 @@ public final class Stage: @unchecked Sendable {
         try readiness()
         let remaining = retirementTimeRemaining(until: deadline, now: now())
         guard remaining > 0, remaining >= removalReserve else { throw RetirementBudgetDeferral() }
-        try operation.check()
-        if liveLease { try lease.begin(creation: false) }
-        try operation.check()
+        try beginCheckedMutation(
+            creation: false, operation: operation, coordinator: coordinator, lease: mutationLease,
+            markerDidPersist: markerDidPersist, readiness: readiness,
+            requireRemovalBudget: {
+                let remaining = retirementTimeRemaining(until: deadline, now: now())
+                guard remaining > 0, remaining >= removalReserve else { throw RetirementBudgetDeferral() }
+            })
         pending.markMutationStarted()
         pending.display.invalidate()
         if liveLease { hostHealth.resetReconfigurationSettling() }
@@ -571,7 +635,7 @@ public final class Stage: @unchecked Sendable {
                     }
                 }
                 try operation.check()
-                if liveLease { try lease.finish() }
+                try mutationLease?.finish()
                 recordReleased(pending.displayID)
                 coordinator.clearDeferredRetirement(pending.displayID, releasing: pending.display)
                 pending.markRemovalConfirmed()
@@ -830,6 +894,8 @@ public final class Stage: @unchecked Sendable {
         let reconfigurationCheck = reconfigurationCheck
         let retirementNow = retirementNow
         let completion = fallbackRetirementCompletion
+        let mutationLease = mutationLease
+        let mutationMarkerDidPersist = mutationMarkerDidPersist
         // Never query or mutate the display server synchronously from deinit.
         DispatchQueue.global(qos: .utility).async {
             defer { completion?() }
@@ -842,6 +908,7 @@ public final class Stage: @unchecked Sendable {
                     try Self.retire(pending, timeout: 30, deadline: deadline, operation: operation,
                                     configuration: configuration, readiness: reconfigurationCheck,
                                     removalReserve: 10, now: retirementNow,
+                                    mutationLease: mutationLease, markerDidPersist: mutationMarkerDidPersist,
                                     liveLease: liveLease, coordinator: coordinator)
                 }
             } catch {

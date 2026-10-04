@@ -549,6 +549,7 @@ func doctorPayload(report: DoctorReport, ok: Bool, capabilities: Capabilities,
         "displays": [
             "spaceO": report.spaceODisplayIDs,
             "orphanedSpaceO": report.orphanedDisplayIDs,
+            "daemonDeferredRetirement": report.deferredRetirementDisplayIDs,
             "userOnline": report.userOnlineDisplayIDs,
             "userActive": report.userActiveDisplayIDs,
             "mirroredUser": report.mirroredDisplayIDs,

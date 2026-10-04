@@ -11,6 +11,16 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         }
     }
 
+    private final class UptimeClock: @unchecked Sendable {
+        private let lock = NSLock()
+        var offset: Double {
+            get { lock.withLock { adjustment } }
+            set { lock.withLock { adjustment = newValue } }
+        }
+        private var adjustment = -5.0
+        var value: Double { ProcessInfo.processInfo.systemUptime + offset }
+    }
+
     private func observation(_ time: Double, cpu: Double, swap: UInt64 = 0,
                              pressure: UInt32 = 1, reports: Int = 0) -> DisplayHostHealthSample {
         let services = DisplayHostHealthSampler.services
@@ -118,6 +128,68 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         XCTAssertEqual(health.report.reconfigurationCPUThresholdPercent, 25)
         XCTAssertEqual(health.report.reasons, [])
         XCTAssertFalse(health.isSettledForReconfiguration)
+    }
+
+    func testSettlingWaitUsesRealMonotonicDeadlineWithoutSignals() {
+        let clock = UptimeClock()
+        let waited = expectation(description: "monotonic wait timed out without a signal")
+        let health = DisplayHostHealth(
+            sample: { throw DisplayHostHealthSample.Unknown("inert_fixture") },
+            now: { clock.value },
+            waitForReconfiguration: { signal, deadline in
+                XCTAssertEqual(signal.wait(timeout: deadline), .timedOut)
+                waited.fulfill()
+            })
+        health.accept(observation(clock.value, cpu: 10))
+        clock.offset = 0
+        health.accept(observation(clock.value, cpu: 11.5)) // Ready, approximately 30%.
+        let start = DispatchTime.now().uptimeNanoseconds
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0.03)) {
+            XCTAssertTrue($0 is DisplayHostHealth.ReconfigurationSettlingRefusal)
+        }
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000_000
+        wait(for: [waited], timeout: 1)
+        XCTAssertGreaterThanOrEqual(elapsed, 0.025)
+        XCTAssertLessThan(elapsed, 1)
+        XCTAssertEqual(health.report.state, .ready)
+        XCTAssertEqual(health.reconfigurationWaiterCount, 0)
+    }
+
+    func testSignalBeforeWaitWakesEveryConcurrentSettlingWaiter() {
+        let clock = Clock()
+        let registered = expectation(description: "both waiters registered under the state lock")
+        registered.expectedFulfillmentCount = 2
+        let finished = expectation(description: "both waiters consumed their own queued signal")
+        finished.expectedFulfillmentCount = 2
+        let enterWait = DispatchSemaphore(value: 0)
+        let health = DisplayHostHealth(
+            sample: { throw DisplayHostHealthSample.Unknown("inert_fixture") },
+            now: { clock.value },
+            waitForReconfiguration: { signal, deadline in
+                registered.fulfill()
+                // Pause after registration so the sample signal necessarily precedes wait.
+                XCTAssertEqual(enterWait.wait(timeout: .now() + 3), .success)
+                XCTAssertEqual(signal.wait(timeout: deadline), .success)
+            })
+        feed(health, clock, 100, 10)
+        feed(health, clock, 104, 10.96)
+        clock.value = 106.9
+        for _ in 0..<2 {
+            DispatchQueue.global().async {
+                do { try health.requireSettledForReconfiguration(timeout: 3) }
+                catch { XCTFail("queued fresh quiet evidence must settle: \(error)") }
+                finished.fulfill()
+            }
+        }
+        wait(for: [registered], timeout: 2)
+        XCTAssertEqual(health.reconfigurationWaiterCount, 2)
+        // Four seconds since the previous observation also keeps the real sampler idle.
+        feed(health, clock, 108, 11.92)
+        enterWait.signal()
+        enterWait.signal()
+        wait(for: [finished], timeout: 2)
+        XCTAssertTrue(health.isSettledForReconfiguration)
+        XCTAssertEqual(health.reconfigurationWaiterCount, 0)
     }
 
     func testSettledEvidenceStillExpiresAndLateReadsCannotRestoreIt() {

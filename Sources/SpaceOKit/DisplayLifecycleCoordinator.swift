@@ -5,6 +5,10 @@ import Foundation
 /// Retaining its context prevents ARC from turning a late result into an unplanned teardown.
 final class DisplayLifecycleCoordinator: @unchecked Sendable {
     struct QueryDeferred: Error {}
+    struct CreationDeferred: Error, LocalizedError {
+        let underlyingError: SpaceOError
+        var errorDescription: String? { underlyingError.errorDescription }
+    }
     final class Operation: @unchecked Sendable {
         private let lock = NSLock()
         private var retained: [AnyObject] = []
@@ -91,6 +95,20 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
         guard deferredRetirementDisplayIDs.isEmpty else {
             throw SpaceOError.stageCreationFailed("a fallback display retirement is deferred; "
                 + "retain the daemon owner and inspect display safety before creating another display")
+        }
+    }
+
+    /// Linearize final creation admission with fallback registration. No journal I/O or
+    /// private display IPC runs while this lock is held. Owners registered after admission
+    /// block subsequent creation; they cannot retroactively cancel an admitted attachment.
+    func admitCreation() throws {
+        try lock.withLock {
+            if let failure { throw SpaceOError.stageCreationFailed(failure) }
+            guard deferredRetirements.isEmpty else {
+                throw CreationDeferred(underlyingError: .stageCreationFailed(
+                    "a fallback display retirement is deferred; retain the daemon owner "
+                        + "and inspect display safety before creating another display"))
+            }
         }
     }
 

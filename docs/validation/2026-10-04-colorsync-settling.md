@@ -113,6 +113,15 @@ A failed publication, or another post-attachment creation failure, retains and r
 unpublished backing and ID while preserving the hard failure reason, rather
 than automatically reconfiguring a graph whose post-attachment settling is unknown.
 Health JSON exposes readiness and its threshold separately from ongoing-use health.
+Admission is rechecked after the acknowledged pending-marker write, including retirement's
+remaining removal budget. A transient refusal at that point clears the no-mutation marker
+only after a successful durable acknowledgment; failed acknowledgment remains sticky. Final
+creation admission shares the deferred-owner registration lock and runs immediately before
+attachment, without holding that lock across filesystem work or private display IPC. Doctor
+includes the daemon's deferred owners even when its pool is empty, reports them explicitly,
+and does not offer orphan-display recovery for those owned displays. Settling waits now use
+one absolute monotonic DispatchTime deadline and separate semaphores for concurrent callers,
+so wall-clock changes cannot extend their deadline or lose a wakeup.
 Creation attempts remain conservatively counted in the pool, including failed factories: a
 factory may already have attached a display before throwing. Refused cleanup can still appear
 as incomplete teardown even when the safety circuit has not tripped. Forced process exit is
@@ -133,6 +142,13 @@ The final gate passed after that change: 1,797 deterministic Swift tests, instal
 checks and MCP smoke across 35 tools. There were no skipped tests in the safe suite. The final
 release warnings-as-errors build passed on the same source. Python host-health
 fixtures passed 21 tests; release-security and live-gate policy scripts passed.
+A subsequent automated review identified the post-marker admission races, incomplete doctor
+inventory and wall-clock wait. The fixes passed independent read-only review and 124 focused
+tests, including real-journal abort acknowledgment, actual fallback registration, remaining
+budget exhaustion, concurrent wakeups, monotonic timeout and fake-daemon doctor JSON.
+The updated full deterministic gate passed 1,809 Swift tests, script checks and MCP smoke
+across 35 tools. The updated release warnings-as-errors build, release-security policy tests
+and live-test gate policy tests also passed.
 No display mutation or input workload has run in this follow-up. The installed release remains
 1.0.7; these source changes have not been installed or published. Full live/matrix and exact
 signed-artifact behavior qualification remain required. This host still has a current-boot

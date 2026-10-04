@@ -99,7 +99,8 @@ final class DisplayHostHealth: @unchecked Sendable {
         var description: String { underlyingError.description }
     }
 
-    private let lock = NSCondition()
+    private let lock = NSLock()
+    private var reconfigurationWaiters: [UUID: DispatchSemaphore] = [:]
     private let worker = DispatchQueue(label: "spaceo.host-health-sampler")
     private let watchdog = DispatchQueue(label: "spaceo.host-health-watchdog")
     private var timer: DispatchSourceTimer?
@@ -116,13 +117,18 @@ final class DisplayHostHealth: @unchecked Sendable {
     private let sample: @Sendable () throws -> DisplayHostHealthSample
     private let now: @Sendable () -> TimeInterval
     private let onFailure: @Sendable (String) -> Void
+    private let waitForReconfiguration: @Sendable (DispatchSemaphore, DispatchTime) -> Void
 
     init(sample: @escaping @Sendable () throws -> DisplayHostHealthSample = { try DisplayHostHealthSampler.capture() },
          now: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
-         onFailure: @escaping @Sendable (String) -> Void = { _ in }) {
+         onFailure: @escaping @Sendable (String) -> Void = { _ in },
+         waitForReconfiguration: @escaping @Sendable (DispatchSemaphore, DispatchTime) -> Void = {
+             _ = $0.wait(timeout: $1)
+         }) {
         self.sample = sample
         self.now = now
         self.onFailure = onFailure
+        self.waitForReconfiguration = waitForReconfiguration
         initialDecision.enter()
     }
 
@@ -137,6 +143,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     }
 
     var hasStarted: Bool { lock.withLock { started } }
+    var reconfigurationWaiterCount: Int { lock.withLock { reconfigurationWaiters.count } }
 
     func requireHealthy() throws {
         start()
@@ -165,7 +172,7 @@ final class DisplayHostHealth: @unchecked Sendable {
         lock.withLock {
             consecutiveSettledSamples = 0
             settlingAfter = now()
-            lock.broadcast()
+            signalReconfigurationWaiters()
         }
     }
 
@@ -178,7 +185,7 @@ final class DisplayHostHealth: @unchecked Sendable {
         }
     }
 
-    /// Caller holds the condition lock.
+    /// Caller holds the state lock.
     private func reconfigurationRefusal() -> Error {
         if current.state != .ready {
             return SpaceOError.stageCreationFailed("host health refused: " + current.reasons.joined(separator: ", ")
@@ -197,14 +204,16 @@ final class DisplayHostHealth: @unchecked Sendable {
         guard timeout.isFinite, (0...30).contains(timeout) else {
             throw SpaceOError.badRequest("display settling timeout must be between zero and thirty seconds")
         }
-        let deadline = ProcessInfo.processInfo.systemUptime + timeout
+        let deadline = DispatchTime.now() + timeout
         if isSettledForReconfiguration { return }
         if timeout > 0 { start() }
+        let waiterID = UUID()
+        let signal = DispatchSemaphore(value: 0)
+        defer { lock.withLock { _ = reconfigurationWaiters.removeValue(forKey: waiterID) } }
         while true {
             expireIfNeeded()
             lock.lock()
-            let remaining = deadline - ProcessInfo.processInfo.systemUptime
-            if current.state == .blocked || remaining <= 0 {
+            if current.state == .blocked || DispatchTime.now().uptimeNanoseconds >= deadline.uptimeNanoseconds {
                 let refusal = reconfigurationRefusal()
                 lock.unlock()
                 throw refusal
@@ -213,14 +222,19 @@ final class DisplayHostHealth: @unchecked Sendable {
                 lock.unlock()
                 return
             }
-            // The condition and state share one lock, so accept/fail cannot signal between
-            // our state check and registration for the wait. Recheck the monotonic deadline
-            // after every wake; there is no additional sampler or display-query polling.
-            // NSCondition accepts a wall-clock date. Sampler decisions and watchdog failures
-            // also broadcast, so a wake always rechecks our independent monotonic deadline.
-            _ = lock.wait(until: Date().addingTimeInterval(remaining))
+            // Register under the state lock before unlocking. A signal arriving before wait
+            // remains queued, and every caller has its own semaphore so wakeups cannot be
+            // consumed by another caller. One absolute DispatchTime bounds all waits without
+            // depending on Date, clock adjustments, subsequent samples, or watchdog signals.
+            reconfigurationWaiters[waiterID] = signal
             lock.unlock()
+            waitForReconfiguration(signal, deadline)
         }
+    }
+
+    /// Caller holds the state lock. Both sample decisions and sticky faults wake every waiter.
+    private func signalReconfigurationWaiters() {
+        for signal in reconfigurationWaiters.values { signal.signal() }
     }
 
     private func start() {
@@ -264,7 +278,7 @@ final class DisplayHostHealth: @unchecked Sendable {
                 // fail() publishes the sticky fault after releasing this lock. Revoke quiet
                 // evidence first so a woken reconfiguration waiter cannot pass in between.
                 if failed != nil { consecutiveSettledSamples = 0 }
-                lock.broadcast()
+                signalReconfigurationWaiters()
             }
             guard current.state != .blocked else { return }
             inFlightSince = nil
@@ -329,7 +343,7 @@ final class DisplayHostHealth: @unchecked Sendable {
             guard current.state != .blocked else { return false }
             current.state = .blocked
             consecutiveSettledSamples = 0
-            lock.broadcast()
+            signalReconfigurationWaiters()
             if let unavailableInput { current.unavailableInput = unavailableInput }
             current.reasons = reason.split(separator: ",").map(String.init)
             timer?.cancel()

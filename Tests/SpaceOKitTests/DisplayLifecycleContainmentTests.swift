@@ -21,6 +21,18 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         XCTAssertTrue(coordinator.annotatingDeferredRetirements(.init(state: .ready)).allowsCreation)
     }
 
+    func testFinalCreationAdmissionLinearizesWithFallbackRegistration() throws {
+        let coordinator = DisplayLifecycleCoordinator()
+        XCTAssertNoThrow(try coordinator.admitCreation())
+        // Registration after the admission point cannot retroactively cancel that attachment,
+        // and is visible to every subsequent admission without holding a lock across display IPC.
+        coordinator.quarantineDeferred(Backing(), displayID: 99_111)
+        XCTAssertThrowsError(try coordinator.admitCreation()) {
+            XCTAssertTrue($0 is DisplayLifecycleCoordinator.CreationDeferred)
+        }
+        XCTAssertNil(coordinator.failureReason)
+    }
+
     func testOlderSafetyStatusDecodesWithoutDeferredFallbacks() throws {
         let status = try JSONDecoder().decode(DisplaySafetyStatus.self,
                                              from: Data(#"{"state":"ready"}"#.utf8))
