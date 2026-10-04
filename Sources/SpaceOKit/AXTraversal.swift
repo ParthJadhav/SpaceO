@@ -378,33 +378,53 @@ enum AXTraversal {
         provider: SystemAXTraversalProvider,
         budget: AXTraversalBudget
     ) throws -> AXUIElement {
-        let app = AX.application(pid)
-        guard let window else { return app }
+        try root(app: AX.application(pid), window: window, provider: provider, budget: budget)
+    }
 
-        let attribute = kAXWindowsAttribute as String
-        let count = try boundedCall(app, provider: provider, budget: budget) {
-            provider.arrayCount(app, attribute: attribute)
+    /// Resolve only the requested identity, using the snapshot's shared budget. Provider
+    /// failures must not masquerade as a successfully enumerated list with no matching window.
+    static func root<P: AXWindowDiscoveryProviding>(
+        app: P.Element, window: WindowRef?, provider: P, budget: AXTraversalBudget
+    ) throws -> P.Element {
+        guard let window else { return app }
+        func checkedCount() throws -> Int {
+            let count = try AXWindowDiscovery.boundedProviderCall(app, provider: provider, budget: budget) {
+                try provider.windowCount(app)
+            }
+            guard count >= 0 else { throw AXWindowDiscovery.incomplete("negative window count") }
+            return count
         }
+        let count = try checkedCount()
+        guard count <= budget.remainingNodes else {
+            throw AXTraversalStopped(reason: .nodes, detail: "window root discovery exceeds its window limit")
+        }
+        var seen = Set<CGWindowID>()
         var start = 0
         while start < count {
-            try budget.check()
             let requested = min(budget.limits.childPageSize, count - start)
-            let page = try boundedCall(app, provider: provider, budget: budget) {
-                provider.elements(
-                    app, attribute: attribute, start: start, maxValues: requested)
+            let page = try AXWindowDiscovery.boundedProviderCall(app, provider: provider, budget: budget) {
+                try provider.windowElements(app, start: start, count: requested)
             }
-            try budget.consumeAllocation(
-                multiplied(page.count, by: copiedElementReferenceBytes))
-            guard !page.isEmpty else { break }
-
+            guard page.count == requested else {
+                throw AXWindowDiscovery.incomplete("window list changed during paging")
+            }
+            try budget.consumeAllocation(multiplied(page.count, by: copiedElementReferenceBytes))
             for element in page {
-                let foundID = try boundedCall(element, provider: provider, budget: budget) {
-                    provider.windowID(element)
+                try budget.consumeNode()
+                let foundID = try AXWindowDiscovery.boundedProviderCall(element, provider: provider, budget: budget) {
+                    try provider.identifiedWindowID(element)
                 }
+                guard foundID != 0 else { throw AXWindowDiscovery.incomplete("window identity is unavailable") }
+                guard seen.insert(foundID).inserted else {
+                    throw AXWindowDiscovery.incomplete("window identity is repeated")
+                }
+                try budget.consumeAllocation(MemoryLayout<CGWindowID>.stride + 32)
                 if foundID == window.windowID { return element }
             }
             start += page.count
-            if page.count < requested { break }
+        }
+        guard try checkedCount() == count else {
+            throw AXWindowDiscovery.incomplete("window list changed during discovery")
         }
         throw SpaceOError.windowNotFound("window \(window.windowID)")
     }

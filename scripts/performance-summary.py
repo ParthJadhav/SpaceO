@@ -25,6 +25,9 @@ def read(path):
 
 def summarize(root):
     summary = json.loads(read(root / "summary.json"))
+    testing_override = summary.get("testingOverride")
+    if testing_override is not None and not isinstance(testing_override, bool):
+        raise ValueError("invalid testing override")
     viewer_modes = summary.get("requestedViewerModes")
     if viewer_modes is not None and viewer_modes not in (
             [], ["static", "animated"], ["static", "scrolling"],
@@ -65,6 +68,7 @@ def summarize(root):
             p95Ms=round(values[max(0, math.ceil(len(values)*.95)-1)],3),
             p99Ms=round(values[max(0, math.ceil(len(values)*.99)-1)],3))
     result = dict(ok=summary["ok"], topologyRestored=summary["topologyRestored"],
+                  testingOverride=testing_override,
                   requestedViewerModes=viewer_modes,
                   elapsedSeconds=summary["elapsedSeconds"], resources=resources, latencies=latencies)
     health = root / "viewer-health.jsonl"

@@ -188,3 +188,10 @@ without content. Neither is a GPU utilization measurement.
 `SPACEO_PERF_VIEWER_BINARY` selects an explicitly retained baseline Viewer executable for A/B
 testing; the harness records its SHA-256 digest. Keep the daemon, fixture and other conditions
 matched. Short CPU intervals are workload-specific observations, not whole-app speedup claims.
+
+`SPACEO_PERF_CLI_BINARY` selects a retained CLI/daemon executable, including a signed source
+candidate; its SHA-256 is recorded separately from the Viewer. An explicit missing executable
+is refused before launching helpers or a display owner. Diagnostic runs on an operator-designated
+testing host may supply both `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1`; provenance and
+summaries retain `testingOverride`. This covers functional behavior under the override and
+does not prove normal host-health admission or resolve an OS incident.

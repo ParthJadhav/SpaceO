@@ -686,15 +686,26 @@ public final class Stage: @unchecked Sendable {
     }
 
     private static func checkedDisplayIDs(active: Bool) throws -> [CGDirectDisplayID] {
-        // One bounded allocation and one call: failure/overflow is unknown, never an empty graph.
+        // A successful zero count is readable; failure/overflow remains unknown.
+        // Admission separately refuses currently unqualified empty/inactive configurations.
         var ids = [CGDirectDisplayID](repeating: 0, count: 128)
         var count: UInt32 = 0
         let result = active ? CGGetActiveDisplayList(128, &ids, &count)
             : CGGetOnlineDisplayList(128, &ids, &count)
-        guard result == .success, count > 0, count < 128 else {
+        return try validatedDisplayIDs(result: result, buffer: ids, count: count)
+    }
+
+    static func validatedDisplayIDs(
+        result: CGError, buffer: [CGDirectDisplayID], count: UInt32
+    ) throws -> [CGDirectDisplayID] {
+        guard result == .success, !buffer.isEmpty, Int(count) < buffer.count else {
             throw SpaceOError.stageCreationFailed("display inventory is unavailable or exceeds its bound")
         }
-        return Array(ids.prefix(Int(count)))
+        let ids = Array(buffer.prefix(Int(count)))
+        guard !ids.contains(0), Set(ids).count == ids.count else {
+            throw SpaceOError.stageCreationFailed("display inventory contains invalid identifiers")
+        }
+        return ids
     }
 
     /// Diagnostics preserve the existing nonthrowing API; lifecycle uses the checked variant.
@@ -796,7 +807,7 @@ public final class Stage: @unchecked Sendable {
                      && $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite
                      && $0.bounds.width > 0 && $0.bounds.height > 0
                      && $0.modeWidth > 0 && $0.modeHeight > 0
-              }) else { return "user display configuration is missing, inactive, or unreadable" }
+              }) else { return "user display configuration has no qualified active display or is unreadable" }
         guard foreignDisplayIDs.isEmpty else {
             return "unowned SpaceO displays are still online; refusing another attachment"
         }

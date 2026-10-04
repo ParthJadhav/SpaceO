@@ -65,6 +65,9 @@ run_live() {
     fi
 
     cd "$REPOSITORY_ROOT"
+    if [[ "${SPACEO_TESTING_HOST:-}" == 1 ]]; then
+        echo "diagnostic testing override active; this run is not normal host-health qualification"
+    fi
     python3 "$SCRIPT_DIR/host-health.py" || fail "host is not quiet enough for live tests; see docs/LIVE_TESTS.md"
     # SwiftPM captures XCTest output and starts it in another process group. Supervise XCTest
     # itself so case-start messages are immediate and SIGSTOP reaches the process doing IPC.

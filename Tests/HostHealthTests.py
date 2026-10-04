@@ -4,11 +4,13 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
+from xml.parsers.expat import ExpatError
 
 spec = importlib.util.spec_from_file_location('health', Path(__file__).resolve().parents[1] / 'scripts/host-health.py')
 health = importlib.util.module_from_spec(spec)
@@ -16,6 +18,106 @@ spec.loader.exec_module(health)
 
 
 class HostHealthTests(unittest.TestCase):
+    def test_console_diagnostic_preserves_only_boolean_metadata(self):
+        source = dict(IOConsoleLocked=True, IOConsoleUsers=[dict(
+            kCGSSessionOnConsoleKey=True, kCGSessionLoginDoneKey=True,
+            CGSSessionScreenIsLocked=True, kCGSSessionUserNameKey="private-user",
+            kCGSSessionUserIDKey=501)], unrelated="private-content")
+        report = health.parse_console_diagnostic(plistlib.dumps(source).decode())
+        self.assertEqual(report, dict(state="observed", source="ioreg_undocumented",
+            consoleLocked=True, sessions=[dict(onConsole=True, loginComplete=True, screenLocked=True)]))
+        self.assertNotIn("private", json.dumps(report))
+
+    def test_console_diagnostic_missing_and_wrong_types_remain_unknown(self):
+        source = dict(IOConsoleLocked=0, IOConsoleUsers=[dict(
+            kCGSSessionOnConsoleKey=False, kCGSessionLoginDoneKey="yes")])
+        report = health.parse_console_diagnostic(plistlib.dumps(source).decode())
+        self.assertIsNone(report['consoleLocked'])
+        self.assertEqual(report['sessions'], [dict(onConsole=False, loginComplete=None, screenLocked=None)])
+        self.assertIsNone(health.parse_console_diagnostic(
+            plistlib.dumps(dict(IOConsoleUsers=[])).decode())['consoleLocked'])
+
+    def test_console_diagnostic_rejects_invalid_shapes_and_session_saturation(self):
+        for source in [[], {}, dict(IOConsoleUsers={}), dict(IOConsoleUsers=[1]),
+                       dict(IOConsoleUsers=[{}] * 33)]:
+            with self.assertRaises(ValueError):
+                health.parse_console_diagnostic(plistlib.dumps(source).decode())
+        self.assertEqual(len(health.parse_console_diagnostic(
+            plistlib.dumps(dict(IOConsoleUsers=[{}] * 32)).decode())['sessions']), 32)
+        with mock.patch.object(health, 'MAX_OUTPUT', 4):
+            with self.assertRaises(ValueError): health.parse_console_diagnostic('too large')
+
+    def test_console_diagnostic_helper_failure_is_content_free_and_unknown(self):
+        for failure in [OSError('private-helper-output'),
+                        subprocess.TimeoutExpired('private-command', 3),
+                        ExpatError('private-parser-data')]:
+            with mock.patch.object(health, 'read_command', side_effect=failure), \
+                    mock.patch.object(health.time, 'time', return_value=123):
+                self.assertEqual(health.console_diagnostic(), dict(state="unavailable",
+                    source="ioreg_undocumented", consoleLocked=None, sessions=[], observedAtEpochSeconds=123))
+
+    def test_console_diagnostic_does_not_change_health_admission(self):
+        for diagnostic in [dict(state="observed", consoleLocked=True), dict(state="unavailable")]:
+            output = io.StringIO()
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(health.sys, 'platform', 'darwin'), \
+                    mock.patch.object(health.sys, 'argv', ['host-health.py']), \
+                    mock.patch.object(health.time, 'time', return_value=200000), \
+                    mock.patch.object(health.time, 'monotonic', return_value=100), \
+                    mock.patch.object(health.time, 'sleep'), \
+                    mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
+                    mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
+                    mock.patch.object(health, 'snapshot', side_effect=self.samples()), \
+                    mock.patch.object(health, 'windowserver_timeouts', return_value=0), \
+                    mock.patch.object(health, 'console_diagnostic', return_value=diagnostic), \
+                    mock.patch.object(health.sys, 'stdout', output):
+                self.assertEqual(health.main(), 0)
+            report = json.loads(output.getvalue())
+            self.assertTrue(report['admitted'])
+            self.assertEqual(report['reasons'], [])
+            self.assertEqual(report['consoleSessionDiagnostic'], diagnostic)
+
+    def test_unknown_observation_identifies_only_fixed_input_stage(self):
+        for stage in ['boot_time', 'sample_before', 'sample_after', 'system_timeout_log']:
+            output = io.StringIO()
+            failure = OSError('private command output must stay private')
+            before, after = self.samples()
+            samples = ([failure] if stage == 'sample_before' else
+                       [before, failure] if stage == 'sample_after' else [before, after])
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(health.sys, 'platform', 'darwin'), \
+                    mock.patch.object(health.sys, 'argv', ['host-health.py']), \
+                    mock.patch.object(health.time, 'time', return_value=200000), \
+                    mock.patch.object(health.time, 'monotonic', return_value=100), \
+                    mock.patch.object(health.time, 'sleep'), \
+                    mock.patch.object(health, 'read_command', side_effect=failure if stage == 'boot_time' else None,
+                                      return_value='{ sec = 1, usec = 0 }'), \
+                    mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
+                    mock.patch.object(health, 'snapshot', side_effect=samples), \
+                    mock.patch.object(health, 'windowserver_timeouts', side_effect=failure), \
+                    mock.patch.object(health.sys, 'stdout', output):
+                self.assertEqual(health.main(), 2)
+            report = json.loads(output.getvalue())
+            self.assertFalse(report['admitted'])
+            self.assertEqual(report['unavailableInput'], stage)
+            self.assertEqual(report['reasons'], ['host_health_unknown'])
+            self.assertNotIn('private command output', output.getvalue())
+
+    def test_testing_override_requires_both_flags_and_preserves_observed_refusal(self):
+        for env in [{}, {'SPACEO_LIVE_TESTS': '1'}, {'SPACEO_TESTING_HOST': '1'},
+                    {'SPACEO_LIVE_TESTS': '0', 'SPACEO_TESTING_HOST': '1'}]:
+            self.assertFalse(health.testing_override(env))
+        with mock.patch.dict(os.environ, {'SPACEO_LIVE_TESTS': '1', 'SPACEO_TESTING_HOST': '1'}):
+            report = health.apply_testing_override(dict(admitted=False, reasons=['recent_windowserver_diagnostic']))
+            self.assertTrue(report['admitted'])
+            self.assertFalse(report['observedAdmitted'])
+            self.assertTrue(report['testingOverride'])
+            self.assertEqual(report['reasons'], ['recent_windowserver_diagnostic'])
+            with mock.patch.object(health.sys, 'platform', 'unsupported'), \
+                    mock.patch('sys.stdout', new_callable=io.StringIO) as output:
+                self.assertEqual(health.main(), 0)
+                self.assertEqual(json.loads(output.getvalue())['reasons'], ['host_health_unknown'])
+
     def test_system_timeout_check_is_bounded_content_free_and_fail_closed(self):
         with mock.patch.object(health, 'read_command', return_value='[{"eventMessage":"private timeout content"}]') as read:
             self.assertEqual(health.windowserver_timeouts(100, 200), 1)

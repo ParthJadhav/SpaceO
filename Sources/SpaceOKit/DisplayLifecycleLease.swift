@@ -8,6 +8,8 @@ public struct DisplaySafetyStatus: Codable, Sendable, Equatable {
     public let reason: String?
     /// Backings retained after a fallback settling refusal, without a sticky circuit fault.
     public var deferredRetirementDisplayIDs: [UInt32]? = nil
+    /// Explicit diagnostic mode bypasses rolling creation admission, not mutation ownership.
+    public var creationRateTestingOverride: Bool? = nil
     public var allowsCreation: Bool { state == .ready && (deferredRetirementDisplayIDs ?? []).isEmpty }
 
     public init(state: State, reason: String? = nil) {
@@ -40,14 +42,16 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     var cachedStatus: DisplaySafetyStatus? { statusLock.withLock { observedStatus } }
 
     private func updateStatus() {
-        let state: DisplaySafetyStatus
+        var state: DisplaySafetyStatus
         if let failure = journal.failure { state = .init(state: .blocked, reason: String(failure.prefix(512))) }
         else if journal.pending || journal.liveTestPending == true {
             state = .init(state: .blocked, reason: "a display mutation or live case is pending or was interrupted")
         } else { state = .init(state: .ready) }
+        if testingOverride { state.creationRateTestingOverride = true }
         statusLock.withLock { observedStatus = state }
     }
     private let path: String
+    private let testingOverride: Bool
     private var descriptor: Int32 = -1
     private var journal = Journal()
     private var ownsLiveTest = false
@@ -57,8 +61,10 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             .appendingPathComponent("Library/Application Support/SpaceO/display-safety.json").path
     }
 
-    init(path: String = DisplayLifecycleLease.defaultPath) {
+    init(path: String = DisplayLifecycleLease.defaultPath,
+         testingOverride: Bool = DisplayTestingPolicy.enabled()) {
         self.path = path
+        self.testingOverride = testingOverride
     }
 
     deinit { if descriptor >= 0 { close(descriptor) } }
@@ -183,7 +189,15 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             descriptor = fd
             keep = true
             updateStatus()
-            if !allowHostHealthRecovery || !Self.isRecoverableHostHealthLatch(journal) {
+            if allowHostHealthRecovery {
+                guard Self.isRecoverableHostHealthLatch(journal) else {
+                    if journal.pending || journal.liveTestPending == true {
+                        throw refused("host-health recovery refused: a display mutation or live case is pending")
+                    }
+                    throw refused("host-health recovery refused: the recorded failure is not an eligible idle health latch; "
+                        + "only host_health_unknown, memory_pressure or swap_activity can be recovered; inspect docs/DISPLAY_SAFETY.md")
+                }
+            } else {
                 try requireHealthy()
             }
         }
@@ -214,7 +228,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                 let tenMinuteWait = tenMinutes.count >= tenMinuteCap ? tenMinutes[tenMinutes.count - tenMinuteCap] + 600 - time : 0
                 let dayWait = day.count >= dayCap ? day[day.count - dayCap] + 86_400 - time : 0
                 let retryAfter = max(minuteWait, tenMinuteWait, dayWait)
-                guard retryAfter <= 0 else {
+                guard testingOverride || retryAfter <= 0 else {
                     throw SpaceOError.resourceLimit(
                         kind: .creationRate,
                         detail: "display safety limit: at most \(minuteCap) creation attempts per minute "
@@ -223,7 +237,11 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                 }
                 journal.attempts.append(time)
                 day.append(time)
-                journal.dayAttempts = day
+                // The latest cap entries completely determine normal rolling admission.
+                // Diagnostic runs can exceed it without growing the bounded journal or
+                // erasing the history that must still constrain subsequent normal runs.
+                journal.attempts = Array(journal.attempts.sorted().suffix(tenMinuteCap))
+                journal.dayAttempts = Array(day.suffix(dayCap))
             }
             journal.pending = true
             try save()
@@ -233,7 +251,20 @@ final class DisplayLifecycleLease: @unchecked Sendable {
 
     private static func isRecoverableHostHealthLatch(_ journal: Journal) -> Bool {
         guard !journal.pending, journal.liveTestPending != true, let failure = journal.failure else { return false }
-        return failure == "host health: host_health_unknown" || failure.hasPrefix("host health: host_health_unknown (")
+        return isRecoverableHostHealthFailure(failure)
+    }
+
+    /// Only reversible resource refusals and the old false-unknown latch are eligible. A
+    /// diagnostic, ColorSync incident, timeout or mixed/unknown reason must retain its latch.
+    static func isRecoverableHostHealthFailure(_ failure: String,
+                                              testingOverride: Bool = DisplayTestingPolicy.enabled()) -> Bool {
+        if testingOverride, failure.hasPrefix("host health: ") { return true }
+        if failure == "host health: host_health_unknown" || failure.hasPrefix("host health: host_health_unknown (") {
+            return true
+        }
+        guard failure.hasPrefix("host health: ") else { return false }
+        let reasons = failure.dropFirst("host health: ".count).split(separator: ",", omittingEmptySubsequences: false)
+        return !reasons.isEmpty && reasons.allSatisfy { $0 == "memory_pressure" || $0 == "swap_activity" }
     }
 
     /// Steps whose filesystem calls can stall past a recovery deadline. Tests interpose here.
@@ -251,14 +282,14 @@ final class DisplayLifecycleLease: @unchecked Sendable {
     /// late commit fails instead of overwriting the deadline failure.
     static func clearHostHealthLatch(
         path: String = defaultPath, token: String = UUID().uuidString,
-        checkDeadline: () throws -> Void = {}, interpose: HostHealthRecoveryInterposer = directRecoveryStep,
+        checkDeadline: @escaping () throws -> Void = {}, interpose: HostHealthRecoveryInterposer = directRecoveryStep,
         validateHost: () throws -> Void
     ) throws -> String {
         let lease = DisplayLifecycleLease(path: path)
         try lease.acquire(allowHostHealthRecovery: true)
         return try lease.lock.withLock {
             guard isRecoverableHostHealthLatch(lease.journal) else {
-                throw lease.refused("only an idle host_health_unknown latch can be cleared")
+                throw lease.refused("only an eligible idle host-health latch can be cleared")
             }
             guard UUID(uuidString: token) != nil else { throw lease.refused("invalid recovery token") }
             // The journal lock excludes every live worker, so an earlier run's staged record can
@@ -290,6 +321,9 @@ final class DisplayLifecycleLease: @unchecked Sendable {
             var committed = false
             do {
                 try interpose(.commit) {
+                    // Recheck after any delay entering this step, immediately before the
+                    // uncancellable commit syscall. A started syscall still cannot be revoked.
+                    try checkDeadline()
                     guard renamex_np(staged, decision, UInt32(RENAME_EXCL)) == 0 else {
                         throw lease.refused(errno == EEXIST ? "host-health recovery was aborted before it committed; latch retained"
                                             : "could not commit host-health recovery; latch retained")

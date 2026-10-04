@@ -133,6 +133,23 @@ final class MCPJournal: @unchecked Sendable {
                 record["session"] = Self.bounded(session, 128)
             }
         }
+        // Record ownership facts without credentials, including a create whose later launch
+        // failed and the successful subset of a bulk teardown.
+        var lifecycle: [String: Any] = [:]
+        if let request = call.request, let response = call.response {
+            if DaemonCommand.leaseIssuing.contains(request.cmd), response.controllerLeaseID != nil,
+               let session = response.session?.id {
+                lifecycle["acquired"] = Self.bounded(session, 128)
+            }
+            if request.cmd == "session.destroy", response.ok, let session = request.session {
+                lifecycle["released"] = [Self.bounded(session, 128)]
+            }
+        }
+        if let released = call.releasedSessions {
+            lifecycle["released"] = released.prefix(128).map { Self.bounded($0, 128) }
+            if released.count > 128 { lifecycle["released_truncated"] = true }
+        }
+        if !lifecycle.isEmpty { record["session_lifecycle"] = lifecycle }
         if failed {
             record["error"] = errorRecord(call)
         }
@@ -370,6 +387,7 @@ struct MCPJournalCall {
     var observe: String?
     var observed = false
     var notes: [String] = []
+    var releasedSessions: [String]?
 }
 
 /// Argument redaction for the journal. Pure, so the rules are tested without files.
