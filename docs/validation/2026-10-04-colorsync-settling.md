@@ -9,8 +9,12 @@ physical-display host does not establish.
 The owner renewed the instruction to resolve the remaining ColorSync incident and complete
 live qualification. A clean worktree began at `main@5586920`. The official signed 1.0.7
 release was installed through the verified installer. CLI, Viewer and the responding daemon
-reported 1.0.7 with matching CLI/daemon build identity. The idle daemon was then stopped
-normally and launchd supervision paused while retaining its installed configuration.
+reported 1.0.7 with matching CLI/daemon build identity. The idle daemon was stopped normally
+and any `com.spaceo.daemon` launchd job removed for the controlled no-daemon observation.
+Retained doctor reports before and after installation showed no persisted LaunchAgent
+configuration; its preservation had been assumed rather than established. After source
+validation, the installed 1.0.7 daemon was again responding with matching CLI identity and
+the same unsupervised configuration. No new supervision configuration was installed.
 
 ColorSync sampled 30.86% with no daemon, Viewer or SpaceO displays. Closing System Settings
 did not reduce it: the following sample was 31.09%. Pressure was normal and those samples
