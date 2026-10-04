@@ -24,6 +24,43 @@ Status definitions:
 
 ## Active milestone
 
+### October 4 report-driven reliability follow-up
+
+- Reporter #36 confirmed the ColorSync idle fix on 1.0.7 and a complete native workflow after
+  reboot. A new report identifies strict intermittent-swap refusal and difficult live-owner
+  recovery; the swap admission rule is preserved.
+- Implemented: explicit operator recovery for idle pressure/swap latches after owner exclusion
+  and fresh settled health. Budgets and archives survive; pending work, ColorSync incidents,
+  diagnostic and timeout faults remain refused. Recovery rechecks health before commit.
+- Corrected false journal cleanup/schema candidates and bounded the report's file reads and
+  traversal. New journals distinguish acquired/released session facts without credentials.
+- Known-window capture validates its own live owner, exact process incarnation and bounds
+  without full-app AX paging. The combined signed capture checkpoint passed 404 screenshots.
+- The operator-designated testing mode now also bypasses persistent rolling creation-rate
+  admission without resetting history. Bounded recent attempts still constrain normal restarts;
+  native safety/limits reports mark the override, and pool resource limits remain enforced.
+- AX readiness now examines later windows after `invalidUIElement` without accepting a partial
+  placement set. Strict snapshot-root lookup now preserves provider failures instead of
+  misreporting missing windows; 66 focused traversal regressions pass. Fresh TextEdit and Calculator probes
+  instead expose application-root aliases and `illegalArgument`. The console was subsequently
+  observed locked. After operator unlock, the unchanged signed CLI passed all 16 native checks;
+  the next full live run passed 15/15. Final source verification passed 1,841 Swift tests,
+  29 Node tests and 35-tool MCP smoke. The rebuilt signed full MCP matrix passed 41/41,
+  with exact physical topology, zero virtual displays and normal cleanup. The 15-test run
+  predates the last root-lookup fix; the final focused native AX workflow also passed,
+  with its retained-log check, exact topology and zero virtual displays.
+  Reports retain bounded console metadata without changing admission. The internal root-alias mechanism remains unproven.
+  Evidence: [native AX identity follow-up](docs/validation/2026-10-04-ax-window-identity.md).
+- Source verification and remaining limits: [report-driven review](docs/validation/2026-10-04-report-driven-reliability.md).
+- RA-057, #38 live qualification, intermittent native AX discovery and released-artifact qualification
+  remain open. The operator designated this Mac as the testing host and requested removal
+  of testing blockers. Archived and cleared the idle diagnostic health latch with an explicit
+  testing override. Full live XCTest passed 15/15, full MCP matrix passed 38/38, final doctor
+  was ready with zero remaining SpaceO/orphan displays and unchanged physical inventory.
+  This earlier budget checkpoint's deterministic verification passed 1,827 Swift tests, 27 Node tests
+  and 35-tool MCP smoke. Latest signed workload verification is recorded in the linked report.
+  These are diagnostic override results. Installation, publication and external replies remain outside this task.
+
 ### October 4 maintenance release 1.0.7
 
 - Published 1.0.7 as latest after source/CI, protected candidate construction, independent
@@ -61,6 +98,24 @@ Status definitions:
 - Host CLI, daemon, Viewer and configured client executables now agree on the signed 1.0.6 release.
   Doctor passes. Live admission still refuses diagnostic history and recent system timeouts;
   RA-057 remains open. See [verification record](docs/validation/2026-10-04-qualification-followup.md).
+
+### October 4 extended testing-Mac follow-up
+
+- Signed diagnostic-budget candidate: 38/38 MCP checks and a supervised 437.6-second combined
+  workload (1,263 operations, 404 captures, zero failed requests); cleanup and physical topology
+  were verified. This uses explicit testing overrides and does not close RA-057.
+- This Mac produced a readable all-inactive inventory for 20 seconds. An experimental attachment
+  then failed on physical display-mode drift. Its owned process and journal were recovered under
+  the operator's testing authorization; exact physical graph restoration was verified.
+- Retained fix: successful zero-count inventory is distinct from unreadable query failure;
+  unqualified empty/inactive configurations refuse before mutation without the false inventory
+  latch. Broader inactive admission is withheld. #38 remains open with concrete failed evidence.
+- Final retained source: 1,828 Swift/27 Node/35-tool MCP smoke passed; the signed inactive
+  pre-mutation refusal check passed with exact restoration and no latch. The final full matrix
+  stopped at TextEdit's persistent AX window-identity failure (seven passed/one failed), then
+  verified cleanup. General AX discovery and complete healthy-host qualification remain open.
+- Details: [report-driven reliability](docs/validation/2026-10-04-report-driven-reliability.md)
+  and [panic timeline](docs/validation/2026-10-04-windowserver-panic.md).
 
 ### October 3 user-reported regressions
 
@@ -142,6 +197,11 @@ Status definitions:
 ### Host slowdown after sustained live testing
 
 - Status: Open, release blocking — forced restart and WindowServer/ColorSync stall; bounded application memory observations retained
+- October 4: WindowServer watchdog termination at 20:40:08 was followed roughly ten seconds
+  later by a replacement-process kernel panic in Apple's display driver, asserting mismatched
+  graphics swap IDs. The supervised performance daemon had stopped about 12.5 minutes earlier;
+  a triggering SpaceO call or common root cause is unproven. Preserve the open incident and
+  [content-free panic timeline](docs/validation/2026-10-04-windowserver-panic.md).
 - September 30 publication: 1.0.5 shipped under an owner-directed exception with this incident
   and missing new live qualification disclosed. Signed public downloads passed distribution
   verification. The exception is limited to 1.0.5 and does not close this ticket or qualify the
@@ -194,6 +254,17 @@ Status definitions:
 ### Performance soak: Chromium window identity becomes incomplete
 
 - Status: Open
+- October 4 continuation: the signed combined Viewer/load/churn workload reproduced screenshot
+  failure on AX window paging (`-25204`); cleanup and topology restoration passed. Known-window
+  capture now validates the target's live ownership, exact process identity and bounds before
+  capture and publication, without global AX enumeration. Unknown targets and region privacy
+  planning still require bounded discovery. A signed capture-fix checkpoint passed the full
+  combined workload: 1,263 operations, 404 captures (including 360 soak captures), both Viewer
+  motion modes and verified cleanup. General AX discovery and final-source verification remain
+  separate; this pass does not close the OS incident or native provider-read finding.
+- A later WindowServer watchdog and replacement-process display-driver kernel panic occurred
+  about 12.5 minutes after that workload's daemon stopped. A common initiating cause is
+  unproven; see the [panic timeline](docs/validation/2026-10-04-windowserver-panic.md).
 - During the September 28 candidate performance soak, screenshot discovery rejected an
   unavailable/repeated Chrome AX window identity; cleanup retained the display and required
   operator-approved recovery. Normal daemon shutdown then succeeded, with physical topology

@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -64,15 +65,24 @@ def sampler_completed_early(child, target, label, path, elapsed):
 def executable_digest(path):
     digest = hashlib.sha256()
     remaining = 128 * 1024 * 1024
-    with path.open("rb") as source:
-        while True:
-            chunk = source.read(min(1024 * 1024, remaining + 1))
-            if len(chunk) > remaining:
-                raise ValueError("executable exceeds profiling byte budget")
-            if not chunk:
-                return digest.hexdigest()
-            digest.update(chunk)
-            remaining -= len(chunk)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("executable must be a regular file")
+        if info.st_size > remaining:
+            raise ValueError("executable exceeds profiling byte budget")
+        with os.fdopen(descriptor, "rb", closefd=False) as source:
+            while True:
+                chunk = source.read(min(1024 * 1024, remaining + 1))
+                if len(chunk) > remaining:
+                    raise ValueError("executable exceeds profiling byte budget")
+                if not chunk:
+                    return digest.hexdigest()
+                digest.update(chunk)
+                remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
 
 
 def request(path, cmd, **fields):
@@ -135,7 +145,8 @@ def main():
     os.umask(0o077)
     out = Path(sys.argv[1]).resolve()
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
-    binary = ROOT / ".build/release/spaceo"
+    binary = Path(os.environ.get("SPACEO_PERF_CLI_BINARY", str(ROOT / ".build/release/spaceo"))).resolve()
+    testing_override = os.environ.get("SPACEO_LIVE_TESTS") == "1" and os.environ.get("SPACEO_TESTING_HOST") == "1"
     viewer_binary = Path(os.environ.get("SPACEO_PERF_VIEWER_BINARY",
         str(ROOT / ".build/SpaceO Viewer.app/Contents/MacOS/SpaceOViewer"))).resolve()
     sampler = ROOT / ".build/process-resources"
@@ -263,7 +274,8 @@ def main():
         if health.get("daemon", {}).get("matchesCLI") is not True:
             raise RuntimeError("candidate daemon does not match CLI")
         (out / "provenance.json").write_text(json.dumps(dict(
-            viewerModes=requested_viewer_modes,
+            viewerModes=requested_viewer_modes, testingOverride=testing_override,
+            cliSHA256=executable_digest(binary),
             daemonOnly=daemon_only, nativeProbe=native_probe, viewerOnly=viewer_only,
             buildUUID=ping["daemon"]["executableBuildUUID"],
             viewerSHA256=executable_digest(viewer_binary),
@@ -502,7 +514,7 @@ def main():
             if cleanup_errors:
                 (out / "operations.json").write_text(json.dumps(operations, indent=2))
                 (out / "summary.json").write_text(json.dumps(dict(ok=False, topologyRestored=False,
-                    requestedViewerModes=requested_viewer_modes,
+                    requestedViewerModes=requested_viewer_modes, testingOverride=testing_override,
                     cleanupErrors=cleanup_errors, operations=len(operations), phases=phases,
                     elapsedSeconds=time.monotonic()-started), indent=2))
                 safety_stop()
@@ -525,7 +537,7 @@ def main():
             scratch.cleanup()
             (out / "operations.json").write_text(json.dumps(operations, indent=2))
             (out / "summary.json").write_text(json.dumps(dict(ok=success, topologyRestored=topology_restored,
-                requestedViewerModes=requested_viewer_modes,
+                requestedViewerModes=requested_viewer_modes, testingOverride=testing_override,
                 samplerErrors=sampler_errors, operations=len(operations), phases=phases,
                 elapsedSeconds=time.monotonic()-started), indent=2))
             if sampler_errors:

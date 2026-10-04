@@ -51,6 +51,17 @@ class Reports(unittest.TestCase):
         self.write('sample-starts.json', {'../private':0})
         with self.assertRaises(ValueError): report.summarize(self.root)
 
+    def test_testing_override_preserved_and_legacy_is_unknown(self):
+        self.assertIsNone(report.summarize(self.root)['testingOverride'])
+        summary = json.loads((self.root / 'summary.json').read_text())
+        for value in (True, False):
+            summary['testingOverride'] = value
+            self.write('summary.json', summary)
+            self.assertIs(report.summarize(self.root)['testingOverride'], value)
+        summary['testingOverride'] = 'false'
+        self.write('summary.json', summary)
+        with self.assertRaises(ValueError): report.summarize(self.root)
+
     def test_focused_coverage_survives_summary_and_legacy_coverage_is_unknown(self):
         self.assertIsNone(report.summarize(self.root)['requestedViewerModes'])
         summary = json.loads((self.root / 'summary.json').read_text())

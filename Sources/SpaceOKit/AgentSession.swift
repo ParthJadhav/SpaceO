@@ -1666,6 +1666,24 @@ public final class AgentSession: @unchecked Sendable {
         return try resolveDiscoveredWindow(explicit)
     }
 
+    /// Validate an already discovered capture target without asking every application's AX
+    /// provider to enumerate its windows. ScreenCaptureKit also checks the owner in the snapshot
+    /// used for its independent-window filter; neither check admits an unknown window.
+    func validateCaptureWindow(_ window: WindowRef) throws {
+        guard windows.contains(where: { $0.windowID == window.windowID && $0.pid == window.pid }),
+              let app = apps.first(where: { $0.pid == window.pid }),
+              app.identity.isPrecise, ProcessIdentity.current(of: app.pid) == app.identity,
+              windowDriver.liveOwnerPID(window.windowID) == app.pid,
+              let bounds = windowDriver.liveBounds(window.windowID),
+              windowDriver.liveOwnerPID(window.windowID) == app.pid,
+              ProcessIdentity.current(of: app.pid) == app.identity else {
+            throw SpaceOError.windowNotFound("capture window ownership changed or is unavailable; discover the window again")
+        }
+        guard bounds == window.frame else {
+            throw SpaceOError.staleGeometry("window changed during capture; refresh windows and capture again")
+        }
+    }
+
     /// Only after the caller has successfully refreshed under its own observation budget.
     func resolveDiscoveredWindow(_ explicit: CGWindowID?) throws -> WindowRef {
         if let explicit {

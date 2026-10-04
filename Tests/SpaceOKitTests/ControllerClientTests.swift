@@ -305,6 +305,7 @@ final class ControllerClientTests: XCTestCase {
             requests, socketPath: temporarySocketPath(), controller: context)
         XCTAssertFalse(outcome.failed)
         XCTAssertTrue(outcome.text.contains("nothing to destroy"), outcome.text)
+        XCTAssertTrue(outcome.destroyed.isEmpty)
     }
 
     /// Two agents share one daemon by design. One finishing its task must not quit the other's
@@ -334,7 +335,7 @@ final class ControllerClientTests: XCTestCase {
         _ = try connection("mcp-b", session: "b-session")
         XCTAssertEqual(daemon.liveSessionIDs(), ["a-session", "b-session"])
 
-        let outcome: (text: String, failed: Bool)
+        let outcome: (text: String, failed: Bool, destroyed: [String])
         switch try agentA.plan(MCPServer.toolRequest(
             name: "spaceo_session_destroy", arguments: ["all": true])) {
         case .ownedSessionDestroy(let requests):
@@ -345,10 +346,11 @@ final class ControllerClientTests: XCTestCase {
             // rather than on a request shape the assertions below would never reach.
             let response = try Transport.send(request, to: socketPath, timeout: 5)
             agentA.record(response, for: request)
-            outcome = (response.message ?? response.error ?? "", !response.ok)
+            outcome = (response.message ?? response.error ?? "", !response.ok, response.ok ? [request.session ?? "?"] : [])
         }
 
         XCTAssertFalse(outcome.failed, outcome.text)
+        XCTAssertEqual(outcome.destroyed, ["a-session"])
         XCTAssertEqual(daemon.liveSessionIDs(), ["b-session"],
                        "agent B's session and its apps must survive agent A's cleanup")
         XCTAssertFalse(daemon.sawUnauthorizedFullDestroy,

@@ -6,6 +6,44 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Preserve AX provider failures during snapshot window-root lookup instead of reporting a
+  missing window. Apply the existing bounded retry and shared traversal budgets.
+
+- Keep failed web verification reads distinct from absent page events. Resolve hover and
+  text-input targets from current page references instead of guessed offsets or fixed indices.
+
+- Include timestamped, content-free console observations in live host-health reports. Mark
+  unavailable values as unknown and undocumented lock flags as diagnostics; they do not
+  alter health admission or testing overrides.
+
+- Continue bounded native launch readiness past an invalid AX element when a later window
+  has a resolved identity. Preserve provider failures when none resolves, and keep complete
+  window discovery strict before placement.
+
+- Distinguish readable zero-count display inventories from query failure. Unqualified empty
+  or sleeping graphs refuse before mutation without incorrectly latching an inventory failure.
+
+- Validate known screenshot targets through their live WindowServer owner, process identity
+  and bounds instead of re-reading every application's AX window list. Keep pre-capture and
+  pre-publication checks, verify ScreenCaptureKit snapshot geometry, and discover unknown
+  targets under the same capture deadline.
+
+- Add an explicit reserved-testing-host mode requiring both `SPACEO_LIVE_TESTS=1` and
+  `SPACEO_TESTING_HOST=1`. Bypass host-health admission for diagnostic workloads and allow
+  archived idle host-health recovery, while retaining ownership, pending-mutation,
+  topology, deadline and cleanup checks. Permit diagnostic rolling creation-rate admission
+  while retaining bounded attempt history that constrains later normal runs. Mark overridden
+  health and creation-rate admission in reports.
+
+- Allow explicit operator recovery of an idle memory-pressure or swap latch after all display
+  owners stop and fresh, settled health passes. Preserve budgets and fault archives; pending
+  mutations, ColorSync incidents, diagnostics and timeout faults still refuse recovery.
+- Correct improvement-loop cleanup signals, preserve ownership context across date filters,
+  distinguish active connections, and record retained create/bulk teardown ownership without
+  credentials. Missing leases now report `lease_required` instead of schema friction.
+- Refuse special files and bound report reads, records and directory traversal, so a FIFO or
+  growing log cannot bypass the report's input limits.
+
 - Wait for two consecutive ColorSync CPU intervals below 25% before changing the display
   graph. A settling refusal retains the display without invalidating it; ordinary use keeps
   the existing 50% hard health limit. Report reconfiguration readiness separately in health

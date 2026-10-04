@@ -52,6 +52,21 @@ final class DoctorReportTests: XCTestCase {
             focusLine: AttentionMitigation.focusStatusLine(focusActive: nil))
     }
 
+    func testOnlyEligibleHealthLatchesOfferOperatorRecovery() {
+        for reason in ["host health: host_health_unknown", "host health: swap_activity",
+                       "host health: memory_pressure,swap_activity"] {
+            var report = Self.report(daemon: .notRunning)
+            report.displaySafety = .init(state: .blocked, reason: reason)
+            XCTAssertTrue(report.blockers.contains { $0.next.contains("safety clear-host-health") }, reason)
+        }
+        for reason in ["host health: swap_activity,recent_windowserver_diagnostic", "host health: colorsync_busy",
+                       "a display operation exceeded its deadline"] {
+            var report = Self.report(daemon: .notRunning)
+            report.displaySafety = .init(state: .blocked, reason: reason)
+            XCTAssertFalse(report.blockers.contains { $0.next.contains("safety clear-host-health") }, reason)
+        }
+    }
+
     func testGoldenRenderForAHealthyHostWithAStaleClient() {
         let stale = MCPClientStatus(
             client: .claudeCode,
