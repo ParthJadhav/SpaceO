@@ -54,6 +54,12 @@ class HostHealthTests(unittest.TestCase):
         for value in ['', 'sec = 0', 'sec = 200001', 'sec = 1 sec = 2']:
             with self.assertRaises(ValueError): health.diagnostic_cutoff(value, now)
 
+    def test_post_boot_report_never_ages_out_in_the_same_boot(self):
+        boot, report = 1_000_000, 1_003_600
+        for hours in [2, 14, 23, 24, 25, 48, 720]:
+            cutoff = health.diagnostic_cutoff(f'{{ sec = {boot}, usec = 0 }}', boot + hours * 3600)
+            self.assertGreaterEqual(report, cutoff)
+
     def test_metadata_scan_includes_retired_reports_without_reading_contents(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

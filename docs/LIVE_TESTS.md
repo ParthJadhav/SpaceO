@@ -63,9 +63,22 @@ and unchanged launch counts. One verified new launch contributes its whole CPU t
 identity/state evidence, hidden relaunches, service exits/restarts or timeouts refuse admission.
 Reports contain numeric counters and reason codes, not process lists or content.
 
+The native display owner additionally requires two consecutive CPU intervals below 25%
+before attachment or retirement. A passing helper sample below 50% is ongoing-health
+evidence, not proof that a graph change is admitted. Retirement's default total deadline
+is 30 seconds, including settling and a reserved removal budget; failed settling retains the
+display and fails cleanup. Bulk retirement shares a 25-second deadline and stops at its first
+refusal, leaving five seconds of headroom against the minimum controller lease. A stalled system call still cannot
+guarantee heartbeat delivery.
+A cold monitor or a recent graph change needs three fresh raw samples to establish two assessed
+intervals; creation may refuse within its 15-second budget. Retrying after the monitor settles
+does not require resetting a real health fault.
+
 Admission also checks bounded WindowServer report metadata in system/user diagnostic directories
 and their `Retired` directories. A report modified in the current boot or last 24 hours,
 whichever is longer, refuses admission; unreadable or over-budget metadata refuses as unknown.
+In particular, a report written after boot remains relevant for that entire boot; waiting
+24 hours alone cannot clear it.
 No report contents are read. This conservative check survives a restart but is not proof of
 recovery when the interval expires. XCTest checks again after each 90-second pacing interval,
 before display work, and after verified cleanup. Its wrapper provides the required helper and

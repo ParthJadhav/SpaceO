@@ -32,6 +32,7 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
     private var failure: String?
     private var operations: [UUID: Operation] = [:]
     private var quarantined: [ObjectIdentifier: AnyObject] = [:]
+    private var deferredRetirements: Set<UInt32> = []
     private let onFailure: @Sendable (String) -> Void
 
     init(onFailure: @escaping @Sendable (String) -> Void = { _ in }) {
@@ -66,6 +67,40 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
 
     func quarantine(_ value: AnyObject) {
         lock.withLock { quarantined[ObjectIdentifier(value)] = value }
+    }
+
+    /// A fallback has transferred ownership here without attempting a graph mutation.
+    /// Retain and report it without relabeling a settling refusal as a sticky OS failure.
+    func quarantineDeferred(_ value: AnyObject, displayID: UInt32) {
+        lock.withLock {
+            quarantined[ObjectIdentifier(value)] = value
+            if displayID != 0 { deferredRetirements.insert(displayID) }
+        }
+    }
+
+    var deferredRetirementDisplayIDs: [UInt32] { lock.withLock { deferredRetirements.sorted() } }
+
+    func clearDeferredRetirement(_ displayID: UInt32, releasing value: AnyObject? = nil) {
+        lock.withLock {
+            _ = deferredRetirements.remove(displayID)
+            if let value { quarantined.removeValue(forKey: ObjectIdentifier(value)) }
+        }
+    }
+
+    func requireNoDeferredRetirements() throws {
+        guard deferredRetirementDisplayIDs.isEmpty else {
+            throw SpaceOError.stageCreationFailed("a fallback display retirement is deferred; "
+                + "retain the daemon owner and inspect display safety before creating another display")
+        }
+    }
+
+    func annotatingDeferredRetirements(_ status: DisplaySafetyStatus) -> DisplaySafetyStatus {
+        let ids = deferredRetirementDisplayIDs
+        var result = !ids.isEmpty && status.state == .ready
+            ? DisplaySafetyStatus(state: .blocked, reason: "fallback display retirement is pending or deferred; "
+                + "retain the daemon owner and inspect display safety") : status
+        result.deferredRetirementDisplayIDs = ids.isEmpty ? nil : ids
+        return result
     }
 
     func perform<T>(

@@ -51,6 +51,36 @@ final class DisplayPoolTests: XCTestCase {
             stageRetirer: { $0.invalidate(waitingForRemoval: 0) })
     }
 
+    private final class RetirementPass: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = DispatchTime.now()
+        private var attempted: [CGDirectDisplayID] = []
+        var advanceAfterFirst: TimeInterval = 0
+        var refuseFirst = false
+        var attempts: [CGDirectDisplayID] { lock.withLock { attempted } }
+        func now() -> DispatchTime { lock.withLock { value } }
+        func retire(_ stage: Stage) -> Bool {
+            let allowed = lock.withLock { () -> Bool in
+                attempted.append(stage.displayID)
+                if attempted.count == 1 {
+                    value = value + advanceAfterFirst
+                    return !refuseFirst
+                }
+                return true
+            }
+            return allowed && stage.invalidate(waitingForRemoval: 0)
+        }
+    }
+
+    private func retirementPool(_ pass: RetirementPass) -> DisplayPool {
+        var nextID: CGDirectDisplayID = 96_000
+        return DisplayPool(stageFactory: { name, width, height, _ in
+            defer { nextID += 1 }
+            let backing = Backing(id: nextID, size: CGSize(width: Int(width), height: Int(height)))
+            return Stage(testingBacking: backing, name: name, onlineDisplayIDs: { backing.onlineIDs })
+        }, stageRetirer: { pass.retire($0) }, retirementNow: { pass.now() })
+    }
+
     private let small = CGSize(width: 1_920, height: 1_080)
     private let large = CGSize(width: 2_560, height: 1_440)
 
@@ -166,4 +196,36 @@ final class DisplayPoolTests: XCTestCase {
         XCTAssertTrue(second.stage.isValid)
         XCTAssertEqual(fixture.backings.map(\.invalidationCount), [0, 0])
     }
+
+    func testCleanupPassStopsAfterFirstDeferralAndReportsUnattemptedOwners() throws {
+        let pass = RetirementPass()
+        pass.refuseFirst = true
+        let pool = retirementPool(pass)
+        let slots = try (0..<3).map { _ in try pool.allocateExclusive() }
+        let ids = slots.map { $0.stage.displayID }
+        for slot in slots { XCTAssertTrue(pool.release(slot, retainEmpty: true)) }
+
+        XCTAssertEqual(pool.retireEmptyDisplays(), ids)
+        XCTAssertEqual(pass.attempts, [ids[0]])
+        XCTAssertEqual(pool.displayCount, 3)
+        XCTAssertTrue(pool.stages.allSatisfy(\.isValid))
+    }
+
+    func testReleaseAllUsesOneTwentyFiveSecondBudgetAndReportsRemainingOwners() throws {
+        let pass = RetirementPass()
+        // Sixteen seconds spent on the first owner leaves nine of the total 25 seconds;
+        // another removal must defer before mutation rather than getting its own full budget.
+        pass.advanceAfterFirst = 16
+        let pool = retirementPool(pass)
+        let slots = try (0..<3).map { _ in try pool.allocateExclusive() }
+        let ids = slots.map { $0.stage.displayID }
+
+        XCTAssertEqual(pool.releaseAll(), Array(ids.dropFirst()))
+        XCTAssertEqual(pass.attempts, [ids[0]])
+        XCTAssertEqual(pool.displayCount, 2)
+        XCTAssertEqual(pool.sessionCount, 0)
+        XCTAssertTrue(slots[1].stage.isValid)
+        XCTAssertTrue(slots[2].stage.isValid)
+    }
+
 }

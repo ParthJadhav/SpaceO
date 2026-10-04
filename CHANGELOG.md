@@ -6,6 +6,14 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Wait for two consecutive ColorSync CPU intervals below 25% before changing the display
+  graph. A settling refusal retains the display without invalidating it; ordinary use keeps
+  the existing 50% hard health limit. Report reconfiguration readiness separately in health
+  JSON. Retirement's default total budget is 30 seconds, reserving 10 seconds for removal. Bulk
+  retirement shares a 25-second deadline and stops at the first refusal. Pending fallback owners
+  stay visible in safety and shutdown reports; confirmed retirement is an immediate no-op on
+  subsequent calls.
+
 ## [1.0.7] - 2026-10-04
 
 - Pair ColorSync CPU counters with their actual process observation time so slow follow-up

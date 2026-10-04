@@ -53,7 +53,8 @@ public final class DisplayPool {
     /// Creation timestamps inside the rate window, oldest first.
     private var recentCreations: [Date] = []
     private let stageFactory: StageFactory
-    private let stageRetirer: @Sendable (Stage) -> Bool
+    private let stageRetirer: @Sendable (Stage, TimeInterval) -> Bool
+    private let retirementNow: @Sendable () -> DispatchTime
     private let lock = NSLock()
 
     /// How many sessions share one display. Changing it affects displays created afterwards;
@@ -76,7 +77,8 @@ public final class DisplayPool {
         self.stageFactory = stageFactory ?? { name, width, height, hiDPI in
             try Stage(name: name, width: width, height: height, hiDPI: hiDPI)
         }
-        self.stageRetirer = { $0.invalidate() }
+        self.stageRetirer = { $0.invalidate(waitingForRemoval: $1) }
+        self.retirementNow = { DispatchTime.now() }
     }
 
     init(sessionsPerDisplay: Int = 1,
@@ -84,7 +86,8 @@ public final class DisplayPool {
          hiDPI: Bool = true,
          budget: ResourceBudget = .fromEnvironment(),
          stageFactory: StageFactory? = nil,
-         stageRetirer: @escaping @Sendable (Stage) -> Bool) {
+         stageRetirer: @escaping @Sendable (Stage) -> Bool,
+         retirementNow: @escaping @Sendable () -> DispatchTime = { DispatchTime.now() }) {
         self.sessionsPerDisplay = max(1, sessionsPerDisplay)
         self.displaySize = displaySize
         self.hiDPI = hiDPI
@@ -92,7 +95,8 @@ public final class DisplayPool {
         self.stageFactory = stageFactory ?? { name, width, height, hiDPI in
             try Stage(name: name, width: width, height: height, hiDPI: hiDPI)
         }
-        self.stageRetirer = stageRetirer
+        self.stageRetirer = { stage, _ in stageRetirer(stage) }
+        self.retirementNow = retirementNow
     }
 
     public var displayCount: Int { lock.withLock { displays.count } }
@@ -325,21 +329,33 @@ public final class DisplayPool {
     ) -> (retired: Set<ObjectIdentifier>, stillAttached: [CGDirectDisplayID]) {
         var retired: Set<ObjectIdentifier> = []
         var stillAttached: [CGDirectDisplayID] = []
-        for occupancy in occupancies {
+        // One aggregate pass leaves five seconds of dispatch/heartbeat headroom against the
+        // shortest controller lease. A deferred owner stops this pass, never an N×timeout loop.
+        let deadline = retirementNow() + .seconds(25)
+        for (index, occupancy) in occupancies.enumerated() {
+            let now = retirementNow().uptimeNanoseconds
+            let remaining = deadline.uptimeNanoseconds > now
+                ? Double(deadline.uptimeNanoseconds - now) / 1e9 : 0
+            guard remaining >= 10 else {
+                stillAttached.append(contentsOf: occupancies[index...].map { $0.stage.displayID })
+                break
+            }
             let displayID = occupancy.stage.displayID
-            if retire(occupancy) {
+            if retire(occupancy, timeout: remaining) {
                 retired.insert(ObjectIdentifier(occupancy.stage))
             } else {
                 stillAttached.append(displayID)
+                stillAttached.append(contentsOf: occupancies.dropFirst(index + 1).map { $0.stage.displayID })
+                break
             }
         }
         return (retired, stillAttached.sorted())
     }
 
-    private func retire(_ occupancy: Occupancy) -> Bool {
+    private func retire(_ occupancy: Occupancy, timeout: TimeInterval = 25) -> Bool {
         // Cleanup must not enter an unbounded SkyLight query before Stage's bounded retirement.
         let spaces = occupancy.stage.retirementSpaces
-        guard stageRetirer(occupancy.stage) else { return false }
+        guard stageRetirer(occupancy.stage, timeout) else { return false }
         AgentActivity.release(spaces: spaces)
         return true
     }

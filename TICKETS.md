@@ -36,6 +36,13 @@ Status definitions:
 
 ### October 4 ColorSync root-cause follow-up
 
+- Continuing investigation: physical-only ColorSync CPU remained around 31% with the
+  SpaceO daemon and Viewer stopped, and after closing System Settings. Profile metadata
+  did not change during a two-minute observation. Add bounded settling before graph changes,
+  retaining owners on refusal. This prevents further attachment on the observed warm host;
+  it does not establish the initiating macOS defect or close RA-057/#38.
+- Follow-up evidence: [reconfiguration settling](docs/validation/2026-10-04-colorsync-settling.md).
+
 - Deterministically verified, with one focused native workflow pass: correct CPU-observation
   timestamps, retain the most recently used valid
   idle display, and avoid already-satisfied window mutations. Add deterministic regressions

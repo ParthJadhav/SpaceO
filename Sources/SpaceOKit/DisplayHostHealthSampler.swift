@@ -68,18 +68,26 @@ enum DisplayHostHealthSampler {
         }
         guard result == KERN_SUCCESS, count == expectedCount else { throw Unknown("vm_statistics") }
         let reports: Int
+        let cutoff = try diagnosticCutoff(boot: Double(boot.tv_sec), now: now)
         let metadataTimeout = try deadline.remaining(atMost: 1)
         do { reports = try diagnosticReports(
             roots: [("/Library/Logs/DiagnosticReports", true),
                     (FileManager.default.homeDirectoryForCurrentUser
                         .appendingPathComponent("Library/Logs/DiagnosticReports").path, false)],
-            since: min(Double(boot.tv_sec), now - 86_400), timeout: metadataTimeout)
+            since: cutoff, timeout: metadataTimeout)
         } catch { throw Unknown("windowserver_diagnostic_metadata") }
         let counters = try serviceSample(deadline: deadline)
         _ = try deadline.remaining()
         return .init(uptime: counters.uptime, pressure: pressure,
                      swapins: vm.swapins, swapouts: vm.swapouts, services: counters.services,
                      diagnosticReports: reports)
+    }
+
+    static func diagnosticCutoff(boot: TimeInterval, now: TimeInterval) throws -> TimeInterval {
+        guard boot.isFinite, now.isFinite, boot > 0, boot <= now else { throw Unknown("boot_time") }
+        // A report written during this boot stays relevant for the entire boot, even after
+        // twenty-four hours. Passing time alone must not turn an incident into recovery.
+        return min(boot, now - 86_400)
     }
 
     static func launchdLabel(_ service: String) -> String {

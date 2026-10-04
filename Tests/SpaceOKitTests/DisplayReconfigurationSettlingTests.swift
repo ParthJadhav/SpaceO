@@ -1,0 +1,257 @@
+import XCTest
+@testable import SpaceOKit
+
+final class DisplayReconfigurationSettlingTests: XCTestCase {
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var time = 100.0
+        var value: Double {
+            get { lock.withLock { time } }
+            set { lock.withLock { time = newValue } }
+        }
+    }
+
+    private func observation(_ time: Double, cpu: Double, swap: UInt64 = 0,
+                             pressure: UInt32 = 1, reports: Int = 0) -> DisplayHostHealthSample {
+        let services = DisplayHostHealthSampler.services
+        return .init(uptime: time, pressure: pressure, swapins: swap, swapouts: 0,
+                     services: [services[0]: .running(pid: 1, start: "inert", cpuSeconds: cpu, launches: 1),
+                                services[1]: .idle(launches: 0)], diagnosticReports: reports)
+    }
+
+    private func monitor(_ clock: Clock) -> DisplayHostHealth {
+        // Deterministic feeds own all samples; no WindowServer or process queries.
+        DisplayHostHealth(sample: { throw DisplayHostHealthSample.Unknown("inert_fixture") },
+                          now: { clock.value })
+    }
+
+    private func feed(_ monitor: DisplayHostHealth, _ clock: Clock, _ time: Double, _ cpu: Double) {
+        clock.value = time
+        monitor.accept(observation(time, cpu: cpu))
+    }
+
+    func testThreeRawObservationsAreRequiredAndCachedReadsNeverCount() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        feed(health, clock, 105, 11.2) // 24%, first assessed interval.
+        for _ in 0..<100 {
+            XCTAssertEqual(health.report.state, .ready)
+            XCTAssertFalse(health.isSettledForReconfiguration)
+        }
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration()) {
+            XCTAssertTrue($0 is DisplayHostHealth.ReconfigurationSettlingRefusal)
+        }
+        feed(health, clock, 110, 12.4) // 24%, second distinct interval.
+        XCTAssertTrue(health.isSettledForReconfiguration)
+        XCTAssertEqual(health.report.reconfigurationSettled, true)
+        XCTAssertEqual(health.report.reconfigurationCPUThresholdPercent, 25)
+        XCTAssertNoThrow(try health.requireSettledForReconfiguration(timeout: 0))
+        XCTAssertNoThrow(try health.requireStillSettledForReconfiguration())
+        XCTAssertFalse(health.hasStarted, "cached settled evidence needs no extra sampler")
+    }
+
+    func testWarmIntervalsResetQuietStreakAndBoundaryIsStrict() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        feed(health, clock, 105, 11.2) // 24%.
+        feed(health, clock, 110, 12.5) // 26%, ready for use but not reconfiguration.
+        XCTAssertEqual(health.report.state, .ready)
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        feed(health, clock, 115, 13.7) // 24% alone is insufficient after 26%.
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        feed(health, clock, 120, 14.9)
+        XCTAssertTrue(health.isSettledForReconfiguration)
+        // Exactly representable counters exercise the strict 25% boundary independently.
+        let boundaryClock = Clock()
+        let boundary = monitor(boundaryClock)
+        feed(boundary, boundaryClock, 100, 0)
+        feed(boundary, boundaryClock, 105, 1)
+        feed(boundary, boundaryClock, 110, 2)
+        XCTAssertTrue(boundary.isSettledForReconfiguration)
+        feed(boundary, boundaryClock, 115, 3.25)
+        XCTAssertEqual(boundary.report.state, .ready)
+        XCTAssertFalse(boundary.isSettledForReconfiguration)
+        XCTAssertThrowsError(try boundary.requireStillSettledForReconfiguration())
+    }
+
+    func testGraphChangeFencesOldAndInFlightCPUObservations() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        feed(health, clock, 105, 11.2)
+        feed(health, clock, 110, 12.4)
+        XCTAssertTrue(health.isSettledForReconfiguration)
+        clock.value = 117
+        health.resetReconfigurationSettling() // Observation at 115 is still in flight.
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        health.accept(observation(115, cpu: 13.6))
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        feed(health, clock, 120, 14.8) // Previous endpoint predates the graph change.
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        feed(health, clock, 125, 16)
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        feed(health, clock, 130, 17.2)
+        XCTAssertTrue(health.isSettledForReconfiguration)
+    }
+
+    func testSettlingTimeoutIsBoundedAndDoesNotLatchAReadyWarmHost() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        feed(health, clock, 105, 11.5) // 30%, permitted for ongoing use.
+        let start = ProcessInfo.processInfo.systemUptime
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0.02)) { error in
+            guard let refusal = error as? DisplayHostHealth.ReconfigurationSettlingRefusal else {
+                return XCTFail("ready warm health must produce a typed transient refusal")
+            }
+            XCTAssertEqual(refusal.localizedDescription, refusal.underlyingError.localizedDescription)
+            guard case .stageCreationFailed = refusal.underlyingError else {
+                return XCTFail("public refusal retains the existing stage creation error")
+            }
+        }
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 1)
+        XCTAssertEqual(health.report.state, .ready)
+        XCTAssertEqual(health.report.reconfigurationSettled, false)
+        XCTAssertEqual(health.report.reconfigurationCPUThresholdPercent, 25)
+        XCTAssertEqual(health.report.reasons, [])
+        XCTAssertFalse(health.isSettledForReconfiguration)
+    }
+
+    func testSettledEvidenceStillExpiresAndLateReadsCannotRestoreIt() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        feed(health, clock, 105, 11.2)
+        feed(health, clock, 110, 12.4)
+        clock.value = 120.1
+        XCTAssertFalse(health.isSettledForReconfiguration)
+        XCTAssertEqual(health.report.reasons, ["host_health_stale_or_timed_out"])
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration()) {
+            XCTAssertTrue($0 is SpaceOError)
+            XCTAssertFalse($0 is DisplayHostHealth.ReconfigurationSettlingRefusal)
+        }
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0))
+    }
+
+    func testHealthFailureWakesSettlingWaiterAndRemainsSticky() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        feed(health, clock, 105, 11.5)
+        let entered = expectation(description: "settling waiter entered")
+        let refused = expectation(description: "health fault wakes waiter")
+        DispatchQueue.global().async {
+            entered.fulfill()
+            do {
+                try health.requireSettledForReconfiguration(timeout: 2)
+                XCTFail("a health fault must refuse reconfiguration")
+            } catch {
+                XCTAssertTrue(error is SpaceOError)
+                XCTAssertFalse(error is DisplayHostHealth.ReconfigurationSettlingRefusal)
+            }
+            refused.fulfill()
+        }
+        wait(for: [entered], timeout: 1)
+        // Same CPU clock: diagnostics are immediately authoritative. The injected sampler
+        // stays idle while the existing signal wakes or precedes the waiter safely.
+        health.accept(observation(105, cpu: 11.5, reports: 1))
+        wait(for: [refused], timeout: 1)
+        XCTAssertEqual(health.report.reasons, ["recent_windowserver_diagnostic"])
+        XCTAssertFalse(health.isSettledForReconfiguration)
+    }
+
+    func testFreshQuietAssessmentWakesSettlingWaiter() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        feed(health, clock, 104, 10.96) // First valid, quiet four-second CPU interval.
+        clock.value = 106.9
+        let entered = expectation(description: "quiet waiter entered")
+        let settled = expectation(description: "fresh quiet assessment wakes waiter")
+        DispatchQueue.global().async {
+            entered.fulfill()
+            do { try health.requireSettledForReconfiguration(timeout: 2) }
+            catch { XCTFail("fresh quiet evidence must settle: \(error)") }
+            settled.fulfill()
+        }
+        wait(for: [entered], timeout: 1)
+        // Until accept publishes this sample, even the timer sees less than its five-second
+        // spacing. No asynchronous sampler can race the controlled four-second feed.
+        feed(health, clock, 108, 11.92)
+        wait(for: [settled], timeout: 1)
+        XCTAssertTrue(health.isSettledForReconfiguration)
+        XCTAssertEqual(health.report.state, .ready)
+    }
+
+    func testHardCPUFaultSwapAndUnknownStillRefuseReconfiguration() {
+        for fault in ["cpu", "swap", "pressure", "unknown"] {
+            let clock = Clock()
+            let health = monitor(clock)
+            feed(health, clock, 100, 10)
+            clock.value = 105
+            switch fault {
+            case "cpu": health.accept(observation(105, cpu: 12.5))
+            case "swap": health.accept(observation(105, cpu: 10, swap: 1))
+            case "pressure": health.accept(observation(105, cpu: 10, pressure: 2))
+            default: health.accept(observation(105, cpu: .nan))
+            }
+            XCTAssertEqual(health.report.state, .blocked, fault)
+            XCTAssertFalse(health.isSettledForReconfiguration, fault)
+            XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(), fault) {
+                XCTAssertTrue($0 is SpaceOError, fault)
+                XCTAssertFalse($0 is DisplayHostHealth.ReconfigurationSettlingRefusal, fault)
+            }
+        }
+    }
+
+    func testInvalidWaitBoundsDoNotStartSampler() {
+        let health = monitor(Clock())
+        for timeout in [-1, 31, Double.infinity, Double.nan] {
+            XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: timeout))
+        }
+        XCTAssertFalse(health.hasStarted)
+    }
+
+    func testUnknownHealthIsNotClassifiedAsTransientWarmSettling() {
+        let health = monitor(Clock())
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration()) {
+            XCTAssertTrue($0 is SpaceOError)
+            XCTAssertFalse($0 is DisplayHostHealth.ReconfigurationSettlingRefusal)
+        }
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0)) {
+            XCTAssertTrue($0 is SpaceOError)
+            XCTAssertFalse($0 is DisplayHostHealth.ReconfigurationSettlingRefusal)
+        }
+        XCTAssertFalse(health.hasStarted)
+        XCTAssertEqual(health.report.state, .unknown)
+    }
+
+    func testHardUnknownReconfigurationRefusalIncludesUnavailableInput() {
+        let clock = Clock()
+        let health = monitor(clock)
+        feed(health, clock, 100, 10)
+        clock.value = 105
+        health.accept(observation(105, cpu: .nan))
+        XCTAssertEqual(health.report.state, .blocked)
+        XCTAssertEqual(health.report.unavailableInput, "colorsync_service_counter")
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration()) { error in
+            XCTAssertTrue(error is SpaceOError)
+            XCTAssertFalse(error is DisplayHostHealth.ReconfigurationSettlingRefusal)
+            XCTAssertTrue(error.localizedDescription.contains("unavailable input: colorsync_service_counter"))
+        }
+        XCTAssertThrowsError(try health.requireSettledForReconfiguration(timeout: 0)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("unavailable input: colorsync_service_counter"))
+        }
+    }
+
+    func testOlderHealthReportDecodesWithOptionalReconfigurationFieldsAbsent() throws {
+        let data = Data(#"{"state":"ready","reasons":[],"colorsyncCPUPercent":30}"#.utf8)
+        let report = try JSONDecoder().decode(DisplayHostHealthReport.self, from: data)
+        XCTAssertEqual(report.state, .ready)
+        XCTAssertNil(report.reconfigurationSettled)
+        XCTAssertNil(report.reconfigurationCPUThresholdPercent)
+    }
+}
