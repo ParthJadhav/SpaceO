@@ -24,6 +24,14 @@ Status definitions:
 
 ## Active milestone
 
+### October 11 blocked-host janitor maintenance
+
+- Stop the timed janitor when host-health admission refuses. Retain idle display owners and
+  leave passive diagnostics available. Normal healthy maintenance continues.
+- Regression coverage uses an inert display backing and the actual runtime timer to verify
+  that the first refusal stops retries and never invalidates the retained display.
+- Verification is tracked in [janitor maintenance](docs/validation/2026-10-11-janitor-maintenance.md).
+
 ### October 11 atomic health expiry
 
 - Keep the monotonic clock and health timestamps in one locked expiry snapshot. A reader

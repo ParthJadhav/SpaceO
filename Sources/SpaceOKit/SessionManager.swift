@@ -301,6 +301,7 @@ public actor SessionManager {
                     return
                 }
                 guard let self else { return }
+                guard await self.admitJanitorPass() else { return }
                 do {
                     _ = try await self.runJanitorPass()
                 } catch {
@@ -311,6 +312,21 @@ public actor SessionManager {
                     ])
                 }
             }
+        }
+    }
+
+    /// A sticky health refusal cannot be repaired by another timed sweep. Keep the owner
+    /// and passive diagnostics available, but stop the background retry loop.
+    func admitJanitorPass() -> Bool {
+        do {
+            try hostHealthCheck()
+            return true
+        } catch {
+            DaemonLog.shared.event("janitor.paused-host-health", [
+                "error": error.localizedDescription,
+            ])
+            stopJanitor()
+            return false
         }
     }
 
