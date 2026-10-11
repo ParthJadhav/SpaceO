@@ -346,9 +346,11 @@ final class DisplayHostHealth: @unchecked Sendable {
     }
 
     private func expireIfNeeded() {
-        let time = now()
         let expired = lock.withLock {
-            !time.isFinite || (inFlightSince.map { time < $0 || time - $0 > 3 } ?? false)
+            // A producer may publish a newer observation while a reader waits for this lock.
+            // Read the clock with the state so that contention is not mistaken for reversal.
+            let time = now()
+            return !time.isFinite || (inFlightSince.map { time < $0 || time - $0 > 3 } ?? false)
                 || (reportedAt.map { time < $0 || time - $0 > 10 } ?? false)
         }
         if expired { fail("host_health_stale_or_timed_out") }

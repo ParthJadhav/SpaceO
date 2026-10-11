@@ -27,6 +27,33 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         func next() -> Int { lock.withLock { defer { value += 1 }; return value } }
     }
 
+    private final class SnapshotClock: @unchecked Sendable {
+        let readerQueue = DispatchQueue(label: "spaceo.test.expiry-snapshot")
+        let readEntered = DispatchSemaphore(value: 0)
+        let resumeRead = DispatchSemaphore(value: 0)
+        private let readerKey = DispatchSpecificKey<Bool>()
+        private let lock = NSLock()
+        private var time = 104.0
+        private var armed = true
+
+        init() { readerQueue.setSpecific(key: readerKey, value: true) }
+
+        func advance(to time: Double) { lock.withLock { self.time = time } }
+
+        func read() -> Double {
+            let snapshot = lock.withLock { () -> (Double, Bool) in
+                let block = armed && DispatchQueue.getSpecific(key: readerKey) == true
+                if block { armed = false }
+                return (time, block)
+            }
+            if snapshot.1 {
+                readEntered.signal()
+                _ = resumeRead.wait(timeout: .now() + 4)
+            }
+            return snapshot.0
+        }
+    }
+
     private func observation(_ time: Double, cpu: Double, swap: UInt64 = 0,
                              pressure: UInt32 = 1, reports: Int = 0) -> DisplayHostHealthSample {
         let services = DisplayHostHealthSampler.services
@@ -346,6 +373,41 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
         wait(for: [settled], timeout: 1)
         XCTAssertTrue(health.isSettledForReconfiguration)
         XCTAssertEqual(health.report.state, .ready)
+    }
+
+    func testExpirySnapshotCannotCompareOldTimeAgainstNewAssessment() throws {
+        let clock = SnapshotClock()
+        let health = DisplayHostHealth(
+            sample: { throw DisplayHostHealthSample.Unknown("inert_fixture") },
+            now: { clock.read() })
+        clock.advance(to: 100)
+        health.accept(observation(100, cpu: 10))
+        clock.advance(to: 104)
+        health.accept(observation(104, cpu: 10.96))
+        try health.requireHealthy() // Start expiry checks; the frozen clock prevents sampling.
+        let readerDone = expectation(description: "expiry reader finished")
+        let writerDone = expectation(description: "fresh assessment published")
+        let writerFinished = DispatchSemaphore(value: 0)
+        clock.readerQueue.async {
+            _ = health.report
+            readerDone.fulfill()
+        }
+        XCTAssertEqual(clock.readEntered.wait(timeout: .now() + 2), .success)
+        let fresh = observation(108, cpu: 11.92)
+        DispatchQueue.global().async {
+            clock.advance(to: 108)
+            health.accept(fresh)
+            writerFinished.signal()
+            writerDone.fulfill()
+        }
+        // With an atomic snapshot the writer waits for the reader's clock/state lock.
+        // The old implementation publishes first, then mistakes the captured 104 for
+        // a clock reversal against the new assessment at 108. This ordering is bounded.
+        _ = writerFinished.wait(timeout: .now() + 2)
+        clock.resumeRead.signal()
+        wait(for: [readerDone, writerDone], timeout: 2)
+        XCTAssertEqual(health.report.state, .ready)
+        XCTAssertTrue(health.isSettledForReconfiguration)
     }
 
     func testHardCPUFaultSwapAndUnknownStillRefuseReconfiguration() {

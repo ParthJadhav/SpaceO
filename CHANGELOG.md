@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Read the host-health expiry clock under the state lock so a concurrent fresh observation
+  cannot be misclassified as a clock reversal and trip a sticky health fault.
 - Wait for two consecutive ColorSync CPU intervals below 25% before changing the display
   graph. A settling refusal retains the display without invalidating it; ordinary use keeps
   the existing 50% hard health limit. Report reconfiguration readiness separately in health
