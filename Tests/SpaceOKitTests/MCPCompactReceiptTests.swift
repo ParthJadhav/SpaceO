@@ -481,6 +481,18 @@ final class MCPCompactReceiptTests: XCTestCase {
         XCTAssertNil(memory.daemonDrift)
     }
 
+    func testUnreachableDaemonDoesNotClearAVerifiedDriftWarning() {
+        let memory = MCPConnectionMemory(verbose: false)
+        let warning = MCPPresentation.daemonDriftWarning(
+            daemonVersion: "1.0.5", daemonPID: 36_079, clientVersion: "1.0.7")
+        memory.setDaemonDrift(warning)
+        let controller = MCPControllerContext(memory: memory)
+        MCPServer.revalidateDaemonDrift(
+            socketPath: "/tmp/spaceo-absent-\(UUID().uuidString.prefix(8)).sock", controller: controller)
+        XCTAssertEqual(memory.daemonDrift, warning, "no provenance reply is not proof the drift ended")
+        XCTAssertTrue(memory.hasUndeliveredDaemonDrift)
+    }
+
     func testDriftWarningLeadsTheFirstResultOnlyAndRewritesUnknownCommands() {
         let memory = MCPConnectionMemory(verbose: false)
         let warning = MCPPresentation.daemonDriftWarning(daemonVersion: "1.1.0", daemonPID: 77, clientVersion: "1.1.1")

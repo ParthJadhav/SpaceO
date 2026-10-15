@@ -22,7 +22,9 @@ any window. Only counts and window numbers were recorded, without titles or scre
   a positive PID representable by `pid_t`.
 - `session.list` no longer fails when one session's refresh is incomplete. That row keeps its
   last-known windows and reports `windowDiscoveryFailure`. Window commands, mutations and
-  teardown still refuse incomplete discovery.
+  teardown still refuse incomplete discovery. All sessions in one listing share a four-second
+  discovery budget; a session reached after it is exhausted keeps its cached row and says so.
+  The Viewer's sidebar and inspector mark windows that may be out of date.
 - `doctor` reads only the service's own `state`/`pid` from `launchctl print`; nested endpoint
   and event-source blocks no longer report a running LaunchAgent as not running.
 - The MCP server re-checks a pending drift warning against the daemon answering now, so a

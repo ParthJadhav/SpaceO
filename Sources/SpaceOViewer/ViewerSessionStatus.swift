@@ -70,8 +70,13 @@ struct ViewerSessionStatus: Equatable, Sendable {
                     detail: actionPhrase(session))
             }
         }
-        return ViewerSessionStatus(kind: .idle, title: "Idle", detail: appsSummary(session))
+        return ViewerSessionStatus(kind: .idle, title: "Idle",
+                                   detail: session.windowDiscoveryFailure == nil
+                                       ? appsSummary(session) : staleWindowsDetail)
     }
+
+    /// The daemon could not refresh this session's windows; it listed the last-known ones.
+    static let staleWindowsDetail = "Windows may be out of date"
 
     /// "Click · Save" from the last agent action, capitalised for display.
     static func actionPhrase(_ session: SessionInfo) -> String {

@@ -527,9 +527,13 @@ public enum MCPServer {
     /// A drift warning describes the daemon that answered when it was computed. A restart can
     /// replace that daemon between calls without this connection seeing a transport failure,
     /// so confirm it against the daemon answering now before an agent reads it (#47).
-    private static func revalidateDaemonDrift(socketPath: String, controller: MCPControllerContext) {
-        guard controller.memory.daemonDrift != nil else { return }
-        controller.memory.setDaemonDrift(reportDaemonProvenance(Transport.pingResponse(socketPath)?.daemon))
+    /// Only a successful provenance reply may replace or clear it: an unreachable daemon is not
+    /// evidence that the drift ended, and clearing it would hide a `daemon_outdated` rewrite.
+    static func revalidateDaemonDrift(socketPath: String, controller: MCPControllerContext) {
+        guard controller.memory.daemonDrift != nil,
+              let response = Transport.pingResponse(socketPath), response.ok,
+              let daemon = response.daemon else { return }
+        controller.memory.setDaemonDrift(reportDaemonProvenance(daemon))
     }
 
     /// Log daemon provenance to stderr and return the agent-facing warning when the daemon is

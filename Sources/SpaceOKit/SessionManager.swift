@@ -1151,9 +1151,14 @@ public actor SessionManager {
         return try infosNow()
     }
 
+    /// One listing refreshes every session under this shared budget, so an accessibility outage
+    /// across many sessions cannot hold the operation gate for each session's discovery timeout.
+    static let sessionListRefreshBudget: TimeInterval = 4
+
     private func infosNow() throws -> [SessionInfo] {
         var infos: [SessionInfo] = []
         let healthy = (try? hostHealthCheck()) != nil
+        let refreshDeadline = waitRuntime.now().addingTimeInterval(Self.sessionListRefreshBudget)
         for session in sessions.values.sorted(by: { $0.createdAt < $1.createdAt }) {
             if !healthy {
                 if let snapshot = destroyingSessionSnapshots[session.id] {
@@ -1185,8 +1190,13 @@ public actor SessionManager {
                 // One app's incomplete discovery must not fail every client's listing (#47).
                 // The failed refresh preserved the last-known ledger, and the row reports why
                 // it is not a fresh observation; commands still refuse on the throwing refresh.
-                _ = try? session.refreshWindowsChecked()
-                let info = SessionInfo(session)
+                let remaining = refreshDeadline.timeIntervalSince(waitRuntime.now())
+                let refreshed = remaining >= 0.01
+                if refreshed { _ = try? session.refreshWindowsChecked(remaining: remaining) }
+                var info = SessionInfo(session)
+                if !refreshed, info.windowDiscoveryFailure == nil {
+                    info.windowDiscoveryFailure = "not refreshed: this listing's shared discovery budget was exhausted"
+                }
                 try persistSession(
                     session,
                     operationState: session.teardownPending ? .cleanupPending : .ready)

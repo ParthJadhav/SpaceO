@@ -413,6 +413,63 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         XCTAssertTrue(cleaned.ok, cleaned.error ?? "")
     }
 
+    func testSessionListSharesOneDiscoveryBudgetAcrossSessions() async throws {
+        let backing = FakeDisplayBacking(id: 92_031)
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [92_031] })
+        let pool = DisplayPool(sessionsPerDisplay: 2, displaySize: backing.bounds.size,
+            stageFactory: { _, _, _, _ in stage }, stageRetirer: { $0.invalidate(waitingForRemoval: 0) })
+        defer { _ = pool.releaseAll() }
+        let server = FakeWindowServer()
+        let clock = PollClock()
+        // Each session owns a distinct live process: this test and the process that ran it.
+        var owned: [String: LaunchedApp] = [:]
+        for (id, pid) in [("budget-a", getpid()), ("budget-b", getppid())] {
+            let identity = try XCTUnwrap(ProcessIdentity.current(of: pid))
+            owned[id] = LaunchedApp(pid: pid, identity: identity, bundleIdentifier: "dev.spaceo.\(id)",
+                name: id, url: URL(fileURLWithPath: "/Applications/\(id).app"), startedByUs: false,
+                devToolsPort: nil, temporaryProfile: nil)
+            server.add(window: CGWindowID(pid), pid: pid, at: CGRect(x: 10, y: 10, width: 20, height: 20))
+        }
+        let apps = owned
+        let manager = SessionManager(pool: pool, runJanitor: false, waitRuntime: clock.runtime,
+            sessionFactory: { id, slot in
+                try AgentSession(id: id, slot: slot,
+                    teardownDriver: SessionAppTeardownDriver(isAlive: { _ in false }, quit: { _, _ in },
+                        waitForExit: { _, _ in [] }, cleanupTemporaryProfile: { _ in }),
+                    windowDriver: server.driver, watcherFactory: { _, _ in throw CancellationError() },
+                    initialApps: apps[id].map { [$0] } ?? [])
+            })
+        for id in ["budget-a", "budget-b"] {
+            let created = await manager.handle(TestController.createRequest(
+                session: id, ownerID: id, leaseID: UUID()))
+            XCTAssertTrue(created.ok, created.error ?? id)
+        }
+        var operatorList = Request(cmd: "session.list")
+        operatorList.operatorScope = true
+        let fresh = await manager.handle(operatorList)
+        XCTAssertEqual(fresh.sessions?.compactMap(\.windowDiscoveryFailure), [])
+
+        // The first session's discovery consumes more than the listing's whole budget.
+        server.resetDiscoveryCounts()
+        server.setDiscoveryHook { _ in clock.advance(SessionManager.sessionListRefreshBudget + 1) }
+        let listing = await manager.handle(operatorList)
+        server.setDiscoveryHook(nil)
+        XCTAssertTrue(listing.ok, listing.error ?? "")
+        XCTAssertEqual(server.discoveryCount, 1, "the exhausted budget must not start more discovery")
+        let rows = Dictionary(uniqueKeysWithValues: (listing.sessions ?? []).map { ($0.id, $0) })
+        XCTAssertNil(rows["budget-a"]?.windowDiscoveryFailure)
+        XCTAssertEqual(rows["budget-b"]?.windows.map(\.windowID), [CGWindowID(getppid())])
+        XCTAssertTrue(rows["budget-b"]?.windowDiscoveryFailure?.contains("budget") == true)
+        for id in ["budget-a", "budget-b"] {
+            var destroy = Request(cmd: "session.destroy")
+            destroy.session = id
+            destroy.operatorScope = true
+            destroy.quitApps = false
+            let cleaned = await manager.handle(destroy)
+            XCTAssertTrue(cleaned.ok, cleaned.error ?? id)
+        }
+    }
+
     func testGeneralRefreshFailurePreservesHistoryAndRefusesTargetsAndRepark() throws {
         let pool = makePool(displayID: 92_025)
         let server = FakeWindowServer()
