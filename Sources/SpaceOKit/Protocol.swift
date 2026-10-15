@@ -259,6 +259,25 @@ public struct WindowInfo: Codable, Sendable {
         self.modal = markers.modal
         self.defaultTarget = markers.defaultTarget
     }
+
+    /// A row from the retained ledger when discovery could not confirm the window's owner.
+    /// Window IDs are recycled, so nothing here asks the WindowServer about this ID: placement
+    /// is judged from the last-known frame and Spaces are reported as unknown (empty).
+    init(lastKnown window: WindowRef, session: AgentSession) {
+        self.windowID = window.windowID
+        self.pid = window.pid
+        self.title = window.title
+        self.x = window.frame.origin.x
+        self.y = window.frame.origin.y
+        self.width = window.frame.width
+        self.height = window.frame.height
+        self.onStage = WindowPlacement.isFullyInside(window.frame, session.frame)
+        self.spaces = []
+        let markers = session.focusMarkers(for: window)
+        self.focused = markers.focused
+        self.modal = markers.modal
+        self.defaultTarget = markers.defaultTarget
+    }
 }
 
 public struct AppInfo: Codable, Sendable {
@@ -353,7 +372,9 @@ public struct SessionInfo: Codable, Sendable {
     /// last-known ledger, not a fresh observation.
     public var windowDiscoveryFailure: String?
 
-    public init(_ session: AgentSession, includeLiveGeometry: Bool = true) {
+    /// `lastKnownWindows` builds window rows from the retained ledger alone; it also applies
+    /// whenever the session's latest refresh failed.
+    public init(_ session: AgentSession, includeLiveGeometry: Bool = true, lastKnownWindows: Bool = false) {
         let bounds = includeLiveGeometry ? session.frame : .zero
         let controller = session.controllerSnapshot()
         self.id = session.id
@@ -374,7 +395,11 @@ public struct SessionInfo: Codable, Sendable {
         self.spaces = includeLiveGeometry ? session.stage.spaces : []
         self.hasOwnSpace = includeLiveGeometry && session.stage.hasOwnSpace
         self.apps = session.apps.map(AppInfo.init)
-        self.windows = includeLiveGeometry ? session.windows.map { WindowInfo($0, session: session) } : []
+        let unverified = lastKnownWindows || session.windowRefreshFailure != nil
+        self.windows = includeLiveGeometry
+            ? session.windows.map {
+                unverified ? WindowInfo(lastKnown: $0, session: session) : WindowInfo($0, session: session)
+            } : []
         self.createdAt = session.createdAt
         self.teardownPending = session.teardownPending
         self.runtimeAttached = true

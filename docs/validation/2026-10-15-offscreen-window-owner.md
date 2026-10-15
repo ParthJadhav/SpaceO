@@ -25,6 +25,8 @@ any window. Only counts and window numbers were recorded, without titles or scre
   teardown still refuse incomplete discovery. All sessions in one listing share a four-second
   discovery budget, each refresh getting a fair share of what remains; a session reached after
   it is exhausted keeps its cached row and says so. Cancellation still stops the listing.
+  Unconfirmed rows come from the retained ledger alone: no live WindowServer lookup of a
+  possibly recycled window ID adds placement or Space data.
   The Viewer's sidebar and inspector mark windows that may be out of date.
 - `doctor` reads only the service's own `state`/`pid` from `launchctl print`; nested endpoint
   and event-source blocks no longer report a running LaunchAgent as not running.

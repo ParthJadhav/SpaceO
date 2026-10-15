@@ -396,6 +396,9 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         let row = try XCTUnwrap(listing.sessions?.first { $0.id == "checked-read" })
         XCTAssertEqual(row.windows.map(\.windowID), [4242])
         XCTAssertTrue(row.windowDiscoveryFailure?.contains("fixture discovery failed") == true)
+        // An unconfirmed ID may be recycled: no live WindowServer lookup enriches the row.
+        XCTAssertEqual(row.windows.first?.onStage, true, "judged from the last-known frame")
+        XCTAssertEqual(row.windows.first?.spaces, [], "Spaces are unknown, not another window's")
         let otherController = await manager.handle(TestController.request("session.list", leaseID: UUID()))
         let redacted = try XCTUnwrap(otherController.sessions?.first { $0.id == "checked-read" })
         XCTAssertEqual(redacted.redacted, true)
@@ -487,6 +490,7 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         XCTAssertNil(rows["budget-a"]?.windowDiscoveryFailure)
         for id in ["budget-b", "budget-c"] {
             XCTAssertEqual(rows[id]?.windows.count, 1, "\(id) keeps its cached row")
+            XCTAssertEqual(rows[id]?.windows.first?.spaces, [], "an unrefreshed row asks nothing live")
             XCTAssertTrue(rows[id]?.windowDiscoveryFailure?.contains("budget") == true)
         }
 

@@ -1204,7 +1204,7 @@ public actor SessionManager {
                     catch is CancellationError { throw CancellationError() }
                     catch { /* Reported on the row; the ledger kept its last-known windows. */ }
                 }
-                var info = SessionInfo(session)
+                var info = SessionInfo(session, lastKnownWindows: !refreshed)
                 if !refreshed, info.windowDiscoveryFailure == nil {
                     info.windowDiscoveryFailure = "not refreshed: this listing's shared discovery budget was exhausted"
                 }
