@@ -528,7 +528,7 @@ public enum MCPServer {
     /// replace that daemon between calls without this connection seeing a transport failure,
     /// so confirm it against the daemon answering now before an agent reads it (#47).
     /// Only a successful provenance reply may replace or clear it: an unreachable daemon is not
-    /// evidence that the drift ended, and clearing it would hide a `daemon_outdated` rewrite.
+    /// evidence that the drift ended.
     static func revalidateDaemonDrift(socketPath: String, controller: MCPControllerContext) {
         guard controller.memory.daemonDrift != nil,
               let response = Transport.pingResponse(socketPath), response.ok,
@@ -1266,9 +1266,8 @@ public enum MCPServer {
             return
         }
 
-        if !response.ok, response.error?.hasPrefix("unknown command") == true {
-            revalidateDaemonDrift(socketPath: socketPath, controller: controller)
-        }
+        // Classify with the drift known when this command was sent: the daemon that refused it
+        // is the evidence, and a later ping could already reach its replacement.
         response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
         controller.record(response, for: request)
         journaled.request = request

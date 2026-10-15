@@ -416,19 +416,25 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
     func testSessionListSharesOneDiscoveryBudgetAcrossSessions() async throws {
         let backing = FakeDisplayBacking(id: 92_031)
         let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [92_031] })
-        let pool = DisplayPool(sessionsPerDisplay: 2, displaySize: backing.bounds.size,
+        let pool = DisplayPool(sessionsPerDisplay: 3, displaySize: backing.bounds.size,
             stageFactory: { _, _, _, _ in stage }, stageRetirer: { $0.invalidate(waitingForRemoval: 0) })
         defer { _ = pool.releaseAll() }
         let server = FakeWindowServer()
         let clock = PollClock()
-        // Each session owns a distinct live process: this test and the process that ran it.
+        // Each session owns a distinct live process: this test, its runner, and an idle child.
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["30"]
+        try child.run()
+        defer { child.terminate(); child.waitUntilExit() }
+        let ids = ["budget-a", "budget-b", "budget-c"]
         var owned: [String: LaunchedApp] = [:]
-        for (id, pid) in [("budget-a", getpid()), ("budget-b", getppid())] {
+        for (id, pid) in zip(ids, [getpid(), getppid(), child.processIdentifier]) {
             let identity = try XCTUnwrap(ProcessIdentity.current(of: pid))
             owned[id] = LaunchedApp(pid: pid, identity: identity, bundleIdentifier: "dev.spaceo.\(id)",
                 name: id, url: URL(fileURLWithPath: "/Applications/\(id).app"), startedByUs: false,
                 devToolsPort: nil, temporaryProfile: nil)
-            server.add(window: CGWindowID(pid), pid: pid, at: CGRect(x: 10, y: 10, width: 20, height: 20))
+            server.add(window: CGWindowID(1_000 + pid), pid: pid, at: CGRect(x: 10, y: 10, width: 20, height: 20))
         }
         let apps = owned
         let manager = SessionManager(pool: pool, runJanitor: false, waitRuntime: clock.runtime,
@@ -439,28 +445,44 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
                     windowDriver: server.driver, watcherFactory: { _, _ in throw CancellationError() },
                     initialApps: apps[id].map { [$0] } ?? [])
             })
-        for id in ["budget-a", "budget-b"] {
+        for id in ids {
             let created = await manager.handle(TestController.createRequest(
                 session: id, ownerID: id, leaseID: UUID()))
             XCTAssertTrue(created.ok, created.error ?? id)
         }
         var operatorList = Request(cmd: "session.list")
         operatorList.operatorScope = true
+
+        // Every session gets a fair share of what remains, capped by its own discovery limit.
+        server.resetDiscoveryCounts()
         let fresh = await manager.handle(operatorList)
         XCTAssertEqual(fresh.sessions?.compactMap(\.windowDiscoveryFailure), [])
+        let budget = SessionManager.sessionListRefreshBudget
+        let shares = server.discoveryTimeouts
+        XCTAssertEqual(shares.count, 3)
+        XCTAssertEqual(shares.first ?? 0, budget / 3, accuracy: 0.001, "the first session cannot take it all")
 
-        // The first session's discovery consumes more than the listing's whole budget.
+        // An overrun that consumes the whole budget starts no further discovery.
         server.resetDiscoveryCounts()
-        server.setDiscoveryHook { _ in clock.advance(SessionManager.sessionListRefreshBudget + 1) }
+        server.setDiscoveryHook { _ in clock.advance(budget + 1) }
         let listing = await manager.handle(operatorList)
         server.setDiscoveryHook(nil)
         XCTAssertTrue(listing.ok, listing.error ?? "")
         XCTAssertEqual(server.discoveryCount, 1, "the exhausted budget must not start more discovery")
         let rows = Dictionary(uniqueKeysWithValues: (listing.sessions ?? []).map { ($0.id, $0) })
         XCTAssertNil(rows["budget-a"]?.windowDiscoveryFailure)
-        XCTAssertEqual(rows["budget-b"]?.windows.map(\.windowID), [CGWindowID(getppid())])
-        XCTAssertTrue(rows["budget-b"]?.windowDiscoveryFailure?.contains("budget") == true)
-        for id in ["budget-a", "budget-b"] {
+        for id in ["budget-b", "budget-c"] {
+            XCTAssertEqual(rows[id]?.windows.count, 1, "\(id) keeps its cached row")
+            XCTAssertTrue(rows[id]?.windowDiscoveryFailure?.contains("budget") == true)
+        }
+
+        // Cancellation is not a stale observation: the listing stops.
+        server.setDiscoveryHook { _ in throw AXTraversalStopped(reason: .cancelled, detail: "fixture") }
+        let cancelled = await manager.handle(operatorList)
+        server.setDiscoveryHook(nil)
+        XCTAssertFalse(cancelled.ok)
+
+        for id in ids {
             var destroy = Request(cmd: "session.destroy")
             destroy.session = id
             destroy.operatorScope = true

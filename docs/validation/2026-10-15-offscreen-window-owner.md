@@ -23,7 +23,8 @@ any window. Only counts and window numbers were recorded, without titles or scre
 - `session.list` no longer fails when one session's refresh is incomplete. That row keeps its
   last-known windows and reports `windowDiscoveryFailure`. Window commands, mutations and
   teardown still refuse incomplete discovery. All sessions in one listing share a four-second
-  discovery budget; a session reached after it is exhausted keeps its cached row and says so.
+  discovery budget, each refresh getting a fair share of what remains; a session reached after
+  it is exhausted keeps its cached row and says so. Cancellation still stops the listing.
   The Viewer's sidebar and inspector mark windows that may be out of date.
 - `doctor` reads only the service's own `state`/`pid` from `launchctl print`; nested endpoint
   and event-source blocks no longer report a running LaunchAgent as not running.

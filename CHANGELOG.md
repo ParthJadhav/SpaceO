@@ -12,7 +12,8 @@ All notable user-visible changes are recorded here. SpaceO follows
   for up to a minute (#47).
 - Keep `session.list` working when one session's window discovery is incomplete. The row keeps
   its last-known windows and reports `windowDiscoveryFailure`; commands still refuse. One
-  listing refreshes every session under a shared four-second budget, and the Viewer marks a
+  listing refreshes every session under a shared four-second budget, each getting a fair share
+  of what remains; cancellation still stops the listing. The Viewer marks a
   session whose windows may be out of date.
 - Report a running LaunchAgent as running in `doctor`: nested `launchctl print` blocks no longer
   override the service's own state. Re-check MCP daemon drift against the daemon answering now,
