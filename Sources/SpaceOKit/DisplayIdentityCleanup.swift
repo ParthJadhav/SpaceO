@@ -124,10 +124,8 @@ public enum DisplayIdentityCleanup {
     static let maximumRegistryBytes = 268_435_456
 
     static func isSpaceOProfile(_ path: String) -> Bool {
-        guard let data = try? BoundedRegularFile.read(URL(fileURLWithPath: path),
-                                                      maximumBytes: DisplayIdentityResidue.maximumProfileBytes),
-              let model = DisplayIdentityResidue.displayModel(profile: data) else { return false }
-        return model.vendor == 0x1AF2 && model.product == 0x0001
+        DisplayIdentityResidue.readPrefix(path, maximum: DisplayIdentityResidue.maximumProfilePrefix)
+            .map(DisplayIdentityResidue.isSpaceOProfile) ?? false
     }
 
     public static func plan(_ environment: Environment = .live) throws -> Plan {
@@ -153,13 +151,12 @@ public enum DisplayIdentityCleanup {
 
     /// Every SpaceO profile in the directory, or a refusal; never a partial or substituted list.
     static func spaceOProfiles(in directory: String) throws -> [String] {
-        let listing: (names: [String], truncated: Bool)
-        do { listing = try DisplayIdentityResidue.profileNames(in: directory) }
+        let found: (paths: [String], examined: Int, truncated: Bool)
+        do { found = try DisplayIdentityResidue.spaceOProfiles(in: directory) }
         catch DisplayIdentityResidue.ListingError.missing { return [] }
         catch { throw Failure.profileInventoryUnreadable }
-        guard !listing.truncated else { throw Failure.profileInventoryTruncated }
-        return listing.names.map { URL(fileURLWithPath: directory).appendingPathComponent($0).path }
-            .filter(isSpaceOProfile)
+        guard !found.truncated else { throw Failure.profileInventoryTruncated }
+        return found.paths
     }
 
     private static func requireQuiescent(_ environment: Environment) throws {
@@ -178,7 +175,10 @@ public enum DisplayIdentityCleanup {
         let release = try environment.acquireExclusion()
         defer { release() }
         try requireQuiescent(environment)
-        let plan = try Self.plan(environment)
+        let profilePaths = try spaceOProfiles(in: environment.profileDirectory)
+        let listing = try environment.registrations()
+        let (devices, unattributed) = spaceODevices(in: listing)
+        let plan = Plan(registrations: devices, profilePaths: profilePaths, unattributedWithoutProfile: unattributed)
         let manager = FileManager.default
         guard manager.fileExists(atPath: environment.registryPath) else { throw Failure.registryMissing }
 
@@ -219,7 +219,11 @@ public enum DisplayIdentityCleanup {
                            remainingRegistrations: plan.registrations.count, movedProfiles: 0,
                            verificationFailed: true)
         }
-        let remaining = spaceODevices(in: after).devices.count
+        // A planned device still listed in any form counts as remaining, even if its profile
+        // metadata changed so it no longer looks like SpaceO's.
+        let planned = Set(plan.registrations.map(\.deviceID))
+        let remainingIDs = planned.intersection(after.map(\.deviceID))
+        let remaining = remainingIDs.count
         var outcome = Outcome(plan: plan, backup: backup.path,
                               unregistered: plan.registrations.count - remaining,
                               remainingRegistrations: remaining, movedProfiles: 0)
@@ -229,8 +233,10 @@ public enum DisplayIdentityCleanup {
             outcome.profileRemovalSkipped = true
             return outcome
         }
-        // Never remove a profile that any registration still references; ColorSync would recreate it.
+        // Never remove a profile that any registration still references, or one a surviving planned
+        // device referenced before; ColorSync would recreate it.
         let referenced = Set(after.compactMap(\.profilePath))
+            .union(listing.filter { remainingIDs.contains($0.deviceID) }.compactMap(\.profilePath))
         for path in plan.profilePaths where !referenced.contains(path) {
             environment.removeProfile(path)
             if manager.fileExists(atPath: path) { outcome.failedProfiles.append(path) }
@@ -241,20 +247,18 @@ public enum DisplayIdentityCleanup {
 
     // MARK: - ColorSync
 
-    private final class Collector {
+    final class Collector {
         static let limit = 65_536
         var registrations: [Registration] = []
+        var callbacks = 0
         var truncated = false
-    }
 
-    static func liveRegistrations() throws -> [Registration] {
-        let collector = Collector()
-        let context = Unmanaged.passUnretained(collector).toOpaque()
-        ColorSyncIterateDeviceProfiles({ info, context in
-            guard let info = info as? [String: Any], let context else { return true }
-            let collector = Unmanaged<Collector>.fromOpaque(context).takeUnretainedValue()
-            guard collector.registrations.count < Collector.limit else {
-                collector.truncated = true
+        /// One ColorSync callback; false stops the walk. Every callback counts toward the limit,
+        /// so printers or malformed entries cannot extend it.
+        func accept(_ info: [String: Any]) -> Bool {
+            callbacks += 1
+            guard callbacks <= Self.limit else {
+                truncated = true
                 return false
             }
             guard let deviceClass = info[kColorSyncDeviceClass.takeUnretainedValue() as String] as? String,
@@ -264,10 +268,20 @@ public enum DisplayIdentityCleanup {
             let deviceID = CFUUIDCreateString(nil, (rawID as! CFUUID)) as String
             let url = info[kColorSyncDeviceProfileURL.takeUnretainedValue() as String] as? URL
             let factory = info[kColorSyncDeviceProfileIsFactory.takeUnretainedValue() as String] as? Bool ?? false
-            collector.registrations.append(Registration(deviceClass: deviceClass, deviceID: deviceID,
-                                                        profilePath: url?.isFileURL == true ? url?.path : nil,
-                                                        isFactory: factory))
+            registrations.append(Registration(deviceClass: deviceClass, deviceID: deviceID,
+                                              profilePath: url?.isFileURL == true ? url?.path : nil,
+                                              isFactory: factory))
             return true
+        }
+    }
+
+    static func liveRegistrations() throws -> [Registration] {
+        let collector = Collector()
+        let context = Unmanaged.passUnretained(collector).toOpaque()
+        ColorSyncIterateDeviceProfiles({ info, context in
+            guard let context else { return false }
+            let collector = Unmanaged<Collector>.fromOpaque(context).takeUnretainedValue()
+            return collector.accept(info as? [String: Any] ?? [:])
         }, context)
         guard !collector.truncated else { throw Failure.listingTruncated }
         return collector.registrations

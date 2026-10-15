@@ -534,4 +534,54 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         }
         XCTAssertTrue(colorSync.unregistered.isEmpty)
     }
+
+    func testEveryColorSyncCallbackCountsTowardTheListingLimit() {
+        let collector = DisplayIdentityCleanup.Collector()
+        let printer: [String: Any] = [kColorSyncDeviceClass.takeUnretainedValue() as String: "prtr"]
+        var stopped = false
+        for _ in 0...DisplayIdentityCleanup.Collector.limit where !collector.accept(printer) { stopped = true }
+        XCTAssertTrue(stopped)
+        XCTAssertTrue(collector.truncated)
+        XCTAssertTrue(collector.registrations.isEmpty)
+        let display: [String: Any] = [
+            kColorSyncDeviceClass.takeUnretainedValue() as String: kColorSyncDisplayDeviceClass.takeUnretainedValue() as String,
+            kColorSyncDeviceID.takeUnretainedValue() as String: CFUUIDCreate(nil) as Any,
+            kColorSyncDeviceProfileURL.takeUnretainedValue() as String: URL(fileURLWithPath: "/tmp/x.icc"),
+            kColorSyncDeviceProfileIsFactory.takeUnretainedValue() as String: true,
+        ]
+        let fresh = DisplayIdentityCleanup.Collector()
+        XCTAssertTrue(fresh.accept(display))
+        XCTAssertEqual(fresh.registrations.first?.profilePath, "/tmp/x.icc")
+        XCTAssertEqual(fresh.registrations.first?.isFactory, true)
+    }
+
+    func testAPlannedDeviceStillListedWithChangedMetadataIsNotConfirmed() throws {
+        let colorSync = try fixture()
+        let profileA = directory.appendingPathComponent("Displays/SpaceO display 1-A.icc").path
+        var environment = environment(colorSync)
+        let unregister = environment.unregister
+        environment.unregister = { registration in
+            unregister(registration)
+            if registration.deviceID == "A" {
+                // Still registered, but now listed without its profile.
+                colorSync.registrations.append(.init(deviceClass: "mntr", deviceID: "A", profilePath: nil))
+            }
+        }
+        let outcome = try DisplayIdentityCleanup.apply(environment,
+                                                       backupRoot: directory.appendingPathComponent("backup").path)
+        XCTAssertEqual(outcome.remainingRegistrations, 1)
+        XCTAssertFalse(outcome.confirmed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: profileA), "the surviving device keeps its profile")
+    }
+
+    func testTheProfileScanHasATotalReadBudget() throws {
+        _ = try fixture()
+        let displays = directory.appendingPathComponent("Displays").path
+        let complete = try DisplayIdentityResidue.spaceOProfiles(in: displays)
+        XCTAssertFalse(complete.truncated)
+        XCTAssertEqual(complete.paths.count, 4)
+        let partial = try DisplayIdentityResidue.spaceOProfiles(in: displays, budget: 300)
+        XCTAssertTrue(partial.truncated)
+        XCTAssertLessThan(partial.examined, 6)
+    }
 }

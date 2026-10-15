@@ -16,7 +16,11 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
     public static let profilesDirectory = "/Library/ColorSync/Profiles/Displays"
     public static let registryPath = "/Library/Caches/ColorSync/com.apple.colorsync.devices"
     static let maximumProfiles = 4_096
-    static let maximumProfileBytes = 1_048_576
+    /// The make-and-model tag of a generated display profile (about 3.4 KB) lies in its first
+    /// kilobytes; larger profiles are only read this far, which is enough to rule them in or out.
+    static let maximumProfilePrefix = 65_536
+    /// Every scan reads at most this much in total, however many profiles there are.
+    static let maximumScanBytes = 33_554_432
     /// Bounded identities leave a handful; hundreds only come from per-attachment identities.
     public static let cleanupThreshold = 64
 
@@ -53,18 +57,51 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
 
     public static func scan(directory: String = profilesDirectory,
                             registry: String = registryPath) -> DisplayIdentityResidue? {
-        guard let listing = try? profileNames(in: directory) else { return nil }
-        let profiles = listing.names
-        var spaceO = 0
-        for name in profiles {
-            let url = URL(fileURLWithPath: directory).appendingPathComponent(name)
-            guard let data = try? BoundedRegularFile.read(url, maximumBytes: maximumProfileBytes),
-                  let model = displayModel(profile: data) else { continue }
-            if model.vendor == 0x1AF2, model.product == 0x0001 { spaceO += 1 }
-        }
+        guard let found = try? spaceOProfiles(in: directory) else { return nil }
         let registryBytes = (try? FileManager.default.attributesOfItem(atPath: registry))?[.size] as? Int
-        return DisplayIdentityResidue(spaceOProfiles: spaceO, totalProfiles: profiles.count,
-                                      truncated: listing.truncated, registryBytes: registryBytes)
+        return DisplayIdentityResidue(spaceOProfiles: found.paths.count, totalProfiles: found.examined,
+                                      truncated: found.truncated, registryBytes: registryBytes)
+    }
+
+    /// SpaceO's profiles in `directory`. Truncated when the listing or the total read budget ran
+    /// out first; the paths are then a lower bound.
+    static func spaceOProfiles(in directory: String, budget: Int = maximumScanBytes)
+        throws -> (paths: [String], examined: Int, truncated: Bool) {
+        let listing = try profileNames(in: directory)
+        var remaining = budget, paths: [String] = [], examined = 0
+        for name in listing.names {
+            guard remaining > 0 else { return (paths, examined, true) }
+            let path = URL(fileURLWithPath: directory).appendingPathComponent(name).path
+            let data = readPrefix(path, maximum: min(maximumProfilePrefix, remaining)) ?? Data()
+            remaining -= data.count
+            examined += 1
+            if isSpaceOProfile(data) { paths.append(path) }
+        }
+        return (paths, examined, listing.truncated)
+    }
+
+    static func isSpaceOProfile(_ data: Data) -> Bool {
+        guard let model = displayModel(profile: data) else { return false }
+        return model.vendor == 0x1AF2 && model.product == 0x0001
+    }
+
+    /// The first `maximum` bytes of a regular file; nil for anything else or on error.
+    static func readPrefix(_ path: String, maximum: Int) -> Data? {
+        guard maximum > 0, !path.utf8.contains(0) else { return nil }
+        let descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)
+        guard descriptor >= 0 else { return nil }
+        defer { close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
+        var bytes = [UInt8](repeating: 0, count: maximum)
+        var count = 0
+        while count < maximum {
+            let read = bytes.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress! + count, maximum - count) }
+            if read < 0, errno == EINTR { continue }
+            guard read > 0 else { break }
+            count += read
+        }
+        return Data(bytes.prefix(count))
     }
 
     /// The vendor and product in an ICC profile's Apple `mmod` tag, or nil when absent or malformed.

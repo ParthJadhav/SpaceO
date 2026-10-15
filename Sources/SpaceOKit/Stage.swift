@@ -396,8 +396,9 @@ public final class Stage: @unchecked Sendable {
             try operation.check()
             guard !spaces.isEmpty else {
                 let retired = Self.identities.rotate(identity)
-                throw SpaceOError.stageCreationFailed("published display has no verified managed Space"
-                    + (retired ? "" : Self.identityNotRetired))
+                try Self.rejectPublication(display, reason: "published display has no verified managed Space"
+                                               + (retired ? "" : Self.identityNotRetired),
+                                           coordinator: Self.lifecycle)
             }
             let bounds = display.bounds
             let scale: Double? = display.pixelWidth.flatMap { pixels in
