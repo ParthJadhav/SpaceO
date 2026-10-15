@@ -584,4 +584,29 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         XCTAssertTrue(partial.truncated)
         XCTAssertLessThan(partial.examined, 6)
     }
+
+    func testAnUnreadableProfileIsNeverTreatedAsExamined() throws {
+        let colorSync = try fixture()
+        let hidden = directory.appendingPathComponent("Displays/SpaceO display 2-E.icc").path
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: hidden)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: hidden) }
+        XCTAssertThrowsError(try DisplayIdentityCleanup.plan(environment(colorSync))) {
+            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .profileInventoryUnreadable)
+        }
+        let residue = try XCTUnwrap(DisplayIdentityResidue.scan(directory: directory.appendingPathComponent("Displays").path))
+        XCTAssertTrue(residue.truncated, "an unreadable profile makes the count a lower bound")
+    }
+
+    func testAnOversizedProfileIsNotBackedUpOrCleaned() throws {
+        let colorSync = try fixture()
+        let path = directory.appendingPathComponent("Displays/SpaceO display 1-A.icc")
+        var data = try Data(contentsOf: path)
+        data.append(Data(count: DisplayIdentityCleanup.maximumProfileBytes))
+        try data.write(to: path)
+        XCTAssertThrowsError(try DisplayIdentityCleanup.apply(environment(colorSync),
+                                                              backupRoot: directory.appendingPathComponent("b").path)) {
+            guard case .backupFailed = $0 as? DisplayIdentityCleanup.Failure else { return XCTFail("\($0)") }
+        }
+        XCTAssertTrue(colorSync.unregistered.isEmpty)
+    }
 }

@@ -59,25 +59,31 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
                             registry: String = registryPath) -> DisplayIdentityResidue? {
         guard let found = try? spaceOProfiles(in: directory) else { return nil }
         let registryBytes = (try? FileManager.default.attributesOfItem(atPath: registry))?[.size] as? Int
+        // An unreadable profile might be SpaceO's, so the counts are then lower bounds.
         return DisplayIdentityResidue(spaceOProfiles: found.paths.count, totalProfiles: found.examined,
-                                      truncated: found.truncated, registryBytes: registryBytes)
+                                      truncated: found.truncated || found.unreadable > 0,
+                                      registryBytes: registryBytes)
     }
 
     /// SpaceO's profiles in `directory`. Truncated when the listing or the total read budget ran
-    /// out first; the paths are then a lower bound.
+    /// out first; `unreadable` counts entries that could not be read as regular files. In either
+    /// case the paths are only a lower bound.
     static func spaceOProfiles(in directory: String, budget: Int = maximumScanBytes)
-        throws -> (paths: [String], examined: Int, truncated: Bool) {
+        throws -> (paths: [String], examined: Int, truncated: Bool, unreadable: Int) {
         let listing = try profileNames(in: directory)
-        var remaining = budget, paths: [String] = [], examined = 0
+        var remaining = budget, paths: [String] = [], examined = 0, unreadable = 0
         for name in listing.names {
-            guard remaining > 0 else { return (paths, examined, true) }
+            guard remaining > 0 else { return (paths, examined, true, unreadable) }
             let path = URL(fileURLWithPath: directory).appendingPathComponent(name).path
-            let data = readPrefix(path, maximum: min(maximumProfilePrefix, remaining)) ?? Data()
+            guard let data = readPrefix(path, maximum: min(maximumProfilePrefix, remaining)) else {
+                unreadable += 1
+                continue
+            }
             remaining -= data.count
             examined += 1
             if isSpaceOProfile(data) { paths.append(path) }
         }
-        return (paths, examined, listing.truncated)
+        return (paths, examined, listing.truncated, unreadable)
     }
 
     static func isSpaceOProfile(_ data: Data) -> Bool {

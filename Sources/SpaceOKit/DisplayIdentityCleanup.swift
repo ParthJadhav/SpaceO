@@ -122,6 +122,9 @@ public enum DisplayIdentityCleanup {
     }
 
     static let maximumRegistryBytes = 268_435_456
+    /// A generated display profile is about 3.4 KB.
+    static let maximumProfileBytes = 1_048_576
+    static let maximumProfileBackupBytes = 268_435_456
 
     static func isSpaceOProfile(_ path: String) -> Bool {
         DisplayIdentityResidue.readPrefix(path, maximum: DisplayIdentityResidue.maximumProfilePrefix)
@@ -151,11 +154,13 @@ public enum DisplayIdentityCleanup {
 
     /// Every SpaceO profile in the directory, or a refusal; never a partial or substituted list.
     static func spaceOProfiles(in directory: String) throws -> [String] {
-        let found: (paths: [String], examined: Int, truncated: Bool)
+        let found: (paths: [String], examined: Int, truncated: Bool, unreadable: Int)
         do { found = try DisplayIdentityResidue.spaceOProfiles(in: directory) }
         catch DisplayIdentityResidue.ListingError.missing { return [] }
         catch { throw Failure.profileInventoryUnreadable }
         guard !found.truncated else { throw Failure.profileInventoryTruncated }
+        // Any unreadable entry could be SpaceO residue this cleanup would silently leave behind.
+        guard found.unreadable == 0 else { throw Failure.profileInventoryUnreadable }
         return found.paths
     }
 
@@ -201,9 +206,19 @@ public enum DisplayIdentityCleanup {
                     + "\(Self.maximumRegistryBytes / 1_048_576) MB")
             }
             try registry.write(to: backup.appendingPathComponent("com.apple.colorsync.devices"), options: [.withoutOverwriting])
+            // Bounded per file and in total: a corrupt profile must not fill the disk under root.
+            var budget = Self.maximumProfileBackupBytes
             for path in plan.profilePaths {
                 let name = URL(fileURLWithPath: path).lastPathComponent
-                try manager.copyItem(atPath: path, toPath: backup.appendingPathComponent("Profiles/\(name)").path)
+                let data: Data
+                do {
+                    data = try BoundedRegularFile.read(URL(fileURLWithPath: path),
+                                                       maximumBytes: min(Self.maximumProfileBytes, budget))
+                } catch {
+                    throw Failure.backupFailed("\(name) is not a regular profile within the backup limits")
+                }
+                budget -= data.count
+                try data.write(to: backup.appendingPathComponent("Profiles/\(name)"), options: [.withoutOverwriting])
             }
         } catch let failure as Failure {
             throw failure
