@@ -35,6 +35,9 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
 
     private let queue = DispatchQueue(label: "spaceo.display-lifecycle")
     private let failureQueue = DispatchQueue(label: "spaceo.display-lifecycle-failure")
+    /// Best-effort diagnostics never share `failureQueue`, which persists the safety latch.
+    private let diagnosticsQueue = DispatchQueue(label: "spaceo.display-lifecycle-diagnostics")
+    private var slowQueryReportPending = false
     private let lock = NSLock()
     private var failure: String?
     private var operations: [UUID: Operation] = [:]
@@ -195,8 +198,7 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
                 return true
             }
             if late {
-                // Best-effort diagnostics never extend the caller's deadline (logging may stall).
-                failureQueue.async { [onSlowQuery] in onSlowQuery(seconds) }
+                reportSlowQuery(seconds)
                 throw QueryDeferred()
             }
             if !readOnly {
@@ -237,6 +239,22 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
                 throw SpaceOError.stageCreationFailed("display operation completed without a result")
             }
             return try result.get()
+        }
+    }
+
+    /// Off the caller and off failure persistence; while one report is outstanding (a stalled
+    /// logger), further slow queries are coalesced rather than queued without bound.
+    private func reportSlowQuery(_ seconds: TimeInterval) {
+        let start = lock.withLock { () -> Bool in
+            guard !slowQueryReportPending else { return false }
+            slowQueryReportPending = true
+            return true
+        }
+        guard start else { return }
+        diagnosticsQueue.async { [weak self, onSlowQuery] in
+            onSlowQuery(seconds)
+            guard let self else { return }
+            self.lock.withLock { self.slowQueryReportPending = false }
         }
     }
 

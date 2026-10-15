@@ -178,6 +178,23 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         XCTAssertNotNil(mutations.failureReason)
     }
 
+    func testStalledSlowQueryLoggingCannotDelayFailurePersistence() {
+        let logBlocked = DispatchSemaphore(value: 0)
+        let unblockRead = DispatchSemaphore(value: 0)
+        let persisted = expectation(description: "failure persisted while logging stalls")
+        let coordinator = DisplayLifecycleCoordinator(
+            onFailure: { _ in persisted.fulfill() },
+            onSlowQuery: { _ in _ = logBlocked.wait(timeout: .now() + 3) })
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.1, onlyWhenIdle: true, readOnly: true) { _ -> Int in
+            _ = unblockRead.wait(timeout: .now() + 3)
+            return 1
+        })
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.2) { _ in })
+        wait(for: [persisted], timeout: 1)
+        logBlocked.signal()
+        unblockRead.signal()
+    }
+
     func testMutationBehindAStuckReadStillOpensTheCircuitAtItsDeadline() {
         let tripped = expectation(description: "circuit opened")
         let coordinator = DisplayLifecycleCoordinator { _ in tripped.fulfill() }
