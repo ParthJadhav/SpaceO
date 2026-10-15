@@ -24,6 +24,18 @@ Status definitions:
 
 ## Active milestone
 
+### October 16 ColorSync display identities (RA-057)
+
+- Root cause established: per-attachment random serials grew ColorSync's device registry
+  without bound, so every display request got more expensive. Separately, WindowServer polls
+  ColorSync for every display attached since login. Live testing under the override, which
+  waived ColorSync load, drove the 01:13 watchdog logout.
+- Done: bounded deterministic identities with persisted poisoned-identity rotation, retention of
+  a settings-refused display, doctor residue reporting, and owner-run
+  `safety clean-display-identities`. The override now keeps the measured ColorSync gate.
+- Open: the owner runs the root cleanup on this Mac, logs back in, and retains a normal-admission
+  live run. See the [investigation record](docs/validation/2026-10-16-colorsync-display-identities.md).
+
 ### October 15–16 maintenance release 1.0.8
 
 - Merged contributor fixes #48/#49, Dependabot #50/#51, report-driven reliability #46, the #47

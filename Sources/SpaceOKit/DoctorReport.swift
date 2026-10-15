@@ -80,6 +80,8 @@ public struct DoctorReport: Sendable {
     public var logging: LoggingSettings? = nil
     /// Local journal status, also collected when no daemon is running.
     public var displaySafety: DisplaySafetyStatus? = nil
+    /// ColorSync state left by per-attachment display identities (RA-057); nil when unreadable.
+    public var displayIdentityResidue: DisplayIdentityResidue? = nil
 
     public var effectiveDisplaySafety: DisplaySafetyStatus? {
         if let local = displaySafety, !local.allowsCreation { return local }
@@ -210,6 +212,9 @@ public struct DoctorReport: Sendable {
         lines.append(Self.row("display mirroring", mirroredDisplayIDs.isEmpty ? "off"
             : "on (display ids \(Self.ids(mirroredDisplayIDs)))"))
         lines.append(Self.row("SpaceO display ids", Self.ids(spaceODisplayIDs)))
+        if let residue = displayIdentityResidue {
+            lines.append(Self.row("display identities", residue.summary))
+        }
         if !deferredRetirementDisplayIDs.isEmpty {
             lines.append(Self.row("deferred retirement", Self.ids(deferredRetirementDisplayIDs)
                 + " — retained by the daemon; cleanup is incomplete"))

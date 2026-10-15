@@ -9,9 +9,8 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertTrue(DisplayTestingPolicy.enabled(environment: ["SPACEO_LIVE_TESTS": "1", "SPACEO_TESTING_HOST": "1"]))
         let health = DisplayHostHealth(testingOverride: true, sample: { throw DisplayHostHealthSample.Unknown() })
         try health.requireHealthy()
-        health.resetReconfigurationSettling()
-        try health.requireSettledForReconfiguration(timeout: 0)
-        try health.requireStillSettledForReconfiguration()
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
+                             "graph changes wait for ColorSync observations even under the override")
         XCTAssertEqual(health.report.testingOverride, true)
         XCTAssertEqual(health.report.reasons, ["testing_override"])
         XCTAssertNil(health.report.colorsyncCPUPercent)
@@ -19,6 +18,43 @@ final class DisplayHostHealthTests: XCTestCase {
             "host health: recent_windowserver_diagnostic", testingOverride: true))
         XCTAssertFalse(DisplayLifecycleLease.isRecoverableHostHealthFailure(
             "display mutation failed", testingOverride: true))
+    }
+
+    func testTestingOverrideStillRefusesGraphChangesUnderMeasuredColorSyncLoad() throws {
+        let clock = Clock()
+        let health = DisplayHostHealth(testingOverride: true, sample: { throw DisplayHostHealthSample.Unknown() },
+                                       now: { clock.value })
+        // Pressure, swap and WindowServer diagnostics are waived; quiet intervals settle.
+        health.accept(sample(100, cpu: 10, pressure: 4, swap: 50, reports: 3))
+        health.accept(sample(105, cpu: 10.5, pressure: 4, swap: 90, reports: 3))
+        health.accept(sample(110, cpu: 11, pressure: 4, swap: 120, reports: 3))
+        try health.requireStillSettledForReconfiguration()
+        XCTAssertEqual(health.report.state, .ready)
+        XCTAssertEqual(health.report.reasons, ["testing_override"])
+
+        // Every DisplayHostHealthSampler service at 0.4 CPU-seconds per second is well over 25%.
+        health.accept(sample(115, cpu: 13, swap: 120))
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(health.report.colorsyncCPUPercent), 25)
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration()) {
+            XCTAssertTrue("\($0)".contains("ColorSync has not settled"), "\($0)")
+        }
+        XCTAssertEqual(health.report.state, .ready, "load refuses changes without a sticky fault")
+
+        health.accept(sample(120, cpu: 13.1, swap: 120))
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
+        health.accept(sample(125, cpu: 13.2, swap: 120))
+        try health.requireStillSettledForReconfiguration()
+    }
+
+    func testTestingOverrideAdmitsUnmeasurableIntervals() throws {
+        let health = DisplayHostHealth(testingOverride: true)
+        health.accept(sample(100, pid: 7))
+        health.accept(sample(105, pid: 8))  // a restarted service has no measurable interval
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
+        health.accept(sample(110, pid: 9))
+        try health.requireStillSettledForReconfiguration()
+        XCTAssertNil(health.report.colorsyncCPUPercent)
+        XCTAssertEqual(health.report.state, .ready)
     }
 
     private final class Clock: @unchecked Sendable {

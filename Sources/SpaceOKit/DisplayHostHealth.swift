@@ -145,8 +145,8 @@ final class DisplayHostHealth: @unchecked Sendable {
         self.waitForReconfiguration = waitForReconfiguration
         initialDecision.enter()
         if testingOverride {
+            // Admission is ready, but reconfiguration still waits for measured ColorSync load.
             current = .init(state: .ready, reasons: ["testing_override"], testingOverride: true)
-            consecutiveSettledSamples = 2
             finishInitialDecision()
         }
     }
@@ -214,7 +214,9 @@ final class DisplayHostHealth: @unchecked Sendable {
         }
         let error = SpaceOError.stageCreationFailed("display reconfiguration refused: ColorSync has not settled "
             + "below \(Int(Self.reconfigurationCPUThresholdPercent))% for two consecutive observations; "
-            + "retain the display owner; wait for ColorSync to settle before another request.")
+            + "retain the display owner; wait for ColorSync to settle before another request. If it stays busy, "
+            + "`spaceo doctor` reports leftover display identities to clean, and logging out ends the ColorSync "
+            + "work macOS keeps for every display attached since login.")
         return ReconfigurationSettlingRefusal(underlyingError: error)
     }
 
@@ -271,7 +273,6 @@ final class DisplayHostHealth: @unchecked Sendable {
     }
 
     private func start() {
-        guard !testingOverride else { return }
         lock.withLock {
             guard !started, current.state != .blocked else { return }
             started = true
@@ -285,7 +286,6 @@ final class DisplayHostHealth: @unchecked Sendable {
 
     /// Also driven directly by deterministic tests, without starting a timer or host sampler.
     func tick() {
-        guard !testingOverride else { return }
         expireIfNeeded()
         let time = now()
         let shouldSample = lock.withLock { () -> Bool in
@@ -299,13 +299,14 @@ final class DisplayHostHealth: @unchecked Sendable {
         worker.async { [weak self] in
             guard let self else { return }
             do { self.accept(try self.sample()) }
+            catch where self.testingOverride { self.acceptOverride(nil) }
             catch let error as DisplayHostHealthSample.Unknown { self.fail("host_health_unknown", unavailableInput: error.reason) }
             catch { self.fail("host_health_unknown") }
         }
     }
 
     func accept(_ next: DisplayHostHealthSample) {
-        guard !testingOverride else { return }
+        guard !testingOverride else { return acceptOverride(next) }
         // Check the independent deadline even when the watchdog has not had its next tick.
         expireIfNeeded()
         var failed: String?
@@ -358,6 +359,35 @@ final class DisplayHostHealth: @unchecked Sendable {
         if let failed { fail(failed) }
     }
 
+    /// The reserved-testing override waives memory pressure, swap, WindowServer diagnostics,
+    /// unavailable samples and sticky faults, but not measured ColorSync load (RA-057): every
+    /// display attachment leaves macOS polling ColorSync until logout, and diagnostic runs that
+    /// ignored this load saturated ColorSync until WindowServer's watchdog ended the login session.
+    /// A measured interval at or above the settling threshold refuses graph changes until two
+    /// quieter intervals follow; an unmeasurable one keeps the override's admission.
+    private func acceptOverride(_ next: DisplayHostHealthSample?) {
+        lock.withLock {
+            defer { signalReconfigurationWaiters() }
+            inFlightSince = nil
+            let before = previous
+            previous = next
+            guard let next else {
+                consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+                return
+            }
+            lastAttempt = next.uptime
+            // The first observation has no interval yet.
+            guard let before else { return }
+            let cpu = (try? DisplayHostHealthSample.assess(before, next))?.colorsyncCPUPercent
+            current.colorsyncCPUPercent = cpu
+            if let cpu, cpu >= Self.reconfigurationCPUThresholdPercent {
+                consecutiveSettledSamples = 0
+            } else {
+                consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+            }
+        }
+    }
+
     private func finishInitialDecision() {
         if waitingForInitialDecision {
             waitingForInitialDecision = false
@@ -366,6 +396,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     }
 
     private func expireIfNeeded() {
+        guard !testingOverride else { return }
         let expired = lock.withLock {
             // A producer may publish a newer observation while a reader waits for this lock.
             // Read the clock with the state so that contention is not mistaken for reversal.

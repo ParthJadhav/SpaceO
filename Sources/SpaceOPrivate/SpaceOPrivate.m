@@ -176,12 +176,21 @@ BOOL SPOSetGlobalHotKeysEnabled(BOOL enabled) {
     CGVirtualDisplay *_display;      // strong ref *is* the display's lifetime
     dispatch_queue_t _queue;         // must outlive _display
     CGDirectDisplayID _displayID;
+    BOOL _settingsApplied;
 }
 
 - (nullable instancetype)initWithName:(NSString *)name
                                 width:(uint32_t)width
                                height:(uint32_t)height
                                 hiDPI:(BOOL)hiDPI {
+    return [self initWithName:name width:width height:height hiDPI:hiDPI serial:0];
+}
+
+- (nullable instancetype)initWithName:(NSString *)name
+                                width:(uint32_t)width
+                               height:(uint32_t)height
+                                hiDPI:(BOOL)hiDPI
+                               serial:(uint32_t)serial {
     self = [super init];
     if (!self) return nil;
     if (!SPOCapabilityAvailable(SPOCapabilityVirtualDisplay)) return nil;
@@ -196,17 +205,15 @@ BOOL SPOSetGlobalHotKeysEnabled(BOOL enabled) {
     desc.name              = name;
     desc.vendorID          = 0x1AF2;                 // identifies a SpaceO stage
     desc.productID         = 0x0001;
-    // A serial number is a persistent hardware identity to WindowServer, not merely a way to
-    // distinguish two live descriptors. Reusing `name.hash` across daemon restarts lets macOS
-    // restore stale display preferences for an earlier stage — including an identity the
-    // display stack previously left online-but-inactive. The new framebuffer then has bounds,
-    // so creation appears successful, but owns no managed Space and apps stop compositing on it.
-    //
-    // A stage has no state worth restoring across process lifetimes. Give every attachment a
-    // fresh nonzero identity so it enters the display graph with clean active-display defaults.
-    do {
-        desc.serialNum = arc4random();
-    } while (desc.serialNum == 0);
+    // A serial number is a persistent hardware identity to WindowServer and ColorSync, which
+    // keep a device registration, a factory profile and display mappings per identity and never
+    // remove them. Callers pass an identity from a bounded set (RA-057): a fresh identity per
+    // attachment grew ColorSync's registry until every display-info request stalled WindowServer.
+    // An identity that macOS restores into a bad saved state (online but inactive, no managed
+    // Space) is rejected at publication and rotated by the caller. Zero keeps the historical
+    // random identity for package clients that do not choose one.
+    desc.serialNum = serial;
+    while (desc.serialNum == 0) desc.serialNum = arc4random();
     desc.maxPixelsWide     = width;
     desc.maxPixelsHigh     = height;
     desc.sizeInMillimeters = CGSizeMake(width / 4.0, height / 4.0);   // ~101 dpi
@@ -231,12 +238,15 @@ BOOL SPOSetGlobalHotKeysEnabled(BOOL enabled) {
     CGVirtualDisplaySettings *settings = [[setClass alloc] init];
     settings.modes = @[ [[modeClass alloc] initWithWidth:width height:height refreshRate:60.0] ];
     settings.hiDPI = hiDPI ? 1 : 0;
-    if (![_display applySettings:settings]) { _display = nil; return nil; }
+    // A refused mode leaves an attached display: keep owning it and report the refusal, so the
+    // caller retains it instead of ARC tearing it down as an unplanned graph change.
+    _settingsApplied = [_display applySettings:settings];
 
     _displayID = _display.displayID;
     return self;
 }
 
+- (BOOL)settingsApplied        { return _settingsApplied; }
 - (CGDirectDisplayID)displayID { return _displayID; }
 - (BOOL)valid                  { return _display != nil && _displayID != 0; }
 - (CGRect)bounds               { return _displayID ? CGDisplayBounds(_displayID) : CGRectZero; }

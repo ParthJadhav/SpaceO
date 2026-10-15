@@ -333,11 +333,20 @@ def testing_override(environment=None):
     return environment.get("SPACEO_LIVE_TESTS") == "1" and environment.get("SPACEO_TESTING_HOST") == "1"
 
 
+# The override never waives measured ColorSync load (RA-057): every display attachment leaves
+# macOS polling ColorSync until logout, and runs that ignored it ended the login session.
+TESTING_OVERRIDE_COLORSYNC_LIMIT = 25
+
+
 def apply_testing_override(report):
     if testing_override():
         report["observedAdmitted"] = report["admitted"]
         report["testingOverride"] = True
-        report["admitted"] = True
+        cpu = report.get("colorsyncCPUPercent")
+        busy = isinstance(cpu, (int, float)) and cpu >= TESTING_OVERRIDE_COLORSYNC_LIMIT
+        report["admitted"] = not busy
+        if busy and "colorsync_busy" not in report["reasons"]:
+            report["reasons"].append("colorsync_busy")
     return report
 
 

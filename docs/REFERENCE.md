@@ -495,6 +495,15 @@ unknown-health, memory-pressure or swap latch, after upgrading and stopping all 
 Current health must be ready and settled. It preserves creation budgets and refuses incident
 or timeout faults, pending work, online SpaceO displays, or unhealthy observations. Follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md) first.
 
+### Remove leftover display identities
+
+SpaceO 1.0.8 and earlier registered a new ColorSync device for every display, which slows every
+display change on the Mac. `spaceo doctor` counts them under `display identities`.
+`spaceo safety clean-display-identities --operator` lists them;
+`sudo spaceo safety clean-display-identities --apply --operator` backs them up and removes only
+SpaceO's, then asks you to log out and back in. See
+[DISPLAY_SAFETY.md](DISPLAY_SAFETY.md#display-identity-residue).
+
 Native `type --replace` and typing into a selection use Accessibility selected-text editing
 with readback. Unsupported native replacement refuses before typing; a failed postcondition
 reports unconfirmed delivery and must not be retried blindly. Screenshot file output creates
@@ -504,8 +513,9 @@ missing parent directories and names the directory if it cannot be created.
 
 Set both `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the changed source CLI,
 its daemon and the test command. This diagnostic mode bypasses host-health admission and
-the persistent rolling creation-rate limit. It retains bounded attempt history, pending-work
-checks, ownership, pool resource limits and cleanup requirements. Native safety/limits JSON
+the persistent rolling creation-rate limit, except measured ColorSync load: display changes and
+the live-test preflight still wait for ColorSync below 25%. It retains bounded attempt history,
+pending-work checks, ownership, pool resource limits and cleanup requirements. Native safety/limits JSON
 exposes `creationRateTestingOverride: true`; health JSON exposes `testingOverride: true`.
 Normal runs keep their existing limits and may still be refused by diagnostic attempt history.
 See [display safety](DISPLAY_SAFETY.md#explicit-reserved-testing-host) and

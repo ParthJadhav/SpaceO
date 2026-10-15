@@ -15,7 +15,7 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
-| RA-057 | Critical | Investigation open; live work and 1.0.4 publication held | Repeated WindowServer/ColorSync stalls preceded a forced restart; current-counter preflight and passing XCTest assertions missed system degradation |
+| RA-057 | Critical | Root cause established; bounded identities in source; host cleanup and normal-admission live run pending | Repeated WindowServer/ColorSync stalls preceded a forced restart; current-counter preflight and passing XCTest assertions missed system degradation |
 | RA-056 | Medium | Prevention and 1.0.1 provenance migration verified; third-party historical copies remain outside repository control | Release examples and routine output repeated signing identity; live CI could publish raw host diagnostics and reports |
 | RA-055 | Critical | Containment implemented; 1.0.1 physical-display scope qualified; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
@@ -74,6 +74,26 @@ unrestricted display-creation and live-testing posture after the September 25 in
 | RA-054 | Low | Fixed | Socket line reads issued one syscall per byte; the cursor fence queried the display list twice per event |
 
 ### RA-057 — September 29 freeze after passing live assertions
+
+October 16 root cause: the [identity investigation](docs/validation/2026-10-16-colorsync-display-identities.md)
+established the mechanism behind the stalls and the 01:13 watchdog logout. That logout was caused
+by live testing under the testing-host override, which then waived ColorSync load.
+
+- **Registry growth.** Every random per-attachment serial left a permanent ColorSync registration,
+  profile and WindowServer mapping. ColorSync re-parses that registry for each display request,
+  so every request got more expensive.
+- **Polls that persist until logout.** WindowServer keeps two requests every 5.05 seconds for
+  every display attached since login.
+
+Display serials now come from a bounded, deterministic per-geometry set. A poisoned identity is
+retired by a persisted generation. Doctor reports leftover identities, and an owner-run root
+cleanup removes only SpaceO's registrations and profiles. The testing override no longer waives
+measured ColorSync load.
+
+A controlled experiment confirmed that reuse adds no registry, profile or mapping entries. It also
+confirmed that the poll is per attachment, so attachments stay budgeted and gated on measured
+load. RA-057 stays open until the owner cleans this host and a normal-admission live run is
+retained.
 
 October 4 continued investigation measured approximately 31% combined ColorSync CPU with
 no SpaceO daemon, Viewer or virtual displays. Profile metadata stayed unchanged; ten guarded
