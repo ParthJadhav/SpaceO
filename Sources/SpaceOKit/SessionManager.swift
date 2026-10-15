@@ -1182,7 +1182,10 @@ public actor SessionManager {
                 continue
             }
             do {
-                try session.refreshWindowsChecked()
+                // One app's incomplete discovery must not fail every client's listing (#47).
+                // The failed refresh preserved the last-known ledger, and the row reports why
+                // it is not a fresh observation; commands still refuse on the throwing refresh.
+                _ = try? session.refreshWindowsChecked()
                 let info = SessionInfo(session)
                 try persistSession(
                     session,
@@ -1728,6 +1731,7 @@ public actor SessionManager {
                     var redacted = info
                     redacted.apps = []
                     redacted.windows = []
+                    redacted.windowDiscoveryFailure = nil
                     redacted.redacted = true
                     return redacted
                 }

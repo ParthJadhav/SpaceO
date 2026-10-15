@@ -107,6 +107,13 @@ final class MCPConnectionMemory: @unchecked Sendable {
         driftWarning = warning
     }
 
+    /// A drift warning that the next tool result would deliver.
+    var hasUndeliveredDaemonDrift: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return driftWarning != nil && !driftWarningDelivered
+    }
+
     /// The explanation for a `daemon_outdated` rewrite, when this connection saw drift.
     var daemonDrift: String? {
         lock.lock()

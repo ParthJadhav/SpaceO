@@ -524,6 +524,14 @@ public enum MCPServer {
         FileHandle.standardError.write(Data("[spaceo-mcp] \(text)\n".utf8))
     }
 
+    /// A drift warning describes the daemon that answered when it was computed. A restart can
+    /// replace that daemon between calls without this connection seeing a transport failure,
+    /// so confirm it against the daemon answering now before an agent reads it (#47).
+    private static func revalidateDaemonDrift(socketPath: String, controller: MCPControllerContext) {
+        guard controller.memory.daemonDrift != nil else { return }
+        controller.memory.setDaemonDrift(reportDaemonProvenance(Transport.pingResponse(socketPath)?.daemon))
+    }
+
     /// Log daemon provenance to stderr and return the agent-facing warning when the daemon is
     /// provably a different build. An unknown comparison is logged but not shown to the agent:
     /// it cannot act on "maybe".
@@ -1175,6 +1183,9 @@ public enum MCPServer {
         // One-time notes (daemon drift, sessions that ended in the background) lead whatever
         // this call returns, success or failure, so the agent reads them before acting on it.
         func reply(_ result: [String: Any]) {
+            if controller.memory.hasUndeliveredDaemonDrift {
+                revalidateDaemonDrift(socketPath: socketPath, controller: controller)
+            }
             let notes = controller.memory.drainNotes()
             let final = prependingNotes(notes, to: result)
             journaled.notes = notes
@@ -1251,6 +1262,9 @@ public enum MCPServer {
             return
         }
 
+        if !response.ok, response.error?.hasPrefix("unknown command") == true {
+            revalidateDaemonDrift(socketPath: socketPath, controller: controller)
+        }
         response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
         controller.record(response, for: request)
         journaled.request = request
@@ -1889,6 +1903,9 @@ public enum MCPServer {
                 + ", \(MCPPresentation.duration(now.timeIntervalSince(app.exitedAt))) ago)"
         }
         if exited.count > 8 { text += "\n  and \(exited.count - 8) more exited app(s)" }
+        if let failure = session.windowDiscoveryFailure {
+            text += "\n  windows are last known; discovery incomplete: \(failure)"
+        }
         for window in session.windows { text += "\n  " + describe(window) }
         return text
     }

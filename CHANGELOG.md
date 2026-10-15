@@ -6,6 +6,16 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Resolve the owner of an ordered-out window. The single-window Core Graphics query answers
+  only for on-screen windows, so a closing Chrome sign-in popup that still had WindowServer
+  geometry failed every window read in its session with "known window owner is unavailable"
+  for up to a minute (#47).
+- Keep `session.list` working when one session's window discovery is incomplete. The row keeps
+  its last-known windows and reports `windowDiscoveryFailure`; commands still refuse.
+- Report a running LaunchAgent as running in `doctor`: nested `launchctl print` blocks no longer
+  override the service's own state. Re-check MCP daemon drift against the daemon answering now,
+  so a replaced daemon's old version is not reported.
+
 - Preserve AX provider failures during snapshot window-root lookup instead of reporting a
   missing window. Apply the existing bounded retry and shared traversal budgets.
 

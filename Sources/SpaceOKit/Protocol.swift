@@ -349,6 +349,9 @@ public struct SessionInfo: Codable, Sendable {
     /// Abandoned sessions only: seconds left to `session.claim` it before the janitor quits its
     /// apps. Zero means reclamation is due on the janitor's next pass.
     public var graceRemainingSeconds: Double?
+    /// Why the latest window refresh did not complete. `windows` is then the retained
+    /// last-known ledger, not a fresh observation.
+    public var windowDiscoveryFailure: String?
 
     public init(_ session: AgentSession, includeLiveGeometry: Bool = true) {
         let bounds = includeLiveGeometry ? session.frame : .zero
@@ -385,6 +388,7 @@ public struct SessionInfo: Codable, Sendable {
         self.lastOwnerActionAt = controller?.lastOwnerActionAt
         self.orphanGraceSeconds = controller?.gracePeriod
         self.graceRemainingSeconds = controller?.graceRemainingSeconds
+        self.windowDiscoveryFailure = includeLiveGeometry ? session.windowRefreshFailure : nil
         self.recoveryBlockers = nil
         let input = session.agentInputSnapshot()
         self.inputPaused = input.paused

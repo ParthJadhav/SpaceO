@@ -468,6 +468,19 @@ final class MCPCompactReceiptTests: XCTestCase {
 
     // MARK: 6. Version drift
 
+    func testRevalidatedDriftFromAReplacedDaemonIsNotDelivered() {
+        let memory = MCPConnectionMemory(verbose: false)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+        memory.setDaemonDrift(MCPPresentation.daemonDriftWarning(
+            daemonVersion: "1.0.5", daemonPID: 36_079, clientVersion: "1.0.7"))
+        XCTAssertTrue(memory.hasUndeliveredDaemonDrift)
+        // Revalidation found that the daemon answering now is this server's build.
+        memory.setDaemonDrift(nil)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+        XCTAssertTrue(memory.drainNotes().isEmpty)
+        XCTAssertNil(memory.daemonDrift)
+    }
+
     func testDriftWarningLeadsTheFirstResultOnlyAndRewritesUnknownCommands() {
         let memory = MCPConnectionMemory(verbose: false)
         let warning = MCPPresentation.daemonDriftWarning(daemonVersion: "1.1.0", daemonPID: 77, clientVersion: "1.1.1")

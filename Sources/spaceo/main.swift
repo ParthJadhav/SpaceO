@@ -142,6 +142,9 @@ func printSession(_ session: SessionInfo) {
         print("   \(prefix)  pid \(app.pid)  \(app.name)"
             + "\(app.startedByUs ? "" : "  (adopted)")")
     }
+    if let failure = session.windowDiscoveryFailure {
+        print("   ! windows below are last known; discovery incomplete: \(failure)")
+    }
     printWindows(session.windows, indent: "   ")
 }
 

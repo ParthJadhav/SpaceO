@@ -208,4 +208,15 @@ final class LaunchAgentInstallerTests: XCTestCase {
             LaunchAgentInstaller.parseStatus(exitStatus: 0, output: "state = waiting\npid = 1\n").pid,
             nil)
     }
+
+    func testStatusIgnoresNestedEndpointAndEventStates() {
+        // Abridged real `launchctl print` layout: nested blocks follow the service's own keys.
+        let output = "gui/501/com.spaceo.daemon = {\n\tactive count = 1\n\tstate = running\n"
+            + "\tpid = 4242\n\tendpoints = {\n\t\t\"com.spaceo.daemon\" = {\n\t\t\tport = 0x1\n"
+            + "\t\t\tactive = 1\n\t\t}\n\t}\n\tevent sources = {\n\t\tstate = active\n\t}\n"
+            + "\t\tpid = 7\n\tjob state = running\n}\n"
+        let parsed = LaunchAgentInstaller.parseStatus(exitStatus: 0, output: output)
+        XCTAssertTrue(parsed.running)
+        XCTAssertEqual(parsed.pid, 4242)
+    }
 }

@@ -194,11 +194,14 @@ public enum LaunchAgentInstaller {
     }
 
     /// `launchctl print` emits `state = running` and `pid = N` lines for a live service.
+    /// Only the service's own keys count: nested endpoint and event-source blocks carry their
+    /// own `state = active` lines, which used to report a running daemon as not running.
     static func parseStatus(exitStatus: Int32, output: String) -> (running: Bool, pid: Int32?) {
         guard exitStatus == 0 else { return (false, nil) }
         var running = false
         var pid: Int32?
         for raw in output.split(whereSeparator: \.isNewline) {
+            guard raw.prefix(while: { $0 == "\t" }).count <= 1 else { continue }
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("state = ") { running = line == "state = running" }
             if line.hasPrefix("pid = ") { pid = Int32(line.dropFirst("pid = ".count)) }
