@@ -492,6 +492,26 @@ final class MCPCompactReceiptTests: XCTestCase {
         XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
     }
 
+    func testReplyDriftSurvivesALaterMatchingReplyInTheSameCall() {
+        let memory = MCPConnectionMemory(verbose: false)
+        // An aggregate destroy or an action's observation spans a restart: daemon A's reply was
+        // used, then a matching replacement answered before the result was delivered.
+        memory.setDaemonDrift("drift from A", daemonInstance: UUID(), fromReply: true)
+        memory.setDaemonDrift(nil, daemonInstance: UUID(), fromReply: true)
+        XCTAssertNil(memory.daemonDrift, "classification follows the latest producer")
+        XCTAssertTrue(memory.hasUndeliveredDaemonDrift)
+        XCTAssertEqual(memory.drainNotes(), ["WARNING: drift from A"])
+        XCTAssertTrue(memory.drainNotes().isEmpty, "one time only")
+    }
+
+    func testPingDriftSupersededBeforeAnyReplyIsNotDelivered() {
+        let memory = MCPConnectionMemory(verbose: false)
+        memory.setDaemonDrift("startup drift from a replaced daemon")
+        memory.setDaemonDrift(nil, daemonInstance: UUID(), fromReply: true)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+        XCTAssertTrue(memory.drainNotes().isEmpty)
+    }
+
     func testUnreachableDaemonDoesNotClearAVerifiedDriftWarning() {
         let memory = MCPConnectionMemory(verbose: false)
         let warning = MCPPresentation.daemonDriftWarning(

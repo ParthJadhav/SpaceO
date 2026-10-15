@@ -20,6 +20,10 @@ final class MCPConnectionMemory: @unchecked Sendable {
     private var driftWarning: String?
     private var driftWarningDelivered = false
     private var driftDaemonInstance: UUID?
+    private var driftFromReply = false
+    /// Reply-derived warnings replaced before delivery. Each described a result this call
+    /// already used, so a later reply from another daemon must not withdraw it unseen.
+    private var supersededReplyDrift: [String] = []
 
     /// Connection-wide verbose receipts (`SPACEO_MCP_VERBOSE=1`).
     let verbose: Bool
@@ -101,11 +105,21 @@ final class MCPConnectionMemory: @unchecked Sendable {
     }
 
     /// Set from daemon provenance. The warning is delivered on the next tool result only.
-    /// `daemonInstance` names the daemon it was computed for, when that is known.
-    func setDaemonDrift(_ warning: String?, daemonInstance: UUID? = nil) {
+    /// `daemonInstance` names the daemon it was computed for, when that is known; `fromReply`
+    /// marks provenance read from a reply this connection used, rather than from a ping.
+    func setDaemonDrift(_ warning: String?, daemonInstance: UUID? = nil, fromReply: Bool = false) {
         lock.lock()
         defer { lock.unlock() }
-        if warning != driftWarning { driftWarningDelivered = false }
+        if warning != driftWarning {
+            if let previous = driftWarning, driftFromReply, !driftWarningDelivered,
+               !supersededReplyDrift.contains(previous), supersededReplyDrift.count < 4 {
+                supersededReplyDrift.append(previous)
+            }
+            driftWarningDelivered = false
+            driftFromReply = fromReply
+        } else {
+            driftFromReply = driftFromReply || fromReply
+        }
         driftWarning = warning
         driftDaemonInstance = daemonInstance
     }
@@ -122,7 +136,7 @@ final class MCPConnectionMemory: @unchecked Sendable {
     var hasUndeliveredDaemonDrift: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return driftWarning != nil && !driftWarningDelivered
+        return (driftWarning != nil && !driftWarningDelivered) || !supersededReplyDrift.isEmpty
     }
 
     /// The explanation for a `daemon_outdated` rewrite, when this connection saw drift.
@@ -136,9 +150,10 @@ final class MCPConnectionMemory: @unchecked Sendable {
     func drainNotes() -> [String] {
         lock.lock()
         defer { lock.unlock() }
-        var notes: [String] = []
+        var notes = supersededReplyDrift.map { "WARNING: " + $0 }
+        supersededReplyDrift.removeAll()
         if let driftWarning, !driftWarningDelivered {
-            notes.append("WARNING: " + driftWarning)
+            if !notes.contains("WARNING: " + driftWarning) { notes.append("WARNING: " + driftWarning) }
             driftWarningDelivered = true
         }
         notes += pendingNotes

@@ -536,7 +536,8 @@ public enum MCPServer {
     static func bindDaemonDrift(to response: Response, controller: MCPControllerContext) -> Bool {
         guard let daemon = response.daemon else { return false }
         if controller.memory.driftNeedsCheck(for: daemon.instanceID) {
-            controller.memory.setDaemonDrift(reportDaemonProvenance(daemon), daemonInstance: daemon.instanceID)
+            controller.memory.setDaemonDrift(reportDaemonProvenance(daemon),
+                                             daemonInstance: daemon.instanceID, fromReply: true)
         }
         return true
     }
@@ -1467,7 +1468,10 @@ public enum MCPServer {
         guard let read = planned.request else { return planned.line }
         do {
             let prepared = try controller.prepare(read)
-            let observed = try Transport.send(prepared, to: socketPath, timeout: 30)
+            var observed = try Transport.send(prepared, to: socketPath, timeout: 30)
+            // The observation may come from a different daemon than the action it follows.
+            bindDaemonDrift(to: observed, controller: controller)
+            observed = rewritingOutdatedDaemon(observed, drift: controller.memory.daemonDrift)
             controller.record(observed, for: prepared)
             if observed.ok, let snapshot = observed.snapshotID, let session = prepared.session,
                let windowID = prepared.window {
