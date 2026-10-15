@@ -529,6 +529,18 @@ public enum MCPServer {
     /// so confirm it against the daemon answering now before an agent reads it (#47).
     /// Only a successful provenance reply may replace or clear it: an unreachable daemon is not
     /// evidence that the drift ended.
+    /// Every daemon reply names its producer. Recompute drift from that daemon when it is not the
+    /// one the stored warning describes, so a restart between calls can neither leave a stale
+    /// warning nor misclassify the reply. Returns whether the reply carried provenance.
+    @discardableResult
+    static func bindDaemonDrift(to response: Response, controller: MCPControllerContext) -> Bool {
+        guard let daemon = response.daemon else { return false }
+        if controller.memory.driftNeedsCheck(for: daemon.instanceID) {
+            controller.memory.setDaemonDrift(reportDaemonProvenance(daemon), daemonInstance: daemon.instanceID)
+        }
+        return true
+    }
+
     static func revalidateDaemonDrift(socketPath: String, controller: MCPControllerContext) {
         guard controller.memory.daemonDrift != nil,
               let response = Transport.pingResponse(socketPath), response.ok,
@@ -1239,6 +1251,7 @@ public enum MCPServer {
         case .ownedSessionDestroy(let requests):
             let destroyOutcome = destroyOwnedSessions(
                 requests, socketPath: socketPath, controller: controller)
+            driftBoundToReply = destroyOutcome.driftBound
             journaled.releasedSessions = destroyOutcome.destroyed
             outcome = destroyOutcome.failed ? "tool_error" : "ok"
             reply(destroyOutcome.failed
@@ -1271,15 +1284,7 @@ public enum MCPServer {
             return
         }
 
-        // Every daemon reply names its producer. Recompute drift from that daemon when it is not
-        // the one the stored warning describes, so a restart between calls can neither leave a
-        // stale warning nor misclassify this reply.
-        if let daemon = response.daemon {
-            if controller.memory.driftNeedsCheck(for: daemon.instanceID) {
-                controller.memory.setDaemonDrift(reportDaemonProvenance(daemon), daemonInstance: daemon.instanceID)
-            }
-            driftBoundToReply = true
-        }
+        if bindDaemonDrift(to: response, controller: controller) { driftBoundToReply = true }
         response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
         controller.record(response, for: request)
         journaled.request = request
@@ -1484,12 +1489,13 @@ public enum MCPServer {
         socketPath: String,
         controller: MCPControllerContext,
         timeout: TimeInterval = 120
-    ) -> (text: String, failed: Bool, destroyed: [String]) {
+    ) -> (text: String, failed: Bool, destroyed: [String], driftBound: Bool) {
         guard !requests.isEmpty else {
             return ("no sessions belong to this MCP connection; nothing to destroy. "
                     + "Sessions created by other agents are never destroyed by this tool.",
-                    false, [])
+                    false, [], false)
         }
+        var driftBound = false
 
         var destroyed: [String] = []
         var summaries: [String] = []
@@ -1497,7 +1503,9 @@ public enum MCPServer {
         for request in requests {
             let sessionID = request.session ?? "?"
             do {
-                let response = try Transport.send(request, to: socketPath, timeout: timeout)
+                var response = try Transport.send(request, to: socketPath, timeout: timeout)
+                if bindDaemonDrift(to: response, controller: controller) { driftBound = true }
+                response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
                 guard response.ok else {
                     failures.append("\(sessionID): \(renderFailure(response))")
                     continue
@@ -1522,7 +1530,7 @@ public enum MCPServer {
             lines.append("failed to destroy \(failures.count) session(s):")
             lines.append(contentsOf: failures.map { "  \($0)" })
         }
-        return (lines.joined(separator: "\n"), !failures.isEmpty, destroyed)
+        return (lines.joined(separator: "\n"), !failures.isEmpty, destroyed, driftBound)
     }
 
     /// The MCP content for a screenshot: what was captured, what its pixels mean, then the image.
