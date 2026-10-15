@@ -60,3 +60,33 @@ export function isolationDiagnostics(response) {
   }
   return Object.keys(checks).length ? { observed: true, checks } : { observed: false };
 }
+
+// MCP reuses an already running daemon instead of replacing it, and the daemon performs every
+// display operation, so this harness's environment does not establish the run's configuration.
+// Record only the override the daemon reports (`spaceo pool --json`), and refuse a run whose
+// daemon is silent, inconsistent, or differs from the requested mode.
+export function daemonTestingOverride(pool, requested) {
+  const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+  // Daemons report true, or omit the field for normal admission; anything else is unknown.
+  const flag = (value) => (value === true ? true
+    : value === undefined || value === null || value === false ? false : null);
+  const daemon = pool?.daemon;
+  let reported = null;
+  if (pool?.ok === true && isObject(daemon?.hostHealth) && isObject(pool.limits)) {
+    const fields = [daemon.hostHealth.testingOverride, pool.limits.creationRateTestingOverride];
+    if (isObject(daemon.displaySafety)) fields.push(daemon.displaySafety.creationRateTestingOverride);
+    const values = new Set(fields.map(flag));
+    if (values.size === 1 && !values.has(null)) [reported] = values;
+  }
+  const mode = (value) => (value ? "the diagnostic testing override" : "normal admission");
+  if (reported === null) {
+    return { reported, ok: false,
+      detail: "the daemon did not report one consistent testing-override state; inspect `spaceo pool --json`" };
+  }
+  if (reported !== requested) {
+    return { reported, ok: false,
+      detail: `this run requests ${mode(requested)} but the running daemon uses ${mode(reported)}; `
+        + "use a daemon started with the same SPACEO_LIVE_TESTS and SPACEO_TESTING_HOST values" };
+  }
+  return { reported, ok: true, detail: `the daemon reports ${mode(reported)}` };
+}

@@ -154,22 +154,34 @@ public final class Stage: @unchecked Sendable {
         if hostHealth.hasStarted { try hostHealth.requireHealthy() }
     }
 
+    /// Evaluated once, like the lease and host-health monitor this process constructs.
+    private static let creationRateTestingOverride = DisplayTestingPolicy.enabled()
+
     /// Includes in-memory circuit failures even if the asynchronous journal write is stalled.
     public static func displaySafetyStatus() -> DisplaySafetyStatus {
-        if let reason = lifecycle.failureReason {
-            return lifecycle.annotatingDeferredRetirements(.init(state: .blocked, reason: reason))
-        }
-        return lifecycle.annotatingDeferredRetirements(DisplayLifecycleLease.status())
+        if let reason = lifecycle.failureReason { return reportedSafety(.init(state: .blocked, reason: reason)) }
+        return reportedSafety(DisplayLifecycleLease.status())
     }
 
     /// Socket responses must never perform journal I/O or wait for the journal owner's mutex.
+    /// Nil means no owner has observed the journal yet; there is no status to annotate.
     public static func runtimeDisplaySafetyStatus() -> DisplaySafetyStatus? {
-        if let reason = lifecycle.failureReason {
-            return lifecycle.annotatingDeferredRetirements(.init(state: .blocked, reason: reason))
-        }
-        if let cached = lease.cachedStatus { return lifecycle.annotatingDeferredRetirements(cached) }
+        if let reason = lifecycle.failureReason { return reportedSafety(.init(state: .blocked, reason: reason)) }
+        if let cached = lease.cachedStatus { return reportedSafety(cached) }
         guard !lifecycle.deferredRetirementDisplayIDs.isEmpty else { return nil }
-        return lifecycle.annotatingDeferredRetirements(.init(state: .unknown))
+        return reportedSafety(.init(state: .unknown))
+    }
+
+    private static func reportedSafety(_ status: DisplaySafetyStatus) -> DisplaySafetyStatus {
+        reportedSafety(status, coordinator: lifecycle, testingOverride: creationRateTestingOverride)
+    }
+
+    /// Diagnostic evidence records the creation-rate bypass whichever path produced a status:
+    /// the in-memory circuit, the owner's cache or a read-only journal inspection.
+    static func reportedSafety(_ status: DisplaySafetyStatus, coordinator: DisplayLifecycleCoordinator,
+                               testingOverride: Bool) -> DisplaySafetyStatus {
+        coordinator.annotatingDeferredRetirements(
+            DisplayLifecycleLease.annotating(status, testingOverride: testingOverride))
     }
 
     /// XCTest's first recorded live failure also stops focused reruns through the shared latch.

@@ -47,7 +47,7 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         else if journal.pending || journal.liveTestPending == true {
             state = .init(state: .blocked, reason: "a display mutation or live case is pending or was interrupted")
         } else { state = .init(state: .ready) }
-        if testingOverride { state.creationRateTestingOverride = true }
+        state = Self.annotating(state, testingOverride: testingOverride)
         statusLock.withLock { observedStatus = state }
     }
     private let path: String
@@ -71,11 +71,20 @@ final class DisplayLifecycleLease: @unchecked Sendable {
 
     /// Never acquire the owner's lease, create/reset a file, or wait for its mutex in doctor.
     /// A concurrent write can yield unknown, which must not be reported as healthy.
-    static func status(path: String? = nil) -> DisplaySafetyStatus {
-        inspectStatus(using: inspectionWorker) {
+    static func status(path: String? = nil,
+                       testingOverride: Bool = DisplayTestingPolicy.enabled()) -> DisplaySafetyStatus {
+        annotating(inspectStatus(using: inspectionWorker) {
             // Resolve the account home on the worker too; directory services may stall.
             readStatus(path: path ?? defaultPath)
-        }
+        }, testingOverride: testingOverride)
+    }
+
+    /// Diagnostic evidence records the bypass in every state and from every reader, including
+    /// a read-only inspection made before any process has acquired the lease.
+    static func annotating(_ status: DisplaySafetyStatus, testingOverride: Bool) -> DisplaySafetyStatus {
+        var status = status
+        if testingOverride { status.creationRateTestingOverride = true }
+        return status
     }
 
     /// One bounded reader per process. A stuck read cannot grow a replacement-worker queue,

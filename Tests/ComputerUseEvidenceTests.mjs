@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { imagesChanged, isolationStatus, isolationDiagnostics, toolResult,
-  fixturePageState, pageElementFor } from "../scripts/computer-use-evidence.mjs";
+  fixturePageState, pageElementFor, daemonTestingOverride } from "../scripts/computer-use-evidence.mjs";
 
 test("failed window observations never become absent fixture events", () => {
   assert.deepEqual(fixturePageState({ ok: false, text: "CU ev=hover y=0" }),
@@ -89,6 +89,39 @@ test("only explicit intact isolation passes", () => {
   assert.equal(isolationStatus({ ok: false, text: "isolation: intact" }), "fail");
 });
 
+const daemonPool = (override, safety = {}) => ({
+  ok: true,
+  limits: override ? { creationRateTestingOverride: true } : { maximumCreationsPerTenMinutes: 12 },
+  daemon: { hostHealth: override ? { state: "ready", testingOverride: true } : { state: "ready" },
+    ...safety },
+});
+
+test("only a consistent daemon-reported testing override is recorded", () => {
+  for (const override of [false, true]) {
+    const mode = override ? "the diagnostic testing override" : "normal admission";
+    assert.deepEqual(daemonTestingOverride(daemonPool(override), override),
+      { reported: override, ok: true, detail: `the daemon reports ${mode}` });
+    // A reused daemon keeps its own mode whatever this run's environment requests.
+    const mismatch = daemonTestingOverride(daemonPool(override), !override);
+    assert.equal(mismatch.reported, override);
+    assert.equal(mismatch.ok, false);
+    assert.match(mismatch.detail, /running daemon uses/);
+  }
+  const safety = (value) => ({ displaySafety: { state: "ready", creationRateTestingOverride: value } });
+  assert.equal(daemonTestingOverride(daemonPool(true, safety(true)), true).ok, true);
+  const unavailable = [null, {}, { ...daemonPool(false), ok: false }, { ...daemonPool(false), daemon: {} },
+    { ...daemonPool(false), limits: undefined }, daemonPool(false, safety(true)), daemonPool(true, safety(undefined)),
+    { ...daemonPool(true), limits: { creationRateTestingOverride: "true" } }];
+  for (const pool of unavailable) {
+    for (const requested of [false, true]) {
+      const result = daemonTestingOverride(pool, requested);
+      assert.equal(result.reported, null, JSON.stringify(pool));
+      assert.equal(result.ok, false);
+      assert.match(result.detail, /did not report one consistent/);
+    }
+  }
+});
+
 // Run only against inert stand-ins: these checks never invoke SpaceO, apps, or WindowServer.
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -100,7 +133,30 @@ const matrix = fileURLToPath(new URL("../scripts/computer-use-check.mjs", import
 function quietHostEnvironment(root) {
   // Stub only the read-only preflight; keep these MCP fixtures independent of the host.
   writeFileSync(join(root, "python3"), "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-  return { ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1", PATH: `${root}:${process.env.PATH}` };
+  const environment = { ...process.env, TMPDIR: root, SPACEO_LIVE_TESTS: "1", PATH: `${root}:${process.env.PATH}` };
+  delete environment.SPACEO_TESTING_HOST;
+  return environment;
+}
+
+// An inert MCP server whose `pool --json` reports the given daemon testing-override mode.
+function fakeSpaceO(root, daemonOverride) {
+  const binary = join(root, "fake-mcp.mjs");
+  writeFileSync(binary, `#!${process.execPath}
+import { createInterface } from 'node:readline';
+if (process.argv[2] === 'pool') {
+  console.log(JSON.stringify(${JSON.stringify(daemonPool(daemonOverride))}));
+  process.exit(0);
+}
+createInterface({input: process.stdin}).on('line', line => {
+  const request = JSON.parse(line);
+  let response = {jsonrpc:'2.0', id:request.id};
+  if (request.method === 'initialize') response.result = {protocolVersion:'2025-11-25'};
+  else if (request.method === 'tools/list') response.result = {tools:Array.from({length:35}, (_, index) => ({name:'test' + index}))};
+  else response.error = {code:-32602, message:'PRIVATE-DIAGNOSTIC'};
+  console.log(JSON.stringify(response));
+});
+`, { mode: 0o700 });
+  return binary;
 }
 
 test("matrix exits with failure when its MCP process cannot start or exits early", () => {
@@ -121,19 +177,8 @@ test("matrix exits with failure when its MCP process cannot start or exits early
 test("matrix stops after its first suite failure and keeps diagnostics out of labels", () => {
   const root = mkdtempSync(join(tmpdir(), "spaceo-matrix-test-"));
   try {
-    const binary = join(root, "fake-mcp.mjs");
+    const binary = fakeSpaceO(root, false);
     const report = join(root, "report.json");
-    writeFileSync(binary, `#!${process.execPath}
-import { createInterface } from 'node:readline';
-createInterface({input: process.stdin}).on('line', line => {
-  const request = JSON.parse(line);
-  let response = {jsonrpc:'2.0', id:request.id};
-  if (request.method === 'initialize') response.result = {protocolVersion:'2025-11-25'};
-  else if (request.method === 'tools/list') response.result = {tools:Array.from({length:35}, (_, index) => ({name:'test' + index}))};
-  else response.error = {code:-32602, message:'PRIVATE-DIAGNOSTIC'};
-  console.log(JSON.stringify(response));
-});
-`, { mode: 0o700 });
     const run = spawnSync(process.execPath, [matrix, binary, "--suite=all", `--report=${report}`], {
       encoding: "utf8", timeout: 5_000, env: {
         ...quietHostEnvironment(root), SPACEO_CU_CHROME_APP: root, SPACEO_CU_CURSOR_APP: root,
@@ -148,9 +193,33 @@ createInterface({input: process.stdin}).on('line', line => {
     assert.deepEqual(result.steps.filter(step => step.status === "fail").map(step => step.label),
       ["[native] suite error"]);
     assert.equal(result.tools.length, 1, "later suites must not create another display");
+    assert.equal(result.configuration.testingOverride, false);
+    assert.equal(result.configuration.requestedTestingOverride, false);
     assert.doesNotMatch(JSON.stringify(result.steps), /PRIVATE-DIAGNOSTIC/);
     assert.equal(readdirSync(root).some(name => name.startsWith("spaceo-cu-")), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("matrix refuses a daemon whose testing override differs before any display work", () => {
+  for (const [daemonOverride, testingHost] of [[true, undefined], [false, "1"]]) {
+    const root = mkdtempSync(join(tmpdir(), "spaceo-matrix-test-"));
+    try {
+      const binary = fakeSpaceO(root, daemonOverride);
+      const report = join(root, "report.json");
+      const env = { ...quietHostEnvironment(root), SPACEO_CU_CHROME_APP: root, SPACEO_CU_CURSOR_APP: root };
+      if (testingHost) env.SPACEO_TESTING_HOST = testingHost;
+      const run = spawnSync(process.execPath, [matrix, binary, "--suite=all", `--report=${report}`],
+        { encoding: "utf8", timeout: 5_000, env });
+      assert.equal(run.error, undefined);
+      assert.equal(run.status, 1);
+      assert.match(run.stdout, /FAIL  \[preflight\] the daemon's testing override matches this run/);
+      assert.match(run.stdout, /running daemon uses/);
+      const result = JSON.parse(readFileSync(report, "utf8"));
+      assert.equal(result.tools.length, 0, "no session or display may be created");
+      assert.equal(result.configuration.testingOverride, daemonOverride, "the daemon's mode is recorded");
+      assert.equal(result.configuration.requestedTestingOverride, !daemonOverride);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
 });
 
 test("matrix refuses to start without reserved-host opt-in", () => {

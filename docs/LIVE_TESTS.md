@@ -62,8 +62,10 @@ SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1 make test-live-full
 ```
 
 Use the changed source binary for recovery and the MCP matrix; the environment must reach
-its daemon too. Retain these as diagnostic override runs. The helper records the observed
-refusal alongside overridden admission; normal host-health qualification remains separate.
+its daemon too. MCP reuses a running daemon, so the matrix records the daemon-reported override
+and refuses to start when it differs from the matrix environment. Retain these as diagnostic
+override runs. The helper records the observed refusal alongside overridden admission; normal
+host-health qualification remains separate.
 Host-helper JSON also retains `consoleSessionDiagnostic`: timestamped on-console,
 login-complete and lock observations, without user identity data. The IORegistry lock keys
 are undocumented diagnostics; missing/malformed observations remain unknown. This metadata

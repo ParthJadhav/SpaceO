@@ -23,13 +23,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { arch, platform, release, tmpdir } from "node:os";
 import { toolResult, imagesChanged, isolationStatus, isolationDiagnostics,
-  fixturePageState, pageElementFor } from "./computer-use-evidence.mjs";
+  fixturePageState, pageElementFor, daemonTestingOverride } from "./computer-use-evidence.mjs";
 
 const argv = process.argv.slice(2);
 const binary = argv.find((a) => !a.startsWith("--")) ?? `${process.env.HOME}/.local/bin/spaceo`;
 const suiteArg = (argv.find((a) => a.startsWith("--suite")) ?? "--suite=all").split("=")[1];
 const suites = suiteArg === "all" ? ["native", "web", "electron"] : [suiteArg];
-const testingOverride = process.env.SPACEO_LIVE_TESTS === "1" && process.env.SPACEO_TESTING_HOST === "1";
+// This environment selects the helper's mode; the report records the daemon's, once verified.
+const requestedTestingOverride = process.env.SPACEO_LIVE_TESTS === "1" && process.env.SPACEO_TESTING_HOST === "1";
+let testingOverride = null;
 const requireFull = argv.includes("--require-full");
 // Release conformance always proves that the virtual monitor goes away again and that the
 // user's physical topology survived the run. Smaller development suites can opt into the same
@@ -569,6 +571,13 @@ try {
   step(`tools/list advertises ${names.length} tools`,
        names.length === 35 && new Set(names).size === names.length);
 
+  // MCP has connected to (or started) the daemon. Verify its mode before any display work.
+  let pool = null;
+  try { pool = cliJSON(["pool", "--json"]); } catch {}
+  const override = daemonTestingOverride(pool, requestedTestingOverride);
+  testingOverride = override.reported;
+  step("[preflight] the daemon's testing override matches this run", override.ok, override.detail);
+
   let displayBaseline;
   if (verifyDisplayCleanup) {
     const cleanStart = await waitForIdlePool();
@@ -631,7 +640,7 @@ try {
     execFileSync("python3", [fileURLToPath(new URL("./host-health.py", import.meta.url)),
       "--since", String(runStartedAt.getTime() / 1000)],
       { stdio: ["ignore", "inherit", "inherit"], timeout: 30_000 });
-    recordStep("[postflight] system health", true, testingOverride ? "diagnostic testing override active; observed health retained in helper output" : "health and system-service timeout checks passed");
+    recordStep("[postflight] system health", true, requestedTestingOverride ? "diagnostic testing override active; observed health retained in helper output" : "health and system-service timeout checks passed");
   } catch {
     recordStep("[postflight] system health", false, "host health refused; functional passes do not qualify this run");
   }
@@ -671,7 +680,9 @@ try {
           bytes: statSync(binary).size,
           sha256: createHash("sha256").update(binaryBytes).digest("hex"),
         },
-        configuration: { suite: suiteArg, requireFull, verifyDisplayCleanup, testingOverride },
+        // testingOverride is the daemon-reported mode, or null when it was never verified.
+        configuration: { suite: suiteArg, requireFull, verifyDisplayCleanup, testingOverride,
+          requestedTestingOverride },
         summary: {
           passed: passed.length,
           failed: failed.length,

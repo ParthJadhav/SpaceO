@@ -33,7 +33,9 @@ All notable user-visible changes are recorded here. SpaceO follows
   archived idle host-health recovery, while retaining ownership, pending-mutation,
   topology, deadline and cleanup checks. Permit diagnostic rolling creation-rate admission
   while retaining bounded attempt history that constrains later normal runs. Mark overridden
-  health and creation-rate admission in reports.
+  health and creation-rate admission in reports, including doctor's read-only safety status
+  before any daemon owns the journal. The computer-use matrix records the daemon-reported
+  override and refuses a daemon whose mode differs from its own environment.
 
 - Allow explicit operator recovery of an idle memory-pressure or swap latch after all display
   owners stop and fresh, settled health passes. Preserve budgets and fault archives; pending
@@ -42,7 +44,8 @@ All notable user-visible changes are recorded here. SpaceO follows
   distinguish active connections, and record retained create/bulk teardown ownership without
   credentials. Missing leases now report `lease_required` instead of schema friction.
 - Refuse special files and bound report reads, records and directory traversal, so a FIFO or
-  growing log cannot bypass the report's input limits.
+  growing log cannot bypass the report's input limits. A directory given both as a journal
+  input and as `--daemon-log` is still searched for daemon logs.
 
 - Stop the timed session janitor after a host-health refusal instead of retrying the same
   sticky failure every three seconds. Retain display owners and passive diagnostics.

@@ -74,7 +74,7 @@ function listFiles(path, pattern, discovery, depth = 0, explicit = true) {
   const directory = opendirSync(path);
   try {
     for (let entry; (entry = directory.readSync()) !== null;) {
-      if (++discovery.entries > maximumEntries) throw new Error(`refusing more than ${maximumEntries} directory entries`);
+      if (++discovery.traversal.entries > maximumEntries) throw new Error(`refusing more than ${maximumEntries} directory entries`);
       const child = join(path, entry.name);
       if (entry.isDirectory()) found.push(...listFiles(child, pattern, discovery, depth + 1, false));
       else if (pattern.test(entry.name)) found.push(...listFiles(child, pattern, discovery, depth + 1, false));
@@ -366,9 +366,13 @@ export function renderMarkdown(report) {
 function main() {
   const options = parseArguments(process.argv.slice(2));
   const budget = { bytes: 0 };
-  const discovery = { seen: new Set(), entries: 0 };
-  const journalFiles = options.inputs.flatMap((input) => listFiles(input, /\.jsonl$/, discovery));
-  const daemonFiles = options.daemonLogs.flatMap((input) => listFiles(input, /^daemon\.log(\.1)?$/, discovery));
+  // Each input class deduplicates separately, so a directory supplied both as a journal input
+  // and as --daemon-log is still searched for daemon logs. One entry budget bounds both walks.
+  const traversal = { entries: 0 };
+  const journalDiscovery = { seen: new Set(), traversal };
+  const daemonDiscovery = { seen: new Set(), traversal };
+  const journalFiles = options.inputs.flatMap((input) => listFiles(input, /\.jsonl$/, journalDiscovery));
+  const daemonFiles = options.daemonLogs.flatMap((input) => listFiles(input, /^daemon\.log(\.1)?$/, daemonDiscovery));
   const journal = readJSONLines(journalFiles, budget);
   const daemon = readJSONLines(daemonFiles, budget);
   const report = analyze(journal.records, daemon.records, options);

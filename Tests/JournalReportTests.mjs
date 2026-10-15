@@ -195,6 +195,29 @@ test("discovery deduplicates aliases and refuses deep trees without recursing li
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("a directory supplied as journal and daemon input is searched for both, within one entry budget", () => {
+  const root = mkdtempSync(join(tmpdir(), "spaceo-journal-shared-"));
+  try {
+    const lines = (records) => records.map((record) => JSON.stringify(record)).join("\n") + "\n";
+    writeFileSync(join(root, "mcp-1-c1.jsonl"), lines(fixture()));
+    writeFileSync(join(root, "daemon.log"), lines([
+      { kind: "request.failed", client: "viewer", cmd: "session.control", error_code: "unknown_session", ms: "3" },
+      { kind: "request.ok", client: "mcp", cmd: "click", trace: "t5", ms: "20" },
+    ]));
+    const both = [script, root, "--daemon-log", root, "--json"];
+    const report = JSON.parse(execFileSync(process.execPath, both, { encoding: "utf8", timeout: 2_000 }));
+    assert.equal(report.sources.journal_files, 1);
+    assert.equal(report.sources.daemon_files, 1);
+    assert.equal(report.daemon.requests_by_client.viewer, 1);
+    assert.equal(report.daemon.failures["viewer session.control: unknown_session"], 1);
+    // Each walk alone fits; together they exceed the shared 10,000-entry budget.
+    for (let index = 0; index < 5_000; index += 1) writeFileSync(join(root, `entry-${index}`), "");
+    execFileSync(process.execPath, [script, root, "--json"], { stdio: "pipe", timeout: 10_000 });
+    assert.throws(() => execFileSync(process.execPath, both, { stdio: "pipe", timeout: 10_000 }),
+                  (error) => !error.killed && /directory entries/.test(error.stderr.toString()));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 
 test("a connection ending after since retains outstanding acquisitions from earlier calls", () => {
   const report = analyze([

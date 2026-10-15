@@ -118,6 +118,7 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
             ? DisplaySafetyStatus(state: .blocked, reason: "fallback display retirement is pending or deferred; "
                 + "retain the daemon owner and inspect display safety") : status
         result.deferredRetirementDisplayIDs = ids.isEmpty ? nil : ids
+        result.creationRateTestingOverride = status.creationRateTestingOverride
         return result
     }
 
