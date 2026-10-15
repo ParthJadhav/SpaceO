@@ -34,6 +34,9 @@ Status definitions:
   passing cases during sustained ColorSync load (RA-057); owner and journal recovery were
   completed without a remaining display. See the
   [preparation record](docs/validation/2026-10-16-release-1.0.8.md).
+- Published 1.0.8 as latest from tag object `69b8fca` (run 38793327819). The candidate and all five
+  public downloads passed independent verification; see the
+  [publication record](docs/validation/2026-10-16-publication-1.0.8.md).
 
 ### October 11 blocked-host janitor maintenance
 
