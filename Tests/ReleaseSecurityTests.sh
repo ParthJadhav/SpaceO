@@ -58,7 +58,7 @@ assert_contains "$RELEASE_WORKFLOW" "vars.SPACEO_RELEASE_ENABLED == 'true' && gi
 assert_contains "$RELEASE_WORKFLOW" 'needs: protection'
 assert_contains "$RELEASE_WORKFLOW" 'umask 077'
 assert_contains "$RELEASE_WORKFLOW" 'echo "::add-mask::$keychain_password"'
-assert_contains "$RELEASE_WORKFLOW" 'ea165f8d65b6e75b540449e92b4886f43607fa02'
+assert_contains "$RELEASE_WORKFLOW" 'cf430e030ddbb5b0abf93d22962f4752f3646cd9'
 assert_text_excludes "$(cat "$CI_WORKFLOW")" 'self-hosted'
 assert_text_excludes "$(cat "$RELEASE_WORKFLOW")" 'self-hosted'
 
