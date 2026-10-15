@@ -413,6 +413,20 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         XCTAssertTrue(cleaned.ok, cleaned.error ?? "")
     }
 
+    /// Lets a discovery hook cancel the listing task that is running it.
+    private final class PendingListing: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: Task<Response, Never>?
+        func set(_ task: Task<Response, Never>) { lock.withLock { self.task = task } }
+        func cancel() {
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                if let task = lock.withLock({ self.task }) { task.cancel(); return }
+                usleep(1_000)
+            }
+        }
+    }
+
     func testSessionListSharesOneDiscoveryBudgetAcrossSessions() async throws {
         let backing = FakeDisplayBacking(id: 92_031)
         let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [92_031] })
@@ -481,6 +495,20 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         let cancelled = await manager.handle(operatorList)
         server.setDiscoveryHook(nil)
         XCTAssertFalse(cancelled.ok)
+
+        // Including when the caller is cancelled after the budget is spent, where later
+        // sessions would otherwise be skipped without reaching discovery's own checks.
+        let pending = PendingListing()
+        server.setDiscoveryHook { _ in
+            clock.advance(budget + 1)
+            pending.cancel()
+            throw SpaceOError.badRequest("fixture discovery failed")
+        }
+        let task = Task { await manager.handle(operatorList) }
+        pending.set(task)
+        let cancelledLater = await task.value
+        server.setDiscoveryHook(nil)
+        XCTAssertFalse(cancelledLater.ok)
 
         for id in ids {
             var destroy = Request(cmd: "session.destroy")

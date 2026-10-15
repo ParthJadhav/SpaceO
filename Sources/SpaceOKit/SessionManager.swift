@@ -1193,6 +1193,8 @@ public actor SessionManager {
                 // One app's incomplete discovery must not fail every client's listing (#47).
                 // The failed refresh preserved the last-known ledger, and the row reports why
                 // it is not a fresh observation; commands still refuse on the throwing refresh.
+                // A skipped refresh never reaches discovery's own cancellation checks.
+                if Task.isCancelled { throw CancellationError() }
                 let remaining = refreshDeadline.timeIntervalSince(waitRuntime.now())
                 let share = remaining / Double(ordered.count - position)
                 let refreshed = share >= 0.01
