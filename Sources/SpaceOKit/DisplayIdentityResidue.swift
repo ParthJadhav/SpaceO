@@ -20,7 +20,8 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
     /// Bounded identities leave a handful; hundreds only come from per-attachment identities.
     public static let cleanupThreshold = 64
 
-    public var needsCleanup: Bool { spaceOProfiles > Self.cleanupThreshold }
+    /// A truncated scan is incomplete, so it never reports the residue as bounded.
+    public var needsCleanup: Bool { truncated || spaceOProfiles > Self.cleanupThreshold }
 
     public static func scan(directory: String = profilesDirectory,
                             registry: String = registryPath) -> DisplayIdentityResidue? {
@@ -62,9 +63,14 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
 
     public var summary: String {
         let registry = registryBytes.map { " ColorSync registry \($0 / 1_024) KB;" } ?? ""
-        let counted = "\(spaceOProfiles)\(truncated ? "+" : "") of \(totalProfiles) display profiles are SpaceO's;"
-        return needsCleanup
-            ? "\(counted)\(registry) left by earlier versions and slow every display change — see docs/DISPLAY_SAFETY.md#display-identity-residue"
+        let counted = truncated
+            ? "at least \(spaceOProfiles) of \(totalProfiles) display profiles are SpaceO's (examined the first \(Self.maximumProfiles));"
+            : "\(spaceOProfiles) of \(totalProfiles) display profiles are SpaceO's;"
+        if spaceOProfiles > Self.cleanupThreshold {
+            return "\(counted)\(registry) left by earlier versions and slow every display change — see docs/DISPLAY_SAFETY.md#display-identity-residue"
+        }
+        return truncated
+            ? "\(counted)\(registry) scan incomplete — see docs/DISPLAY_SAFETY.md#display-identity-residue"
             : "\(counted)\(registry) bounded"
     }
 }

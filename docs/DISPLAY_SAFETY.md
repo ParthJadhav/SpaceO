@@ -187,6 +187,8 @@ deadline) for combined ColorSync CPU below 25%: two measured intervals at proces
 a busy interval, and one interval measured entirely after each earlier change. Saturation makes intervals
 unmeasurable, so once a process has measured one, an unmeasurable interval never counts as quiet;
 only a sampler that has never produced a measurement keeps the override's former admission. A
+capture delivered more than three seconds late is not counted, and quiet evidence older than ten
+seconds no longer admits a change. A
 process therefore takes about ten seconds before its first display change, and five to ten
 between changes. The live-test preflight and per-case health checks keep the normal 50%
 ColorSync limit; a case that finds ColorSync at or above it after cleanup stops live work, and

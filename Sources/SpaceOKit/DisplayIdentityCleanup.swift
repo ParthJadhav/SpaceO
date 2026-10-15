@@ -82,6 +82,7 @@ public enum DisplayIdentityCleanup {
         case registryMissing
         case listingTruncated
         case profileInventoryTruncated
+        case profileInventoryUnreadable
         case invokingUserUnknown
         case lifecycleJournalUnusable
         case backupFailed(String)
@@ -104,6 +105,8 @@ public enum DisplayIdentityCleanup {
                 return "nothing was removed: \(DisplayIdentityResidue.profilesDirectory) holds more profiles than this command examines"
             case .lifecycleJournalUnusable:
                 return "the account's SpaceO display-safety journal cannot be locked; inspect it with `spaceo doctor`"
+            case .profileInventoryUnreadable:
+                return "nothing was removed: \(DisplayIdentityResidue.profilesDirectory) could not be listed"
             case .invokingUserUnknown:
                 return "run this with sudo from the account that uses SpaceO, so it can hold that account's display lock"
             case .backupFailed(let reason):
@@ -120,15 +123,13 @@ public enum DisplayIdentityCleanup {
     }
 
     public static func plan(_ environment: Environment = .live) throws -> Plan {
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: environment.profileDirectory)) ?? []
-        guard names.filter({ $0.hasSuffix(".icc") }).count <= DisplayIdentityResidue.maximumProfiles else {
-            throw Failure.profileInventoryTruncated
-        }
-        return plan(listing: try environment.registrations(), profileDirectory: environment.profileDirectory)
+        let profiles = try spaceOProfiles(in: environment.profileDirectory)
+        let (registrations, unattributed) = spaceODevices(in: try environment.registrations())
+        return Plan(registrations: registrations, profilePaths: profiles, unattributedWithoutProfile: unattributed)
     }
 
-    static func plan(listing: [Registration], profileDirectory: String) -> Plan {
-        // ColorSync lists a device once per profile; a device is SpaceO's when a profile says so.
+    /// ColorSync lists a device once per profile; a device is SpaceO's when its factory profile says so.
+    static func spaceODevices(in listing: [Registration]) -> (devices: [Registration], unattributed: Int) {
         var registrations: [Registration] = []
         var spaceO = Set<String>(), profiled = Set<String>(), devices = Set<String>()
         for registration in listing {
@@ -139,13 +140,19 @@ public enum DisplayIdentityCleanup {
                 registrations.append(registration)
             }
         }
-        let unattributed = devices.subtracting(profiled).count
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: profileDirectory)) ?? []
+        return (registrations, devices.subtracting(profiled).count)
+    }
+
+    /// Every SpaceO profile in the directory, or a refusal; never a partial or substituted list.
+    static func spaceOProfiles(in directory: String) throws -> [String] {
+        let names: [String]
+        do { names = try FileManager.default.contentsOfDirectory(atPath: directory) }
+        catch CocoaError.fileReadNoSuchFile { return [] }
+        catch { throw Failure.profileInventoryUnreadable }
         let profiles = names.filter { $0.hasSuffix(".icc") }.sorted()
-            .prefix(DisplayIdentityResidue.maximumProfiles)
-            .map { URL(fileURLWithPath: profileDirectory).appendingPathComponent($0).path }
+        guard profiles.count <= DisplayIdentityResidue.maximumProfiles else { throw Failure.profileInventoryTruncated }
+        return profiles.map { URL(fileURLWithPath: directory).appendingPathComponent($0).path }
             .filter(isSpaceOProfile)
-        return Plan(registrations: registrations, profilePaths: profiles, unattributedWithoutProfile: unattributed)
     }
 
     private static func requireQuiescent(_ environment: Environment) throws {
@@ -189,7 +196,7 @@ public enum DisplayIdentityCleanup {
 
         for registration in plan.registrations { environment.unregister(registration) }
         let after = try environment.registrations()
-        let remaining = Self.plan(listing: after, profileDirectory: environment.profileDirectory).registrations.count
+        let remaining = spaceODevices(in: after).devices.count
         var outcome = Outcome(plan: plan, backup: backup.path,
                               unregistered: plan.registrations.count - remaining,
                               remainingRegistrations: remaining, movedProfiles: 0)

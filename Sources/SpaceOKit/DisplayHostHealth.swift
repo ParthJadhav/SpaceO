@@ -127,6 +127,9 @@ final class DisplayHostHealth: @unchecked Sendable {
     private var settlingAfter: TimeInterval?
     /// Under the testing override: whether any interval has been measured in this process.
     private var overrideMeasured = false
+    /// Under the testing override: when the settled count last advanced. Without the normal
+    /// watchdog, a stuck or descheduled sampler must not leave old quiet evidence standing.
+    private var overrideEvidenceAt: TimeInterval?
     private var current = DisplayHostHealthReport(state: .unknown, reasons: ["not_sampled"])
     private let sample: @Sendable () throws -> DisplayHostHealthSample
     private let now: @Sendable () -> TimeInterval
@@ -157,7 +160,7 @@ final class DisplayHostHealth: @unchecked Sendable {
         expireIfNeeded()
         return lock.withLock {
             var report = current
-            report.reconfigurationSettled = current.state == .ready && consecutiveSettledSamples >= 2
+            report.reconfigurationSettled = settledLocked()
             report.reconfigurationCPUThresholdPercent = Self.reconfigurationCPUThresholdPercent
             return report
         }
@@ -184,7 +187,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     /// intervals must both be below 25%. Reading a cached report cannot advance this count.
     var isSettledForReconfiguration: Bool {
         expireIfNeeded()
-        return lock.withLock { current.state == .ready && consecutiveSettledSamples >= 2 }
+        return lock.withLock { settledLocked() }
     }
 
     /// Both endpoints of qualifying intervals must follow this graph-change fence,
@@ -207,7 +210,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     func requireStillSettledForReconfiguration() throws {
         expireIfNeeded()
         try lock.withLock {
-            guard current.state == .ready, consecutiveSettledSamples >= 2 else {
+            guard settledLocked() else {
                 throw reconfigurationRefusal()
             }
         }
@@ -247,7 +250,7 @@ final class DisplayHostHealth: @unchecked Sendable {
                 lock.unlock()
                 throw refusal
             }
-            if current.state == .ready, consecutiveSettledSamples >= 2 {
+            if settledLocked() {
                 lock.unlock()
                 return
             }
@@ -379,17 +382,24 @@ final class DisplayHostHealth: @unchecked Sendable {
         lock.withLock {
             defer { signalReconfigurationWaiters() }
             inFlightSince = nil
+            let time = now()
+            func countQuiet() {
+                consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+                overrideEvidenceAt = time
+            }
+            // A capture delivered late describes a host that may have changed since.
+            let fresh = next.map { $0.uptime.isFinite && abs(time - $0.uptime) <= 3 } ?? false
             let before = previous
-            previous = next
-            if let next { lastAttempt = next.uptime }
-            guard let next, let before else {
-                // No interval: a failed capture, or the first observation.
-                if next == nil, !overrideMeasured { consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1) }
+            previous = fresh ? next : nil
+            if let next, fresh { lastAttempt = next.uptime }
+            guard let next, fresh, let before else {
+                // No measurable interval: a failed or late capture, or the first observation.
+                if (next == nil || !fresh), !overrideMeasured { countQuiet() }
                 return
             }
             guard let cpu = (try? DisplayHostHealthSample.assess(before, next))?.colorsyncCPUPercent else {
                 current.colorsyncCPUPercent = nil
-                if !overrideMeasured { consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1) }
+                if !overrideMeasured { countQuiet() }
                 return
             }
             overrideMeasured = true
@@ -397,10 +407,18 @@ final class DisplayHostHealth: @unchecked Sendable {
             if cpu >= Self.reconfigurationCPUThresholdPercent {
                 consecutiveSettledSamples = 0
             } else if settlingAfter.map({ before.uptime > $0 && next.uptime > $0 }) ?? true {
-                consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+                countQuiet()
                 if consecutiveSettledSamples == 2 { settlingAfter = nil }
             }
         }
+    }
+
+    /// Caller holds the state lock.
+    private func settledLocked() -> Bool {
+        guard current.state == .ready, consecutiveSettledSamples >= 2 else { return false }
+        guard testingOverride else { return true }
+        let time = now()
+        return overrideEvidenceAt.map { time >= $0 && time - $0 <= 10 } ?? false
     }
 
     /// Deterministic tests drive a failed capture without a sampler.

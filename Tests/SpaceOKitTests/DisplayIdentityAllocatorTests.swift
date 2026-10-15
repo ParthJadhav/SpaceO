@@ -212,6 +212,13 @@ final class DisplayIdentityResidueTests: XCTestCase {
         return Data(bytes)
     }
 
+    func testATruncatedScanIsNeverReportedAsBounded() {
+        let residue = DisplayIdentityResidue(spaceOProfiles: 3, totalProfiles: 5_000, truncated: true, registryBytes: nil)
+        XCTAssertTrue(residue.needsCleanup)
+        XCTAssertFalse(residue.summary.contains("bounded"))
+        XCTAssertTrue(residue.summary.contains("at least 3 of 5000"), residue.summary)
+    }
+
     func testParsesTheMakeAndModelTag() throws {
         let model = try XCTUnwrap(DisplayIdentityResidue.displayModel(profile: profile(vendor: 0x1AF2, product: 1)))
         XCTAssertEqual(model.vendor, 0x1AF2)
@@ -444,6 +451,16 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         XCTAssertEqual(outcome.remainingRegistrations, 0)
         XCTAssertEqual(outcome.failedProfiles.map { URL(fileURLWithPath: $0).lastPathComponent }, ["test-multi-1-B.icc"])
         XCTAssertFalse(outcome.confirmed)
+    }
+
+    func testAnUnlistableProfileDirectoryRefuses() throws {
+        let colorSync = try fixture()
+        let displays = directory.appendingPathComponent("Displays")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: displays.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: displays.path) }
+        XCTAssertThrowsError(try DisplayIdentityCleanup.plan(environment(colorSync))) {
+            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .profileInventoryUnreadable)
+        }
     }
 
     func testTooManyProfilesRefusesInsteadOfCleaningAPrefix() throws {

@@ -25,74 +25,99 @@ final class DisplayHostHealthTests: XCTestCase {
         let health = DisplayHostHealth(testingOverride: true, sample: { throw DisplayHostHealthSample.Unknown() },
                                        now: { clock.value })
         // Pressure, swap and WindowServer diagnostics are waived; quiet intervals settle.
-        health.accept(sample(100, cpu: 10, pressure: 4, swap: 50, reports: 3))
-        health.accept(sample(105, cpu: 10.5, pressure: 4, swap: 90, reports: 3))
-        health.accept(sample(110, cpu: 11, pressure: 4, swap: 120, reports: 3))
+        feed(health, clock, sample(100, cpu: 10, pressure: 4, swap: 50, reports: 3))
+        feed(health, clock, sample(105, cpu: 10.5, pressure: 4, swap: 90, reports: 3))
+        feed(health, clock, sample(110, cpu: 11, pressure: 4, swap: 120, reports: 3))
         try health.requireStillSettledForReconfiguration()
         XCTAssertEqual(health.report.state, .ready)
         XCTAssertEqual(health.report.reasons, ["testing_override"])
 
         // Every DisplayHostHealthSampler service at 0.4 CPU-seconds per second is well over 25%.
-        health.accept(sample(115, cpu: 13, swap: 120))
+        feed(health, clock, sample(115, cpu: 13, swap: 120))
         XCTAssertGreaterThanOrEqual(try XCTUnwrap(health.report.colorsyncCPUPercent), 25)
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration()) {
             XCTAssertTrue("\($0)".contains("ColorSync has not settled"), "\($0)")
         }
         XCTAssertEqual(health.report.state, .ready, "load refuses changes without a sticky fault")
 
-        health.accept(sample(120, cpu: 13.1, swap: 120))
+        feed(health, clock, sample(120, cpu: 13.1, swap: 120))
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
-        health.accept(sample(125, cpu: 13.2, swap: 120))
+        feed(health, clock, sample(125, cpu: 13.2, swap: 120))
         try health.requireStillSettledForReconfiguration()
     }
 
     func testTestingOverrideAdmitsUnmeasurableIntervals() throws {
-        let health = DisplayHostHealth(testingOverride: true)
-        health.accept(sample(100, pid: 7))
-        health.accept(sample(105, pid: 8))  // a restarted service has no measurable interval
+        let clock = Clock()
+        let health = DisplayHostHealth(testingOverride: true, now: { clock.value })
+        feed(health, clock, sample(100, pid: 7))
+        feed(health, clock, sample(105, pid: 8))  // a restarted service has no measurable interval
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
-        health.accept(sample(110, pid: 9))
+        feed(health, clock, sample(110, pid: 9))
         try health.requireStillSettledForReconfiguration()
         XCTAssertNil(health.report.colorsyncCPUPercent)
         XCTAssertEqual(health.report.state, .ready)
     }
 
     func testTestingOverrideNeverCountsAnUnmeasurableIntervalAsQuietAfterAMeasurement() throws {
-        let health = DisplayHostHealth(testingOverride: true)
-        health.accept(sample(100, cpu: 10))
-        health.accept(sample(105, cpu: 10.5))
-        health.accept(sample(110, cpu: 11))
+        let clock = Clock()
+        let health = DisplayHostHealth(testingOverride: true, now: { clock.value })
+        feed(health, clock, sample(100, cpu: 10))
+        feed(health, clock, sample(105, cpu: 10.5))
+        feed(health, clock, sample(110, cpu: 11))
         try health.requireStillSettledForReconfiguration()
-        health.accept(sample(115, cpu: 13))  // busy
+        feed(health, clock, sample(115, cpu: 13))  // busy
         // Saturation shows up as restarts and overrun intervals, not as quiet measurements.
-        health.accept(sample(120, cpu: 13, pid: 40))
-        health.accept(sample(125, cpu: 13, pid: 50))
+        feed(health, clock, sample(120, cpu: 13, pid: 40))
+        feed(health, clock, sample(125, cpu: 13, pid: 50))
         health.acceptFailedCaptureForTesting()
         health.acceptFailedCaptureForTesting()
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
-        health.accept(sample(130, cpu: 13, pid: 50))
-        health.accept(sample(135, cpu: 13.1, pid: 50))
+        feed(health, clock, sample(130, cpu: 13, pid: 50))
+        feed(health, clock, sample(135, cpu: 13.1, pid: 50))
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(), "two quiet intervals follow a busy one")
-        health.accept(sample(140, cpu: 13.2, pid: 50))
+        feed(health, clock, sample(140, cpu: 13.2, pid: 50))
         try health.requireStillSettledForReconfiguration()
     }
 
     func testTestingOverrideMeasuresAfterEveryGraphChange() throws {
         let clock = Clock()
         let health = DisplayHostHealth(testingOverride: true, now: { clock.value })
-        health.accept(sample(100, cpu: 10))
-        health.accept(sample(105, cpu: 10.1))
-        health.accept(sample(110, cpu: 10.2))
+        feed(health, clock, sample(100, cpu: 10))
+        feed(health, clock, sample(105, cpu: 10.1))
+        feed(health, clock, sample(110, cpu: 10.2))
         try health.requireStillSettledForReconfiguration()
         clock.value = 111
         health.resetReconfigurationSettling()
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
                              "a change waits for an interval measured after it")
-        health.accept(sample(115, cpu: 10.3))
+        feed(health, clock, sample(115, cpu: 10.3))
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
                              "an interval that began before the change cannot show its effect")
-        health.accept(sample(120, cpu: 10.4))
+        feed(health, clock, sample(120, cpu: 10.4))
         try health.requireStillSettledForReconfiguration()
+    }
+
+    private func feed(_ health: DisplayHostHealth, _ clock: Clock, _ observation: DisplayHostHealthSample) {
+        clock.value = observation.uptime
+        health.accept(observation)
+    }
+
+    func testTestingOverrideIgnoresLateCapturesAndAgesOutQuietEvidence() throws {
+        let clock = Clock()
+        let health = DisplayHostHealth(testingOverride: true, now: { clock.value })
+        feed(health, clock, sample(100, cpu: 10))
+        feed(health, clock, sample(105, cpu: 10.1))
+        // Delivered four seconds after it was captured: not evidence about the current host.
+        clock.value = 114
+        health.accept(sample(110, cpu: 10.2))
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
+        feed(health, clock, sample(119, cpu: 10.3))
+        feed(health, clock, sample(124, cpu: 10.4))
+        try health.requireStillSettledForReconfiguration()
+        // A sampler that stops reporting does not leave its last quiet result standing.
+        clock.value = 135
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
+        XCTAssertEqual(health.report.reconfigurationSettled, false)
     }
 
     private final class Clock: @unchecked Sendable {
