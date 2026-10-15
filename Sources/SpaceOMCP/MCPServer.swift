@@ -1184,10 +1184,15 @@ public enum MCPServer {
             }
         }
 
+        // A pending drift warning is checked against the daemon about to handle this call, so
+        // the warning (or its absence) describes the daemon that produced the reply. A call that
+        // fails before reaching any daemon checks it when it replies instead.
+        var driftValidatedBeforeSend = false
+
         // One-time notes (daemon drift, sessions that ended in the background) lead whatever
         // this call returns, success or failure, so the agent reads them before acting on it.
         func reply(_ result: [String: Any]) {
-            if controller.memory.hasUndeliveredDaemonDrift {
+            if !driftValidatedBeforeSend, controller.memory.hasUndeliveredDaemonDrift {
                 revalidateDaemonDrift(socketPath: socketPath, controller: controller)
             }
             let notes = controller.memory.drainNotes()
@@ -1226,6 +1231,11 @@ public enum MCPServer {
             }
             return
         }
+
+        if controller.memory.hasUndeliveredDaemonDrift {
+            revalidateDaemonDrift(socketPath: socketPath, controller: controller)
+        }
+        driftValidatedBeforeSend = true
 
         let request: Request
         switch plan {
