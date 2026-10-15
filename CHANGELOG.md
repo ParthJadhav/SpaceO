@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Stop the timed session janitor after a host-health refusal instead of retrying the same
+  sticky failure every three seconds. Retain display owners and passive diagnostics.
 - Read the host-health expiry clock under the state lock so a concurrent fresh observation
   cannot be misclassified as a clock reversal and trip a sticky health fault.
 - Wait for two consecutive ColorSync CPU intervals below 25% before changing the display

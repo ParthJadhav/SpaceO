@@ -3,6 +3,55 @@ import CoreGraphics
 @testable import SpaceOKit
 
 final class DisplaySafetyTests: XCTestCase {
+    private final class HealthCheckCount: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = 0
+        var count: Int { lock.withLock { value } }
+        func refuse() throws {
+            lock.withLock { value += 1 }
+            throw SpaceOError.stageCreationFailed("injected sticky health failure")
+        }
+    }
+
+    func testRuntimeJanitorStopsAfterHealthRefusalAndRetainsIdleDisplay() async throws {
+        let health = HealthCheckCount()
+        let backing = DisplayBacking(displayID: 90_081)
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [backing.displayID] })
+        let pool = DisplayPool(stageFactory: { _, _, _, _ in stage })
+        let slot = try pool.allocate()
+        XCTAssertTrue(pool.release(slot, retainEmpty: true))
+        let manager = SessionManager(pool: pool, runJanitor: true,
+            hostHealthCheck: { try health.refuse() },
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+
+        // Exercise the actual runtime timer; allow scheduling slack on a loaded test runner.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(8))
+        while health.count == 0 && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let running = await manager.janitorIsRunning
+        XCTAssertFalse(running, "a sticky refusal must stop timed admission retries")
+        XCTAssertEqual(health.count, 1)
+        try await Task.sleep(for: .milliseconds(3_500))
+        XCTAssertEqual(health.count, 1, "no automatic retry after the first refusal")
+        XCTAssertEqual(pool.displayCount, 1)
+        XCTAssertEqual(backing.invalidationCount, 0, "retain the display owner on failure")
+        await manager.stopJanitor()
+    }
+
+    func testJanitorAdmissionWithoutDisplaysSkipsHealthLikeTheScan() async {
+        let health = HealthCheckCount()
+        let manager = SessionManager(pool: DisplayPool(stageFactory: { _, _, _, _ in
+            XCTFail("admission must not create a display")
+            throw SpaceOError.stageCreationFailed("inert")
+        }), runJanitor: false,
+            hostHealthCheck: { try health.refuse() },
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        let admitted = await manager.admitJanitorPass()
+        XCTAssertTrue(admitted, "detached recovery needs no display health admission")
+        XCTAssertEqual(health.count, 0)
+    }
+
     private final class HealthSwitch: @unchecked Sendable {
         private let lock = NSLock()
         private var failed = false

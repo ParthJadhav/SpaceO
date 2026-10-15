@@ -89,7 +89,9 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   Observations continue every five seconds; a separate watchdog trips on a sampler exceeding
   three seconds or a passing result older than ten seconds. There is one sampler, no replacement
   worker, no automatic reset, and no acceptance of a late result after refusal.
-  Active commands, reuse, janitor work, and retirement refuse after failure. The daemon retains
+  Active commands, reuse, janitor work, and retirement refuse after failure. The timed janitor
+  stops after its first host-health refusal; passive diagnostics remain available without
+  repeating the same maintenance admission every three seconds. The daemon retains
   display owners instead of exiting or attempting more graph changes. Cached diagnostics remain
   available; daemon replies and doctor JSON include `hostHealth` without report contents.
   This does not stop input or OS calls already in flight. A process killed externally still loses
