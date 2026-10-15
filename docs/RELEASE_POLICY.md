@@ -146,7 +146,19 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.7` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.7)
+Version `1.0.8` is prepared as an **owner-directed maintenance release with a qualification
+exception**. On October 15, 2026, after the open issues and pull requests were handled and two
+newly found issues were filed, the owner instructed: **"Fix the issues which came up as well and
+release the new version. Do everything autonomously"**. This is recorded as GO to construct and
+publish 1.0.8, conditional on passing source, CI, signing, notarization, immutable-candidate and
+distribution checks. The exception covers the incomplete full live suite (stopped after 4 of 15
+passing cases under sustained ColorSync load), the computer-use matrix not repeated on the exact
+release source, missing signed-artifact behavior qualification, and open RA-057. It does not
+relabel them as passed or approve a runtime safety bypass. See the
+[1.0.8 notes](RELEASE_NOTES_1.0.8.md) and
+[preparation record](validation/2026-10-16-release-1.0.8.md).
+
+Version `1.0.7` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.7)
 as an **owner-directed maintenance release with a qualification exception**. After the fixes
 merged and the owner was told that the earlier ColorSync spike
 remains open and no new release had been published, the owner instructed: **"Create a new release"**.

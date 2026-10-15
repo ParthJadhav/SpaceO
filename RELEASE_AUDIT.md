@@ -106,6 +106,13 @@ exception is recorded in the [preparation record](docs/validation/2026-10-04-rel
 The focused native workflow pass does not close RA-057 or replace full signed-candidate behavior
 qualification. Runtime limits and protected signing/distribution/publication remain required.
 
+October 16 release direction: after the open issues and pull requests were handled, the owner
+requested fixes for the newly found issues and a new release. Version 1.0.8's release-specific
+qualification exception is recorded in the
+[preparation record](docs/validation/2026-10-16-release-1.0.8.md). Its full live suite stopped
+after 4 of 15 passing cases while ColorSync ran at about 100% CPU. This is a recurrence of the
+RA-057 symptom with no SpaceO process running afterwards, and it does not close this finding.
+
 The owner confirmed a forced restart at 23:03. An earlier 20:28 watchdog/spin captured
 WindowServer's main thread unresponsive and 75 sampled threads blocked through ColorSync.
 System synchronization timeouts recurred during later performance, MCP and XCTest work, even
