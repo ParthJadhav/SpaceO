@@ -318,6 +318,9 @@ public actor SessionManager {
     /// A sticky health refusal cannot be repaired by another timed sweep. Keep the owner
     /// and passive diagnostics available, but stop the background retry loop.
     func admitJanitorPass() -> Bool {
+        // Mirror the scan: without a display there is no health admission to refuse, and
+        // detached-record recovery must keep running.
+        guard pool.displayCount > 0 else { return true }
         do {
             try hostHealthCheck()
             return true

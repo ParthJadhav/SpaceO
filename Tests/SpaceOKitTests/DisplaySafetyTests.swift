@@ -39,6 +39,19 @@ final class DisplaySafetyTests: XCTestCase {
         await manager.stopJanitor()
     }
 
+    func testJanitorAdmissionWithoutDisplaysSkipsHealthLikeTheScan() async {
+        let health = HealthCheckCount()
+        let manager = SessionManager(pool: DisplayPool(stageFactory: { _, _, _, _ in
+            XCTFail("admission must not create a display")
+            throw SpaceOError.stageCreationFailed("inert")
+        }), runJanitor: false,
+            hostHealthCheck: { try health.refuse() },
+            sessionFactory: { AgentSession(id: $0, slot: $1) })
+        let admitted = await manager.admitJanitorPass()
+        XCTAssertTrue(admitted, "detached recovery needs no display health admission")
+        XCTAssertEqual(health.count, 0)
+    }
+
     private final class HealthSwitch: @unchecked Sendable {
         private let lock = NSLock()
         private var failed = false
