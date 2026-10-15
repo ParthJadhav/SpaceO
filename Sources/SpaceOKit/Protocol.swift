@@ -791,6 +791,9 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     /// Nil when decoding an older daemon that did not report the ten-minute window.
     public var maximumCreationsPerTenMinutes: Int?
     public var maximumCreationsPerDay: Int?
+    /// True when persistent rolling creation admission is explicitly bypassed for diagnostics.
+    /// Pool resource limits still apply; absent for normal and older reports.
+    public var creationRateTestingOverride: Bool?
     public var minimumTileWidth: Int
     public var minimumTileHeight: Int
     public var maximumDisplayEdge: Int
@@ -798,15 +801,20 @@ public struct ResourceLimitsReport: Codable, Sendable, Equatable {
     public var unsafeOperatorMode: Bool
 
     public init(_ budget: ResourceBudget) {
+        self.init(budget, testingOverride: DisplayTestingPolicy.enabled())
+    }
+
+    init(_ budget: ResourceBudget, testingOverride: Bool) {
         policy = budget.isUnsafe ? "explicit-unrestricted-operator-override" : "bounded"
         maximumSessions = budget.maximumSessions
         maximumDisplays = budget.maximumDisplays
         maximumTotalPixels = budget.maximumTotalPixels
         maximumTotalBytes = budget.maximumTotalBytes
-        maximumCreationsPerMinute = min(budget.maximumCreationsPerMinute,
-                                        DisplayLifecycleLease.maximumCreationsPerMinute)
-        maximumCreationsPerTenMinutes = DisplayLifecycleLease.maximumCreationsPerTenMinutes
-        maximumCreationsPerDay = DisplayLifecycleLease.maximumCreationsPerDay
+        maximumCreationsPerMinute = testingOverride ? budget.maximumCreationsPerMinute
+            : min(budget.maximumCreationsPerMinute, DisplayLifecycleLease.maximumCreationsPerMinute)
+        maximumCreationsPerTenMinutes = testingOverride ? nil : DisplayLifecycleLease.maximumCreationsPerTenMinutes
+        maximumCreationsPerDay = testingOverride ? nil : DisplayLifecycleLease.maximumCreationsPerDay
+        creationRateTestingOverride = testingOverride ? true : nil
         minimumTileWidth = Int(budget.minimumTileSize.width)
         minimumTileHeight = Int(budget.minimumTileSize.height)
         maximumDisplayEdge = budget.maximumDisplayEdge

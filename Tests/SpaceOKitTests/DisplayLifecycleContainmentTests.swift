@@ -315,6 +315,92 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         try body(directory.appendingPathComponent("safety.json").path)
     }
 
+    func testDiagnosticCreationBudgetKeepsBoundedHistoryAndConstrainsNormalRestart() throws {
+        try withJournal { path in
+            let start = Date(timeIntervalSince1970: 2_000_000_000)
+            var diagnostic: DisplayLifecycleLease? = DisplayLifecycleLease(path: path, testingOverride: true)
+            try diagnostic!.acquire()
+            XCTAssertEqual(diagnostic!.cachedStatus?.creationRateTestingOverride, true)
+            let status = try XCTUnwrap(diagnostic!.cachedStatus)
+            let decoded = try Wire.decoder.decode(DisplaySafetyStatus.self, from: Wire.encoder.encode(status))
+            XCTAssertEqual(decoded.creationRateTestingOverride, true)
+            for index in 0..<100 {
+                try diagnostic!.begin(creation: true, now: start.addingTimeInterval(Double(index)))
+                try diagnostic!.finish()
+            }
+            let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
+            XCTAssertLessThanOrEqual(bytes.count, 4096)
+            let journal = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+            let attempts = try XCTUnwrap(journal["attempts"] as? [Double])
+            let day = try XCTUnwrap(journal["dayAttempts"] as? [Double])
+            XCTAssertEqual(attempts.count, DisplayLifecycleLease.maximumCreationsPerTenMinutes)
+            XCTAssertEqual(day.count, DisplayLifecycleLease.maximumCreationsPerDay)
+            XCTAssertEqual(day.first, start.addingTimeInterval(68).timeIntervalSince1970)
+            XCTAssertEqual(day.last, start.addingTimeInterval(99).timeIntervalSince1970)
+            diagnostic = nil
+            let normal = DisplayLifecycleLease(path: path, testingOverride: false)
+            try normal.acquire()
+            XCTAssertThrowsError(try normal.begin(creation: true, now: start.addingTimeInterval(100)))
+            // The 32nd most recent entry expires exactly here; older omitted entries have
+            // already expired, so restoring normal admission cannot undercount live history.
+            try normal.begin(creation: true, now: start.addingTimeInterval(86_468))
+            try normal.finish()
+        }
+    }
+
+    func testEverySafetyReportPathRecordsDiagnosticCreationOverride() throws {
+        try withJournal { path in
+            // Doctor inspects read-only, possibly before any owner has acquired the lease.
+            let unowned = DisplayLifecycleLease.status(path: path, testingOverride: true)
+            XCTAssertEqual(unowned.state, .ready)
+            XCTAssertEqual(unowned.creationRateTestingOverride, true)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+            let decoded = try Wire.decoder.decode(DisplaySafetyStatus.self, from: Wire.encoder.encode(unowned))
+            XCTAssertEqual(decoded.creationRateTestingOverride, true)
+            XCTAssertNil(DisplayLifecycleLease.status(path: path, testingOverride: false).creationRateTestingOverride)
+            var owner: DisplayLifecycleLease? = DisplayLifecycleLease(path: path, testingOverride: false)
+            try owner!.acquire()
+            owner!.trip("injected timeout")
+            let blocked = DisplayLifecycleLease.status(path: path, testingOverride: true)
+            XCTAssertEqual(blocked.state, .blocked)
+            XCTAssertEqual(blocked.creationRateTestingOverride, true)
+            owner = nil
+            try Data("invalid".utf8).write(to: URL(fileURLWithPath: path))
+            let unknown = DisplayLifecycleLease.status(path: path, testingOverride: true)
+            XCTAssertEqual(unknown.state, .unknown)
+            XCTAssertEqual(unknown.creationRateTestingOverride, true)
+        }
+        // Circuit failures and deferred retirements build their own status in Stage.
+        let coordinator = DisplayLifecycleCoordinator()
+        coordinator.quarantineDeferred(Backing(), displayID: 99_112)
+        let deferred = Stage.reportedSafety(.init(state: .ready), coordinator: coordinator, testingOverride: true)
+        XCTAssertEqual(deferred.state, .blocked)
+        XCTAssertEqual(deferred.deferredRetirementDisplayIDs, [99_112])
+        XCTAssertEqual(deferred.creationRateTestingOverride, true, "replacing a ready status keeps the bypass")
+        coordinator.trip("injected circuit failure")
+        let circuit = Stage.reportedSafety(.init(state: .blocked, reason: coordinator.failureReason),
+                                           coordinator: coordinator, testingOverride: true)
+        XCTAssertEqual(circuit.reason, coordinator.failureReason)
+        XCTAssertEqual(circuit.creationRateTestingOverride, true)
+        XCTAssertNil(Stage.reportedSafety(.init(state: .unknown), coordinator: coordinator,
+                                          testingOverride: false).creationRateTestingOverride)
+    }
+
+    func testDiagnosticBudgetDoesNotClearPendingMutationOrPermitClockRollback() throws {
+        try withJournal { path in
+            let start = Date(timeIntervalSince1970: 2_000_000_000)
+            var diagnostic: DisplayLifecycleLease? = DisplayLifecycleLease(path: path, testingOverride: true)
+            try diagnostic!.acquire()
+            try diagnostic!.begin(creation: true, now: start)
+            try diagnostic!.finish()
+            XCTAssertThrowsError(try diagnostic!.begin(creation: true, now: start.addingTimeInterval(-1)))
+            try diagnostic!.begin(creation: true, now: start.addingTimeInterval(1))
+            diagnostic = nil // Retain the unfinished mutation.
+            let restarted = DisplayLifecycleLease(path: path, testingOverride: true)
+            XCTAssertThrowsError(try restarted.acquire())
+        }
+    }
+
     func testDailyBudgetSurvivesRestartAndAllowsRetirement() throws {
         try withJournal { path in
             var lease: DisplayLifecycleLease? = DisplayLifecycleLease(path: path)

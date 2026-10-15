@@ -8,6 +8,13 @@ import CoreGraphics
 /// synthetic ScreenCaptureKit snapshot. That makes the observable effect — the foreign window id
 /// passed to the filter, or a fail-closed error — deterministic without attaching a real display.
 final class CaptureIsolationTests: XCTestCase {
+    func testWindowCaptureRefusesChangedSnapshotGeometry() throws {
+        let window = WindowRef(windowID: 1, pid: 101, title: "fixture",
+            frame: CGRect(x: 0, y: 0, width: 160, height: 120))
+        try Capture.validateWindowCaptureFrame(window, frame: window.frame)
+        XCTAssertThrowsError(try Capture.validateWindowCaptureFrame(window,
+            frame: window.frame.offsetBy(dx: 1, dy: 0)))
+    }
 
     func testWindowCaptureAcceptsMatchingSnapshotOwner() throws {
         let window = WindowRef(windowID: 42, pid: 101, title: "", frame: .zero)

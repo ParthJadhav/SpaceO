@@ -154,22 +154,34 @@ public final class Stage: @unchecked Sendable {
         if hostHealth.hasStarted { try hostHealth.requireHealthy() }
     }
 
+    /// Evaluated once, like the lease and host-health monitor this process constructs.
+    private static let creationRateTestingOverride = DisplayTestingPolicy.enabled()
+
     /// Includes in-memory circuit failures even if the asynchronous journal write is stalled.
     public static func displaySafetyStatus() -> DisplaySafetyStatus {
-        if let reason = lifecycle.failureReason {
-            return lifecycle.annotatingDeferredRetirements(.init(state: .blocked, reason: reason))
-        }
-        return lifecycle.annotatingDeferredRetirements(DisplayLifecycleLease.status())
+        if let reason = lifecycle.failureReason { return reportedSafety(.init(state: .blocked, reason: reason)) }
+        return reportedSafety(DisplayLifecycleLease.status())
     }
 
     /// Socket responses must never perform journal I/O or wait for the journal owner's mutex.
+    /// Nil means no owner has observed the journal yet; there is no status to annotate.
     public static func runtimeDisplaySafetyStatus() -> DisplaySafetyStatus? {
-        if let reason = lifecycle.failureReason {
-            return lifecycle.annotatingDeferredRetirements(.init(state: .blocked, reason: reason))
-        }
-        if let cached = lease.cachedStatus { return lifecycle.annotatingDeferredRetirements(cached) }
+        if let reason = lifecycle.failureReason { return reportedSafety(.init(state: .blocked, reason: reason)) }
+        if let cached = lease.cachedStatus { return reportedSafety(cached) }
         guard !lifecycle.deferredRetirementDisplayIDs.isEmpty else { return nil }
-        return lifecycle.annotatingDeferredRetirements(.init(state: .unknown))
+        return reportedSafety(.init(state: .unknown))
+    }
+
+    private static func reportedSafety(_ status: DisplaySafetyStatus) -> DisplaySafetyStatus {
+        reportedSafety(status, coordinator: lifecycle, testingOverride: creationRateTestingOverride)
+    }
+
+    /// Diagnostic evidence records the creation-rate bypass whichever path produced a status:
+    /// the in-memory circuit, the owner's cache or a read-only journal inspection.
+    static func reportedSafety(_ status: DisplaySafetyStatus, coordinator: DisplayLifecycleCoordinator,
+                               testingOverride: Bool) -> DisplaySafetyStatus {
+        coordinator.annotatingDeferredRetirements(
+            DisplayLifecycleLease.annotating(status, testingOverride: testingOverride))
     }
 
     /// XCTest's first recorded live failure also stops focused reruns through the shared latch.
@@ -686,15 +698,26 @@ public final class Stage: @unchecked Sendable {
     }
 
     private static func checkedDisplayIDs(active: Bool) throws -> [CGDirectDisplayID] {
-        // One bounded allocation and one call: failure/overflow is unknown, never an empty graph.
+        // A successful zero count is readable; failure/overflow remains unknown.
+        // Admission separately refuses currently unqualified empty/inactive configurations.
         var ids = [CGDirectDisplayID](repeating: 0, count: 128)
         var count: UInt32 = 0
         let result = active ? CGGetActiveDisplayList(128, &ids, &count)
             : CGGetOnlineDisplayList(128, &ids, &count)
-        guard result == .success, count > 0, count < 128 else {
+        return try validatedDisplayIDs(result: result, buffer: ids, count: count)
+    }
+
+    static func validatedDisplayIDs(
+        result: CGError, buffer: [CGDirectDisplayID], count: UInt32
+    ) throws -> [CGDirectDisplayID] {
+        guard result == .success, !buffer.isEmpty, Int(count) < buffer.count else {
             throw SpaceOError.stageCreationFailed("display inventory is unavailable or exceeds its bound")
         }
-        return Array(ids.prefix(Int(count)))
+        let ids = Array(buffer.prefix(Int(count)))
+        guard !ids.contains(0), Set(ids).count == ids.count else {
+            throw SpaceOError.stageCreationFailed("display inventory contains invalid identifiers")
+        }
+        return ids
     }
 
     /// Diagnostics preserve the existing nonthrowing API; lifecycle uses the checked variant.
@@ -796,7 +819,7 @@ public final class Stage: @unchecked Sendable {
                      && $0.bounds.origin.x.isFinite && $0.bounds.origin.y.isFinite
                      && $0.bounds.width > 0 && $0.bounds.height > 0
                      && $0.modeWidth > 0 && $0.modeHeight > 0
-              }) else { return "user display configuration is missing, inactive, or unreadable" }
+              }) else { return "user display configuration has no qualified active display or is unreadable" }
         guard foreignDisplayIDs.isEmpty else {
             return "unowned SpaceO displays are still online; refusing another attachment"
         }

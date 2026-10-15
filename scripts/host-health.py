@@ -5,12 +5,14 @@ from datetime import datetime, timezone
 import math
 import os
 from pathlib import Path
+import plistlib
 import re
 import selectors
 import stat
 import subprocess
 import sys
 import time
+from xml.parsers.expat import ExpatError
 
 SERVICES = ("/usr/libexec/colorsync.displayservices", "/usr/libexec/colorsyncd")
 MAX_OUTPUT = 1024 * 1024
@@ -51,6 +53,37 @@ def read_command(command, until=None):
             child.kill()
             # Even shutdown of a read-only helper must not introduce an unbounded wait.
             child.wait(timeout=1)
+
+
+def parse_console_diagnostic(text):
+    """Retain only boolean console metadata; these IORegistry keys are undocumented."""
+    if len(text.encode("utf-8")) > MAX_OUTPUT:
+        raise ValueError("console metadata exceeded budget")
+    root = plistlib.loads(text.encode("utf-8"))
+    if not isinstance(root, dict):
+        raise ValueError("console metadata root invalid")
+    users = root.get("IOConsoleUsers")
+    if not isinstance(users, list) or len(users) > 32 or any(not isinstance(v, dict) for v in users):
+        raise ValueError("console metadata sessions invalid")
+
+    def boolean(value):
+        return value if type(value) is bool else None
+
+    return dict(state="observed", source="ioreg_undocumented",
+        consoleLocked=boolean(root.get("IOConsoleLocked")), sessions=[dict(
+            onConsole=boolean(user.get("kCGSSessionOnConsoleKey")),
+            loginComplete=boolean(user.get("kCGSessionLoginDoneKey")),
+            screenLocked=boolean(user.get("CGSSessionScreenIsLocked"))) for user in users])
+
+
+def console_diagnostic():
+    # Supplementary evidence only: unknown/locked does not change health admission or overrides.
+    try:
+        result = parse_console_diagnostic(read_command(["/usr/sbin/ioreg", "-n", "Root", "-d", "1", "-a"]))
+    except (OSError, ValueError, plistlib.InvalidFileException, ExpatError, RecursionError, subprocess.SubprocessError):
+        result = dict(state="unavailable", source="ioreg_undocumented", consoleLocked=None, sessions=[])
+    result["observedAtEpochSeconds"] = time.time()
+    return result
 
 
 def cpu_seconds(value):
@@ -295,34 +328,61 @@ def assess(before, after, diagnostic_reports=0):
                 windowServerDiagnosticReports=diagnostic_reports)
 
 
+def testing_override(environment=None):
+    environment = os.environ if environment is None else environment
+    return environment.get("SPACEO_LIVE_TESTS") == "1" and environment.get("SPACEO_TESTING_HOST") == "1"
+
+
+def apply_testing_override(report):
+    if testing_override():
+        report["observedAdmitted"] = report["admitted"]
+        report["testingOverride"] = True
+        report["admitted"] = True
+    return report
+
+
 def main():
+    unavailable_input = "platform"
     try:
         if sys.platform != "darwin":
             raise ValueError("requires macOS")
+        unavailable_input = "arguments"
         if len(sys.argv) == 1:
             since = time.time() - 300
         elif len(sys.argv) == 3 and sys.argv[1] == "--since":
             since = float(sys.argv[2])
         else:
             raise ValueError("expected optional --since epoch-seconds")
+        unavailable_input = "boot_time"
         cutoff = diagnostic_cutoff(read_command(["/usr/sbin/sysctl", "-n", "kern.boottime"]), time.time())
         roots = [(Path("/Library/Logs/DiagnosticReports"), True),
                  (Path.home() / "Library/Logs/DiagnosticReports", False)]
+        unavailable_input = "diagnostic_metadata"
         reports = windowserver_diagnostics(roots, cutoff)
+        unavailable_input = "sample_before"
         before = snapshot()
         # Final launchd validation may already have consumed part of the spacing interval.
         time.sleep(max(0, before["at"] + 5 - time.monotonic()))
+        unavailable_input = "sample_after"
         after = snapshot()
+        unavailable_input = "diagnostic_metadata"
         reports = max(reports, windowserver_diagnostics(roots, cutoff))
+        unavailable_input = "assessment"
         report = assess(before, after, reports)
+        unavailable_input = "system_timeout_log"
         report["systemServiceTimeouts"] = windowserver_timeouts(since, time.time())
         if report["systemServiceTimeouts"]:
             report["reasons"].append("system_service_timeout")
             report["admitted"] = False
     except (OSError, ValueError, subprocess.SubprocessError):
         # Do not print command output, process identities, or arbitrary exception content.
-        print(json.dumps(dict(schemaVersion=1, admitted=False, reasons=["host_health_unknown"])))
-        return 2
+        report = apply_testing_override(dict(schemaVersion=1, admitted=False,
+            reasons=["host_health_unknown"], unavailableInput=unavailable_input))
+        report["consoleSessionDiagnostic"] = console_diagnostic()
+        print(json.dumps(report))
+        return 0 if report["admitted"] else 2
+    apply_testing_override(report)
+    report["consoleSessionDiagnostic"] = console_diagnostic()
     print(json.dumps(report))
     return 0 if report["admitted"] else 1
 

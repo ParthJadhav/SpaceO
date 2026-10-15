@@ -2,6 +2,8 @@
 """Execute fixture JavaScript in a fake DOM; never launch an app or create a display."""
 import importlib.util
 import json
+import hashlib
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -37,6 +39,23 @@ process.stdout.write(JSON.stringify({animation:box.style.animation,scrolls,rows:
 '''
 
 class Fixture(unittest.TestCase):
+    def test_executable_hash_checks_opened_descriptor_and_refuses_special_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            binary = root / 'candidate'
+            binary.write_bytes(b'candidate fixture')
+            self.assertEqual(live.executable_digest(binary), hashlib.sha256(binary.read_bytes()).hexdigest())
+            pipe = root / 'pipe'
+            os.mkfifo(pipe)
+            with self.assertRaises(ValueError): live.executable_digest(pipe)
+            link = root / 'link'
+            link.symlink_to(binary)
+            with self.assertRaises(OSError): live.executable_digest(link)
+            with self.assertRaises(ValueError): live.executable_digest(root)
+            with binary.open('r+b') as source:
+                source.truncate(128 * 1024 * 1024 + 1)
+            with self.assertRaisesRegex(ValueError, 'byte budget'): live.executable_digest(binary)
+
     def test_unhealthy_host_stops_before_daemon_or_fixture_start(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -52,6 +71,25 @@ class Fixture(unittest.TestCase):
                  patch.object(live.subprocess, 'Popen') as spawn:
                 with self.assertRaisesRegex(SystemExit, 'host is not quiet enough'):
                     live.main()
+                spawn.assert_not_called()
+
+    def test_explicit_cli_candidate_is_checked_before_starting_any_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ('.build/release/spaceo', '.build/process-resources',
+                         '.build/SpaceO Viewer.app/Contents/MacOS/SpaceOViewer'):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            with patch.object(live, 'ROOT', root), \
+                 patch.object(live.sys, 'argv', ['performance-live.py', str(root / 'report')]), \
+                 patch.dict(live.os.environ, {'SPACEO_LIVE_TESTS': '1',
+                     'SPACEO_PERF_CLI_BINARY': str(root / 'missing-candidate')}, clear=True), \
+                 patch.object(live.subprocess, 'run') as health, \
+                 patch.object(live.subprocess, 'Popen') as spawn:
+                with self.assertRaisesRegex(SystemExit, 'build the CLI'):
+                    live.main()
+                health.assert_not_called()
                 spawn.assert_not_called()
 
     def test_focused_motion_keeps_static_baseline_and_explicit_coverage(self):

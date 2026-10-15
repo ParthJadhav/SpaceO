@@ -12,7 +12,9 @@ enum MCPControllerError: Error, CustomStringConvertible, LocalizedError {
         case .missingLease(let session):
             let target = session.isEmpty ? "the requested session" : "session '\(session)'"
             return "No controller lease is available for \(target). Create the session with "
-                + "this MCP connection and keep using the same connection; lease credentials "
+                + "this MCP connection and keep using the same connection. If creation failed, "
+                + "check its retained-session receipt or resolve that failure before opening apps; "
+                + "do not assume a failed create acquired a lease. Lease credentials "
                 + "are intentionally not recoverable from session.list."
         case .ambiguousSession(let sessions):
             let shown = sessions.prefix(8).map { MCPDiagnostic.name($0) }
@@ -22,6 +24,13 @@ enum MCPControllerError: Error, CustomStringConvertible, LocalizedError {
     }
 
     var errorDescription: String? { description }
+
+    var code: String {
+        switch self {
+        case .missingLease: return "lease_required"
+        case .ambiguousSession: return "ambiguous_session"
+        }
+    }
 }
 
 /// What one tool call turns into on the wire. Almost everything is a single daemon round trip;
@@ -1183,14 +1192,23 @@ public enum MCPServer {
             )
             translated.diagnosticTraceID = trace
             options = MCPCallOptions(arguments: arguments, connectionVerbose: controller.memory.verbose)
-            plan = try controller.plan(translated)
             journaled.request = translated
+            plan = try controller.plan(translated)
             if observeTools.contains(name) { journaled.observe = options.observe.rawValue }
         } catch {
-            outcome = "invalid_arguments"
-            reply(toolError(
-                (error as? MCPInputError)?.description ?? error.localizedDescription,
-                tool: name))
+            if let ownership = error as? MCPControllerError {
+                outcome = "controller_error"
+                var failure = Response(ok: false)
+                failure.errorCode = ownership.code
+                failure.error = ownership.description
+                journaled.response = failure
+                reply(toolError("[\(ownership.code)] \(ownership.description)", tool: name))
+            } else {
+                outcome = "invalid_arguments"
+                reply(toolError(
+                    (error as? MCPInputError)?.description ?? error.localizedDescription,
+                    tool: name))
+            }
             return
         }
 
@@ -1201,6 +1219,7 @@ public enum MCPServer {
         case .ownedSessionDestroy(let requests):
             let destroyOutcome = destroyOwnedSessions(
                 requests, socketPath: socketPath, controller: controller)
+            journaled.releasedSessions = destroyOutcome.destroyed
             outcome = destroyOutcome.failed ? "tool_error" : "ok"
             reply(destroyOutcome.failed
                   ? toolError(destroyOutcome.text, tool: name)
@@ -1436,11 +1455,11 @@ public enum MCPServer {
         socketPath: String,
         controller: MCPControllerContext,
         timeout: TimeInterval = 120
-    ) -> (text: String, failed: Bool) {
+    ) -> (text: String, failed: Bool, destroyed: [String]) {
         guard !requests.isEmpty else {
             return ("no sessions belong to this MCP connection; nothing to destroy. "
                     + "Sessions created by other agents are never destroyed by this tool.",
-                    false)
+                    false, [])
         }
 
         var destroyed: [String] = []
@@ -1474,7 +1493,7 @@ public enum MCPServer {
             lines.append("failed to destroy \(failures.count) session(s):")
             lines.append(contentsOf: failures.map { "  \($0)" })
         }
-        return (lines.joined(separator: "\n"), !failures.isEmpty)
+        return (lines.joined(separator: "\n"), !failures.isEmpty, destroyed)
     }
 
     /// The MCP content for a screenshot: what was captured, what its pixels mean, then the image.

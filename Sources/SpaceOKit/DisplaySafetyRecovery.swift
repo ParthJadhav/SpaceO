@@ -1,23 +1,28 @@
 import Foundation
 
-/// Local operator recovery for an idle unknown-health latch. This never resets a pending
-/// display mutation, an incident/pressure failure, or a journal locked by a display owner.
+/// Local operator recovery for an idle unknown-health, pressure or swap latch. This never
+/// resets a pending display mutation, a system incident, or a journal locked by a display owner.
 public enum DisplaySafetyRecovery {
     private static let worker = DisplayLifecycleCoordinator()
     /// One abort at a time: a stalled abort cannot grow a thread pool; later aborts report unknown.
     private static let abortQueue = DispatchQueue(label: "spaceo.display-safety-recovery-abort")
 
     public static func clearHostHealthLatch() throws -> String {
-        try clearHostHealthLatch(path: nil, worker: worker, timeout: 20) { operation in
+        let validatedHealth = Locked<DisplayHostHealth?>(nil)
+        return try clearHostHealthLatch(path: nil, worker: worker, timeout: 20,
+                                       validateStillHealthy: {
+            try validatedHealth.value?.requireStillSettledForReconfiguration()
+        }) { operation in
             let original = try Stage.checkedOnlineDisplayIDs()
             guard !original.contains(where: Stage.isSpaceODisplay) else {
                 throw SpaceOError.stageCreationFailed("SpaceO displays remain online; host-health recovery refused")
             }
             let health = DisplayHostHealth()
-            try health.requireHealthy()
+            try health.requireSettledForReconfiguration(timeout: 15)
+            validatedHealth.value = health
             let final = try Stage.checkedOnlineDisplayIDs()
             guard Set(original) == Set(final), !final.contains(where: Stage.isSpaceODisplay),
-                  health.report.state == .ready else {
+                  health.isSettledForReconfiguration else {
                 throw SpaceOError.stageCreationFailed("display topology or host health changed during recovery")
             }
             try operation.check()
@@ -41,6 +46,7 @@ public enum DisplaySafetyRecovery {
     static func clearHostHealthLatch(
         path: String?, worker: DisplayLifecycleCoordinator, timeout: TimeInterval, abortTimeout: TimeInterval = 2,
         interpose: @escaping DisplayLifecycleLease.HostHealthRecoveryInterposer = DisplayLifecycleLease.directRecoveryStep,
+        validateStillHealthy: @escaping @Sendable () throws -> Void = {},
         validateHost: @escaping @Sendable (DisplayLifecycleCoordinator.Operation) throws -> Void
     ) throws -> String {
         let token = UUID().uuidString
@@ -51,7 +57,10 @@ public enum DisplaySafetyRecovery {
                 do {
                     let archive = try DisplayLifecycleLease.clearHostHealthLatch(
                         path: path ?? DisplayLifecycleLease.defaultPath, token: token,
-                        checkDeadline: { try operation.check() }, interpose: interpose) { try validateHost(operation) }
+                        checkDeadline: {
+                            try operation.check()
+                            try validateStillHealthy()
+                        }, interpose: interpose) { try validateHost(operation) }
                     progress.value = .committed(archive)
                     return archive
                 } catch {

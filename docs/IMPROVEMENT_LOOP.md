@@ -40,12 +40,15 @@ file with environment variables: `SPACEO_JOURNAL=off|metadata|full` and `SPACEO_
     id the daemon log uses.
   - `args`, the redacted arguments. `args_fp` is a keyed fingerprint of the arguments.
   - `outcome`, one of `ok`, `warning`, `tool_error`, `invalid_arguments`, `transport_error`,
-    `daemon_restarted` or `mcp_error`.
+    `daemon_restarted`, `controller_error` or `mcp_error`.
   - `error`, with `code`, `message`, `recovery_tool`, `recovery_then` and `next_action`.
   - `action`, with `outcome` (confirmed, unconfirmed or refused), `route` and `completion`.
   - `isolation`, `warnings`, `truncated`, `snapshot` and `wait`.
   - `result`, with `text_bytes`, `est_tokens`, `lines`, `first_line` and any image counts. At
     `full`, it also keeps `text`: what the agent read, up to 32 KB.
+  - `session_lifecycle` records acquired session IDs only when a returned controller lease
+    proves ownership, including a create whose launch failed. It records confirmed released
+    IDs, including the successful subset of a bulk teardown. It never records credentials.
   - Loop context: `seq`, `prev_tool`, `gap_ms` (the agent's think time), `repeat` (the same call
     again) and `after_error`.
   - `observe`, and any one-time `notes` the agent was shown.
@@ -86,10 +89,24 @@ works. It also shows:
 - error codes, with how often the agent actually followed the recovery hint;
 - friction signals: identical retries after an error, invalid-argument names, re-reads right
   after an action (even when an observe diff was returned), truncated reads, unconfirmed
-  actions, wait timeouts, isolation verdicts, and sessions left for the janitor;
+  actions, wait timeouts, isolation verdicts, and session cleanup not observed before a
+  connection ended;
 - the largest and slowest calls;
 - daemon failures from the CLI and the Viewer;
 - how much time the MCP server adds on top of the daemon.
+
+Cleanup signals require observed acquisition, not just a session name on a failed call.
+Open connections are reported separately. The report retains earlier ownership/client context
+when `--since` limits the calls, and it does not claim to know whether the janitor later cleaned
+up. Older journals cannot prove ownership from a failed create-and-open or the successful subset
+of a failed bulk destroy; new lifecycle records resolve those cases.
+
+Report input is bounded to 64 MiB per regular file, 512 MiB in total, 500,000 nonblank records,
+1 MiB per line, 10,000 directory entries and 16 directory levels. Exceeding a bound refuses the
+report instead of silently truncating its evidence. File aliases are deduplicated, directory
+links are not followed, and pipes are refused without waiting. The reader drops full result
+text; errors and first result lines can still contain private application content. Treat both
+Markdown and JSON reports as local private data.
 
 A good loop:
 

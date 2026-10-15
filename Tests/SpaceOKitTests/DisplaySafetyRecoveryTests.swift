@@ -152,7 +152,7 @@ final class DisplaySafetyRecoveryTests: XCTestCase {
 
     func testPendingMutationLiveCaseAndOtherFailureReasonsCannotBeCleared() throws {
         for (key, value) in [("pending", true as Any), ("liveTestPending", true as Any),
-                             ("failure", "host health: memory_pressure" as Any),
+                             ("failure", "host health: colorsync_busy" as Any),
                              ("failure", "removal was not confirmed" as Any)] {
             var journal = unknown; journal[key] = value
             try fixture(journal) { path in
@@ -160,6 +160,112 @@ final class DisplaySafetyRecoveryTests: XCTestCase {
                 XCTAssertThrowsError(try DisplayLifecycleLease.clearHostHealthLatch(path: path) { XCTFail("ineligible journal must not reach host validation") })
                 XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), before)
             }
+        }
+    }
+
+
+
+    func testHealthChangingDuringJournalWriteCannotCommitRecovery() throws {
+        final class State: @unchecked Sendable {
+            let lock = NSLock()
+            var healthy = true
+            func setUnhealthy() { lock.withLock { healthy = false } }
+            func check() throws {
+                try lock.withLock { if !healthy { throw SpaceOError.badRequest("host no longer settled") } }
+            }
+        }
+        var resource = unknown; resource["failure"] = "host health: swap_activity"
+        try fixture(resource) { path in
+            let state = State()
+            XCTAssertThrowsError(try DisplaySafetyRecovery.clearHostHealthLatch(
+                path: path, worker: DisplayLifecycleCoordinator(), timeout: 5,
+                interpose: { step, perform in
+                    try perform()
+                    if step == .journal { state.setUnhealthy() }
+                }, validateStillHealthy: { try state.check() }, validateHost: { _ in }))
+            let status = DisplayLifecycleLease.status(path: path)
+            XCTAssertEqual(status.state, .blocked)
+            try assertBudgetsRetained(path)
+            XCTAssertFalse(try records(path).values.contains { String(decoding: $0, as: UTF8.self).hasPrefix("commit ") })
+        }
+    }
+
+    func testHealthChangingBeforeCommitCallCannotClearRecovery() throws {
+        final class State: @unchecked Sendable {
+            let lock = NSLock()
+            var healthy = true
+            func setUnhealthy() { lock.withLock { healthy = false } }
+            func check() throws {
+                try lock.withLock { if !healthy { throw SpaceOError.badRequest("host no longer settled") } }
+            }
+        }
+        var resource = unknown; resource["failure"] = "host health: swap_activity"
+        try fixture(resource) { path in
+            let state = State()
+            XCTAssertThrowsError(try DisplaySafetyRecovery.clearHostHealthLatch(
+                path: path, worker: DisplayLifecycleCoordinator(), timeout: 5,
+                interpose: { step, perform in
+                    if step == .commit { state.setUnhealthy() }
+                    try perform()
+                }, validateStillHealthy: { try state.check() }, validateHost: { _ in }))
+            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .blocked)
+            try assertBudgetsRetained(path)
+            XCTAssertFalse(try records(path).values.contains { String(decoding: $0, as: UTF8.self).hasPrefix("commit ") })
+        }
+    }
+
+    func testRecoveredResourceLatchesPreserveBudgetsAndRequireHostValidation() throws {
+        for reason in ["swap_activity", "memory_pressure", "memory_pressure,swap_activity"] {
+            var resource = unknown
+            resource["failure"] = "host health: " + reason
+            try fixture(resource) { path in
+                let before = try Data(contentsOf: URL(fileURLWithPath: path))
+                XCTAssertThrowsError(try DisplayLifecycleLease.clearHostHealthLatch(path: path) {
+                    throw SpaceOError.badRequest("host still unhealthy")
+                })
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), before)
+                var validated = false
+                let archive = try DisplayLifecycleLease.clearHostHealthLatch(path: path) { validated = true }
+                XCTAssertTrue(validated)
+                XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .ready)
+                try assertBudgetsRetained(path)
+                XCTAssertEqual(try journal(archive)["failure"] as? String, "host health: " + reason)
+            }
+        }
+    }
+
+    func testResourceRecoveryRefusesPendingWorkOwnersAndMixedIncidentReasons() throws {
+        for reason in ["swap_activity,recent_windowserver_diagnostic", "memory_pressure,colorsync_busy",
+                       "host_health_timeout", "host_health_stale", "swap_activity,", "swap_activity,unknown"] {
+            var resource = unknown; resource["failure"] = "host health: " + reason
+            try fixture(resource) { path in
+                let before = try Data(contentsOf: URL(fileURLWithPath: path))
+                XCTAssertThrowsError(try DisplayLifecycleLease.clearHostHealthLatch(path: path) {
+                    XCTFail("incident reason must not reach validation")
+                }) { error in
+                    XCTAssertTrue(String(describing: error).contains("not an eligible idle health latch"))
+                }
+                XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: path)), before)
+            }
+        }
+        for key in ["pending", "liveTestPending"] {
+            var resource = unknown; resource["failure"] = "host health: swap_activity"; resource[key] = true
+            try fixture(resource) { path in
+                XCTAssertThrowsError(try DisplayLifecycleLease.clearHostHealthLatch(path: path) {
+                    XCTFail("pending work must not reach validation")
+                }) { error in
+                    XCTAssertTrue(String(describing: error).contains("a display mutation or live case is pending"))
+                }
+            }
+        }
+        var resource = unknown; resource["failure"] = "host health: swap_activity"
+        try fixture(resource) { path in
+            let owner = DisplayLifecycleLease(path: path)
+            XCTAssertThrowsError(try owner.acquire())
+            XCTAssertThrowsError(try DisplayLifecycleLease.clearHostHealthLatch(path: path) {
+                XCTFail("active owner must exclude recovery")
+            })
+            withExtendedLifetime(owner) {}
         }
     }
 
@@ -256,11 +362,12 @@ final class DisplaySafetyRecoveryTests: XCTestCase {
                 XCTAssertTrue(text.contains("after this safety process has fully exited"), text)
             }
             assertUndecidedWhileWorkerHoldsLock(path, stall)
-            // Either order is consistent with "unknown"; here the stalled commit lands first.
+            // Outcome remains unknown to the timed-out caller. Once the pre-call stall ends,
+            // the commit-boundary deadline check rejects the write before its syscall.
             XCTAssertEqual(stall.complete(.commit), .success)
             XCTAssertEqual(stall.complete(.abort), .success)
             waitForOwnerRelease(path)
-            XCTAssertEqual(DisplayLifecycleLease.status(path: path).state, .ready)
+            try assertBlockedAndRecoverable(path)
         }
     }
 

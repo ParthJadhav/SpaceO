@@ -194,6 +194,7 @@ public enum Capture {
             throw SpaceOError.captureFailed("window \(window.windowID) is not shareable")
         }
         try validateWindowCaptureOwner(window, ownerPID: target.owningApplication.map { pid_t($0.processID) })
+        try validateWindowCaptureFrame(window, frame: target.frame)
         let filter = SCContentFilter(desktopIndependentWindow: target)
         let config = SCStreamConfiguration()
         let dimensions = try boundedDimensions(
@@ -224,6 +225,12 @@ public enum Capture {
     static func validateWindowCaptureOwner(_ window: WindowRef, ownerPID: pid_t?) throws {
         guard window.windowID != 0, window.pid > 0, ownerPID == window.pid else {
             throw SpaceOError.captureFailed("window ownership changed or is unavailable; discover the window again")
+        }
+    }
+
+    static func validateWindowCaptureFrame(_ window: WindowRef, frame: CGRect) throws {
+        guard frame == window.frame else {
+            throw SpaceOError.staleGeometry("window changed before capture; refresh windows and capture again")
         }
     }
 

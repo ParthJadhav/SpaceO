@@ -2,6 +2,25 @@ import XCTest
 @testable import SpaceOKit
 
 final class DisplayHostHealthTests: XCTestCase {
+    func testReservedTestingOverrideRequiresBothExplicitFlags() throws {
+        XCTAssertFalse(DisplayTestingPolicy.enabled(environment: [:]))
+        XCTAssertFalse(DisplayTestingPolicy.enabled(environment: ["SPACEO_LIVE_TESTS": "1"]))
+        XCTAssertFalse(DisplayTestingPolicy.enabled(environment: ["SPACEO_TESTING_HOST": "1"]))
+        XCTAssertTrue(DisplayTestingPolicy.enabled(environment: ["SPACEO_LIVE_TESTS": "1", "SPACEO_TESTING_HOST": "1"]))
+        let health = DisplayHostHealth(testingOverride: true, sample: { throw DisplayHostHealthSample.Unknown() })
+        try health.requireHealthy()
+        health.resetReconfigurationSettling()
+        try health.requireSettledForReconfiguration(timeout: 0)
+        try health.requireStillSettledForReconfiguration()
+        XCTAssertEqual(health.report.testingOverride, true)
+        XCTAssertEqual(health.report.reasons, ["testing_override"])
+        XCTAssertNil(health.report.colorsyncCPUPercent)
+        XCTAssertTrue(DisplayLifecycleLease.isRecoverableHostHealthFailure(
+            "host health: recent_windowserver_diagnostic", testingOverride: true))
+        XCTAssertFalse(DisplayLifecycleLease.isRecoverableHostHealthFailure(
+            "display mutation failed", testingOverride: true))
+    }
+
     private final class Clock: @unchecked Sendable {
         private let lock = NSLock()
         private var time = 100.0
