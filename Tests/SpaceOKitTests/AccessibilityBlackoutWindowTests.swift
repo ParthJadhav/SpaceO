@@ -399,6 +399,7 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         // An unconfirmed ID may be recycled: no live WindowServer lookup enriches the row.
         XCTAssertEqual(row.windows.first?.onStage, true, "judged from the last-known frame")
         XCTAssertEqual(row.windows.first?.spaces, [], "Spaces are unknown, not another window's")
+        XCTAssertNil(row.windows.first?.defaultTarget, "choosing it would read live geometry")
         let otherController = await manager.handle(TestController.request("session.list", leaseID: UUID()))
         let redacted = try XCTUnwrap(otherController.sessions?.first { $0.id == "checked-read" })
         XCTAssertEqual(redacted.redacted, true)

@@ -262,7 +262,8 @@ public struct WindowInfo: Codable, Sendable {
 
     /// A row from the retained ledger when discovery could not confirm the window's owner.
     /// Window IDs are recycled, so nothing here asks the WindowServer about this ID: placement
-    /// is judged from the last-known frame and Spaces are reported as unknown (empty).
+    /// is judged from the last-known frame, Spaces are unknown (empty), and so is the default
+    /// target, whose choice reads live geometry. Focus comes from cached observations.
     init(lastKnown window: WindowRef, session: AgentSession) {
         self.windowID = window.windowID
         self.pid = window.pid
@@ -273,10 +274,10 @@ public struct WindowInfo: Codable, Sendable {
         self.height = window.frame.height
         self.onStage = WindowPlacement.isFullyInside(window.frame, session.frame)
         self.spaces = []
-        let markers = session.focusMarkers(for: window)
+        let markers = session.cachedFocusMarkers(for: window)
         self.focused = markers.focused
         self.modal = markers.modal
-        self.defaultTarget = markers.defaultTarget
+        self.defaultTarget = nil
     }
 }
 

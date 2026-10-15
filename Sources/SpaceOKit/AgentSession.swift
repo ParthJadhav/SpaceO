@@ -1650,10 +1650,16 @@ public final class AgentSession: @unchecked Sendable {
     /// `focused` and `modal` are nil when the owning app's focus was never observed; `modal` is
     /// only known for the focused window itself.
     public func focusMarkers(for window: WindowRef) -> (focused: Bool?, modal: Bool?, defaultTarget: Bool) {
+        let cached = cachedFocusMarkers(for: window)
+        return (cached.focused, cached.modal, primaryWindow?.windowID == window.windowID)
+    }
+
+    /// Focus and modality from the last observation alone; choosing the default target would
+    /// read live geometry for every window.
+    func cachedFocusMarkers(for window: WindowRef) -> (focused: Bool?, modal: Bool?) {
         let observation = focusObservations[window.pid]
         let focused = observation.map { $0.windowID == window.windowID }
-        let modal = focused == true ? observation?.modal : nil
-        return (focused, modal, primaryWindow?.windowID == window.windowID)
+        return (focused, focused == true ? observation?.modal : nil)
     }
 
     /// Remember which surface the agent's last click or drag went to.
