@@ -11,12 +11,16 @@ import Foundation
 /// request took ~85 ms, ColorSync saturated, WindowServer exhausted its dispatch threads and the
 /// watchdog killed the login session.
 ///
-/// Identities are now a pure function of the requested geometry, a slot and a generation. A slot
-/// is reused once no online display and no live object in this process still holds it, so a host
-/// accumulates at most one identity per (geometry, slot, generation). The random serial existed
+/// An identity is derived from the requested geometry, a slot and a generation, and every serial
+/// ever issued is recorded, so distinct identities never share a serial across restarts and a host
+/// accumulates at most one identity per (geometry, slot, generation). A slot is reused once no
+/// online display and no live object in this process still holds it. The random serial existed
 /// because a reused identity once restored a saved configuration that left the display online but
 /// inactive, without its own Space; publication rejects such a display, and `rotate` then retires
-/// that identity for good by advancing the slot's persisted generation.
+/// that identity by advancing the slot's persisted generation.
+///
+/// The record fails closed: an existing record that cannot be read or validated refuses creation
+/// instead of silently reissuing identities it may have retired.
 final class DisplayIdentityAllocator: @unchecked Sendable {
     struct Identity: Equatable, Sendable {
         let key: String
@@ -25,10 +29,31 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
         let serial: UInt32
     }
 
+    enum RecordError: Error, Equatable, LocalizedError {
+        case unreadable(String)
+        case full
+        case unsaved(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .unreadable(let path):
+                return "the display identity record at \(path) is unreadable; move it aside only after "
+                    + "confirming no SpaceO display is online (see docs/DISPLAY_SAFETY.md)"
+            case .full:
+                return "the display identity record holds its maximum of \(DisplayIdentityAllocator.maximumIdentities) "
+                    + "identities; use fewer display sizes"
+            case .unsaved(let path):
+                return "a new display identity could not be recorded in \(path)"
+            }
+        }
+    }
+
     static let shared = DisplayIdentityAllocator()
     static let slotCount = 32
-    /// Persisted generations beyond this many keys are not recorded; bounded file, bounded growth.
-    static let maximumPersistedKeys = 512
+    /// Bounds the record, and with it how many identities this host can ever accumulate.
+    static let maximumIdentities = 1_024
+    static let maximumRecordBytes = 262_144
+    static let maximumGeneration = 1_000_000
 
     /// Busy while a claim awaits its display (`pending`) or while that display object is alive.
     private final class Holder {
@@ -37,9 +62,17 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
         var busy: Bool { pending || value != nil }
     }
 
+    struct Record: Codable, Equatable {
+        var version = 1
+        /// "<key>/<slot>" → current generation; absent means zero.
+        var generations: [String: Int] = [:]
+        /// "<key>/<slot>/<generation>" → the serial issued for that identity.
+        var serials: [String: UInt32] = [:]
+    }
+
     private let lock = NSLock()
     private let path: String?
-    private var generations: [String: Int]?
+    private var record: Record?
     private var holders: [UInt32: Holder] = [:]
 
     init(path: String? = DisplayIdentityAllocator.defaultPath) {
@@ -56,9 +89,11 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
     }
 
     /// FNV-1a over a versioned description; never zero, which the descriptor treats as unset.
-    static func serial(key: String, slot: Int, generation: Int) -> UInt32 {
+    /// A nonzero `salt` only resolves a collision with a serial already issued to another identity.
+    static func serial(key: String, slot: Int, generation: Int, salt: Int = 0) -> UInt32 {
         var hash: UInt32 = 2_166_136_261
-        for byte in "spaceo-display-v1|\(key)|\(slot)|\(generation)".utf8 {
+        let text = "spaceo-display-v1|\(key)|\(slot)|\(generation)" + (salt == 0 ? "" : "|\(salt)")
+        for byte in text.utf8 {
             hash ^= UInt32(byte)
             hash = hash &* 16_777_619
         }
@@ -66,16 +101,29 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
     }
 
     /// The lowest slot whose identity is neither online (`onlineSerials`, any process) nor held by a
-    /// live display object of this process. Nil only when every slot is busy.
+    /// live display object of this process. Nil only when every slot is busy. A first use records
+    /// the identity's serial before returning it.
     func claim(width: UInt32, height: UInt32, hiDPI: Bool,
-               onlineSerials: Set<UInt32>) -> Identity? {
+               onlineSerials: Set<UInt32>) throws -> Identity? {
         let key = Self.key(width: width, height: height, hiDPI: hiDPI)
-        return lock.withLock {
-            let generations = loadedGenerations()
+        return try lock.withLock {
+            var record = try loadedRecord()
             for slot in 0..<Self.slotCount {
-                let generation = generations["\(key)/\(slot)"] ?? 0
-                let serial = Self.serial(key: key, slot: slot, generation: generation)
-                guard !onlineSerials.contains(serial), holders[serial]?.busy != true else { continue }
+                let generation = record.generations["\(key)/\(slot)"] ?? 0
+                let id = "\(key)/\(slot)/\(generation)"
+                if let serial = record.serials[id] {
+                    guard !onlineSerials.contains(serial), holders[serial]?.busy != true else { continue }
+                    holders[serial] = Holder()
+                    return Identity(key: key, slot: slot, generation: generation, serial: serial)
+                }
+                guard record.serials.count < Self.maximumIdentities else { throw RecordError.full }
+                let issued = Set(record.serials.values)
+                guard let serial = (0..<64).lazy
+                    .map({ Self.serial(key: key, slot: slot, generation: generation, salt: $0) })
+                    .first(where: { !issued.contains($0) && !onlineSerials.contains($0) }) else { continue }
+                record.serials[id] = serial
+                guard persist(record) else { throw RecordError.unsaved(path ?? "memory") }
+                self.record = record
                 holders[serial] = Holder()
                 return Identity(key: key, slot: slot, generation: generation, serial: serial)
             }
@@ -100,52 +148,61 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
         }
     }
 
-    /// This identity came back unusable (inactive, mirrored, without its own Space): never use it
-    /// again. The new generation is persisted before the caller reports the failure.
+    /// This identity came back unusable (inactive, mirrored, without its own Space): do not offer
+    /// it again. False when the new generation could not be saved; this process still skips it.
     @discardableResult
     func rotate(_ identity: Identity) -> Bool {
         lock.withLock {
-            var generations = loadedGenerations()
+            guard var record = try? loadedRecord() else { return false }
             let slotKey = "\(identity.key)/\(identity.slot)"
-            guard (generations[slotKey] ?? 0) == identity.generation else { return true }
-            guard generations[slotKey] != nil || generations.count < Self.maximumPersistedKeys else {
+            guard (record.generations[slotKey] ?? 0) == identity.generation else { return true }
+            guard identity.generation + 1 < Self.maximumGeneration,
+                  record.generations[slotKey] != nil || record.generations.count < Self.maximumIdentities else {
                 return false
             }
-            generations[slotKey] = identity.generation + 1
-            self.generations = generations
-            return persist(generations)
+            record.generations[slotKey] = identity.generation + 1
+            self.record = record
+            return persist(record)
         }
     }
 
-    func generation(key: String, slot: Int) -> Int {
-        lock.withLock { loadedGenerations()["\(key)/\(slot)"] ?? 0 }
+    func generation(key: String, slot: Int) throws -> Int {
+        try lock.withLock { try loadedRecord().generations["\(key)/\(slot)"] ?? 0 }
     }
 
     // MARK: - Persistence (caller holds `lock`)
 
-    private struct Stored: Codable {
-        var version: Int
-        var generations: [String: Int]
-    }
-
-    private func loadedGenerations() -> [String: Int] {
-        if let generations { return generations }
-        var loaded: [String: Int] = [:]
-        if let path, let data = FileManager.default.contents(atPath: path), data.count <= 262_144,
-           let stored = try? JSONDecoder().decode(Stored.self, from: data), stored.version == 1 {
-            // Ignore malformed values: a negative or absurd generation is not a usable identity.
-            loaded = stored.generations.filter { $0.value >= 0 && $0.value < 1_000_000 }
+    /// A missing record is empty. An existing one must be fully valid; it is not cached until it is,
+    /// so moving a bad record aside takes effect without a restart.
+    private func loadedRecord() throws -> Record {
+        if let record { return record }
+        guard let path else { record = Record(); return Record() }
+        let data: Data
+        do { data = try BoundedRegularFile.read(URL(fileURLWithPath: path), maximumBytes: Self.maximumRecordBytes) }
+        catch BoundedRegularFile.ReadError.missing { record = Record(); return Record() }
+        catch { throw RecordError.unreadable(path) }
+        guard let loaded = try? JSONDecoder().decode(Record.self, from: data), Self.isValid(loaded) else {
+            throw RecordError.unreadable(path)
         }
-        generations = loaded
+        record = loaded
         return loaded
     }
 
-    private func persist(_ generations: [String: Int]) -> Bool {
+    static func isValid(_ record: Record) -> Bool {
+        guard record.version == 1,
+              record.generations.count <= maximumIdentities, record.serials.count <= maximumIdentities,
+              record.generations.values.allSatisfy({ (0..<maximumGeneration).contains($0) }),
+              !record.serials.values.contains(0),
+              Set(record.serials.values).count == record.serials.count else { return false }
+        return true
+    }
+
+    private func persist(_ record: Record) -> Bool {
         guard let path else { return true }
         let url = URL(fileURLWithPath: path)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(Stored(version: 1, generations: generations)) else { return false }
+        guard let data = try? encoder.encode(record), data.count <= Self.maximumRecordBytes else { return false }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                     withIntermediateDirectories: true,

@@ -45,7 +45,7 @@ final class DisplayIdentityAllocatorTests: XCTestCase {
         let allocator = DisplayIdentityAllocator(path: path)
         var serials = Set<UInt32>()
         for _ in 0..<100 {
-            let identity = try XCTUnwrap(allocator.claim(width: 1_920, height: 1_080, hiDPI: true,
+            let identity = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true,
                                                          onlineSerials: []))
             autoreleasepool {
                 let display = NSObject()
@@ -58,60 +58,70 @@ final class DisplayIdentityAllocatorTests: XCTestCase {
 
     func testLiveDisplaysAndPendingClaimsHoldTheirSlots() throws {
         let allocator = DisplayIdentityAllocator(path: path)
-        let first = try XCTUnwrap(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
-        let pending = try XCTUnwrap(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        let first = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        let pending = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
         XCTAssertEqual([first.slot, pending.slot], [0, 1], "an unbound claim is still busy")
 
         let display = NSObject()
         allocator.bind(first, to: display)
-        let third = try XCTUnwrap(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        let third = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
         XCTAssertEqual(third.slot, 2)
 
         allocator.abandon(pending)
         allocator.abandon(first)
-        XCTAssertEqual(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: [])?.slot, 1,
+        XCTAssertEqual(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: [])?.slot, 1,
                        "abandon frees an unbound claim but never a bound display")
         withExtendedLifetime(display) {}
     }
 
     func testIdentitiesOnlineInAnyProcessAreSkipped() throws {
-        let allocator = DisplayIdentityAllocator(path: path)
-        let key = DisplayIdentityAllocator.key(width: 1_920, height: 1_080, hiDPI: true)
+        let other = DisplayIdentityAllocator(path: path)
         let online: Set<UInt32> = [
-            DisplayIdentityAllocator.serial(key: key, slot: 0, generation: 0),
-            DisplayIdentityAllocator.serial(key: key, slot: 1, generation: 0),
+            try XCTUnwrap(try other.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: [])).serial,
+            try XCTUnwrap(try other.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: [])).serial,
         ]
-        let identity = try XCTUnwrap(allocator.claim(width: 1_920, height: 1_080, hiDPI: true,
-                                                     onlineSerials: online))
+        let allocator = DisplayIdentityAllocator(path: path)
+        let identity = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true,
+                                                         onlineSerials: online))
         XCTAssertEqual(identity.slot, 2)
+        XCTAssertFalse(online.contains(identity.serial))
+    }
+
+    func testANewIdentityNeverTakesASerialAlreadyOnline() throws {
+        let key = DisplayIdentityAllocator.key(width: 1_920, height: 1_080, hiDPI: true)
+        let foreign = DisplayIdentityAllocator.serial(key: key, slot: 0, generation: 0)
+        let allocator = DisplayIdentityAllocator(path: path)
+        let identity = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true,
+                                                         onlineSerials: [foreign]))
+        XCTAssertNotEqual(identity.serial, foreign, "for example a display from an older version")
     }
 
     func testGeometriesHaveIndependentSlots() throws {
         let allocator = DisplayIdentityAllocator(path: path)
-        let small = try XCTUnwrap(allocator.claim(width: 1_280, height: 800, hiDPI: true, onlineSerials: []))
-        let large = try XCTUnwrap(allocator.claim(width: 2_560, height: 1_440, hiDPI: true, onlineSerials: []))
+        let small = try XCTUnwrap(try allocator.claim(width: 1_280, height: 800, hiDPI: true, onlineSerials: []))
+        let large = try XCTUnwrap(try allocator.claim(width: 2_560, height: 1_440, hiDPI: true, onlineSerials: []))
         XCTAssertEqual([small.slot, large.slot], [0, 0])
         XCTAssertNotEqual(small.serial, large.serial)
     }
 
-    func testAllSlotsBusyRefusesInsteadOfMintingAnIdentity() {
+    func testAllSlotsBusyRefusesInsteadOfMintingAnIdentity() throws {
         let allocator = DisplayIdentityAllocator(path: path)
         for _ in 0..<DisplayIdentityAllocator.slotCount {
-            XCTAssertNotNil(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+            XCTAssertNotNil(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
         }
-        XCTAssertNil(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        XCTAssertNil(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
     }
 
     func testRotationRetiresAPoisonedIdentityAcrossRestarts() throws {
         let allocator = DisplayIdentityAllocator(path: path)
-        let poisoned = try XCTUnwrap(allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        let poisoned = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
         XCTAssertTrue(allocator.rotate(poisoned))
         XCTAssertTrue(allocator.rotate(poisoned), "a stale rotation is a no-op, not a second bump")
         allocator.abandon(poisoned)
 
         let restarted = DisplayIdentityAllocator(path: path)
-        XCTAssertEqual(restarted.generation(key: poisoned.key, slot: 0), 1)
-        let next = try XCTUnwrap(restarted.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        XCTAssertEqual(try restarted.generation(key: poisoned.key, slot: 0), 1)
+        let next = try XCTUnwrap(try restarted.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
         XCTAssertEqual(next.slot, 0)
         XCTAssertEqual(next.generation, 1)
         XCTAssertNotEqual(next.serial, poisoned.serial)
@@ -120,27 +130,71 @@ final class DisplayIdentityAllocatorTests: XCTestCase {
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
     }
 
-    func testMalformedOrForeignGenerationFilesFallBackToGenerationZero() throws {
+    func testAnExistingRecordThatCannotBeValidatedRefusesCreation() throws {
         let key = DisplayIdentityAllocator.key(width: 1_920, height: 1_080, hiDPI: true)
-        for contents in ["not json", #"{"version":2,"generations":{"1920x1080@2/0":4}}"#,
-                         #"{"version":1,"generations":{"1920x1080@2/0":-3}}"#] {
+        for contents in ["not json", #"{"version":2,"generations":{},"serials":{}}"#,
+                         #"{"version":1,"generations":{"1920x1080@2/0":-3},"serials":{}}"#,
+                         #"{"version":1,"generations":{},"serials":{"a/0/0":7,"b/0/0":7}}"#,
+                         #"{"version":1,"generations":{}}"#] {
             try Data(contents.utf8).write(to: URL(fileURLWithPath: path))
             let allocator = DisplayIdentityAllocator(path: path)
-            XCTAssertEqual(allocator.generation(key: key, slot: 0), 0, contents)
+            XCTAssertThrowsError(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []),
+                                 contents) {
+                XCTAssertEqual($0 as? DisplayIdentityAllocator.RecordError, .unreadable(path), contents)
+            }
+            XCTAssertFalse(allocator.rotate(.init(key: key, slot: 0, generation: 0, serial: 1)), contents)
         }
-        try Data(#"{"version":1,"generations":{"1920x1080@2/0":4}}"#.utf8).write(to: URL(fileURLWithPath: path))
-        XCTAssertEqual(DisplayIdentityAllocator(path: path).generation(key: key, slot: 0), 4)
+        // Moving the record aside takes effect without a restart.
+        let allocator = DisplayIdentityAllocator(path: path)
+        XCTAssertThrowsError(try allocator.generation(key: key, slot: 0))
+        try FileManager.default.removeItem(atPath: path)
+        XCTAssertEqual(try allocator.generation(key: key, slot: 0), 0)
+        try Data(#"{"version":1,"generations":{"1920x1080@2/0":4},"serials":{}}"#.utf8)
+            .write(to: URL(fileURLWithPath: path))
+        XCTAssertEqual(try DisplayIdentityAllocator(path: path).generation(key: key, slot: 0), 4)
     }
 
-    func testPersistedGenerationsAreBounded() throws {
+    func testDistinctIdentitiesNeverShareASerialAcrossRestarts() throws {
+        // These two sizes hash to the same unsalted serial at slot 0, generation 0.
+        XCTAssertEqual(DisplayIdentityAllocator.serial(key: "7210x4000@1", slot: 0, generation: 0),
+                       DisplayIdentityAllocator.serial(key: "330x5800@2", slot: 0, generation: 0))
         let allocator = DisplayIdentityAllocator(path: path)
-        var rotated = 0
-        for width in 0..<(DisplayIdentityAllocator.maximumPersistedKeys + 4) {
-            let identity = try XCTUnwrap(allocator.claim(width: UInt32(100 + width), height: 100, hiDPI: false,
-                                                         onlineSerials: []))
-            if allocator.rotate(identity) { rotated += 1 }
+        let first = try XCTUnwrap(try allocator.claim(width: 7_210, height: 4_000, hiDPI: false, onlineSerials: []))
+        allocator.abandon(first)
+        let restarted = DisplayIdentityAllocator(path: path)
+        let second = try XCTUnwrap(try restarted.claim(width: 330, height: 5_800, hiDPI: true, onlineSerials: []))
+        XCTAssertNotEqual(first.serial, second.serial)
+        restarted.abandon(second)
+        let again = DisplayIdentityAllocator(path: path)
+        XCTAssertEqual(try again.claim(width: 7_210, height: 4_000, hiDPI: false, onlineSerials: [])?.serial,
+                       first.serial)
+        XCTAssertEqual(try again.claim(width: 330, height: 5_800, hiDPI: true, onlineSerials: [])?.serial,
+                       second.serial, "an issued serial is recorded, not re-derived")
+    }
+
+    func testRecordedIdentitiesAreBounded() throws {
+        let allocator = DisplayIdentityAllocator(path: nil)
+        for width in 0..<DisplayIdentityAllocator.maximumIdentities {
+            let identity = try XCTUnwrap(try allocator.claim(width: UInt32(100 + width), height: 100, hiDPI: false,
+                                                             onlineSerials: []))
+            allocator.abandon(identity)
         }
-        XCTAssertEqual(rotated, DisplayIdentityAllocator.maximumPersistedKeys)
+        XCTAssertThrowsError(try allocator.claim(width: 99, height: 100, hiDPI: false, onlineSerials: [])) {
+            XCTAssertEqual($0 as? DisplayIdentityAllocator.RecordError, .full)
+        }
+        XCTAssertNotNil(try allocator.claim(width: 100, height: 100, hiDPI: false, onlineSerials: []),
+                        "an identity already recorded is still offered")
+    }
+
+    func testAnUnsavableRecordRefusesANewIdentity() throws {
+        let locked = directory.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path) }
+        let allocator = DisplayIdentityAllocator(path: locked.appendingPathComponent("display-identities.json").path)
+        XCTAssertThrowsError(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: [])) {
+            guard case .unsaved = $0 as? DisplayIdentityAllocator.RecordError else { return XCTFail("\($0)") }
+        }
     }
 }
 
@@ -225,6 +279,10 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         var displays = [DisplayIdentityCleanup.DisplayInventory(spaceO: 0, other: 1)]
         var displayReads = 0
         var listingFails = false
+        var locked = false
+        var lockHeldDuringRemoval = true
+        var lockRefused = false
+        var undeletable: Set<String> = []
     }
 
     private func environment(_ colorSync: FakeColorSync, root: Bool = true, processRunning: Bool = false,
@@ -249,6 +307,17 @@ final class DisplayIdentityCleanupTests: XCTestCase {
             displays: {
                 defer { colorSync.displayReads += 1 }
                 return colorSync.displays[min(colorSync.displayReads, colorSync.displays.count - 1)]
+            },
+            acquireExclusion: {
+                if colorSync.lockRefused { throw DisplayIdentityCleanup.Failure.spaceOProcessRunning }
+                colorSync.locked = true
+                return { colorSync.locked = false }
+            },
+            removeProfile: { path in
+                if !colorSync.locked { colorSync.lockHeldDuringRemoval = false }
+                if !colorSync.undeletable.contains(URL(fileURLWithPath: path).lastPathComponent) {
+                    try? FileManager.default.removeItem(atPath: path)
+                }
             })
     }
 
@@ -259,13 +328,15 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         let builtIn = try writeProfile("Color LCD-C", vendor: 0x610, product: 0xA05E)
         let otherTool = try writeProfile("Other-D", vendor: 0x1AF2, product: 2)
         _ = try writeProfile("SpaceO display 2-E", vendor: 0x1AF2, product: 1)  // no registration
+        let assigned = try writeProfile("Assigned-G", vendor: 0x1AF2, product: 1)
         colorSync.registrations = [
-            .init(deviceClass: "mntr", deviceID: "A", profilePath: spaceO),
+            .init(deviceClass: "mntr", deviceID: "A", profilePath: spaceO, isFactory: true),
             .init(deviceClass: "mntr", deviceID: "A", profilePath: builtIn),  // custom profile on a SpaceO device
-            .init(deviceClass: "mntr", deviceID: "B", profilePath: test),
-            .init(deviceClass: "mntr", deviceID: "C", profilePath: builtIn),
-            .init(deviceClass: "mntr", deviceID: "D", profilePath: otherTool),
+            .init(deviceClass: "mntr", deviceID: "B", profilePath: test, isFactory: true),
+            .init(deviceClass: "mntr", deviceID: "C", profilePath: builtIn, isFactory: true),
+            .init(deviceClass: "mntr", deviceID: "D", profilePath: otherTool, isFactory: true),
             .init(deviceClass: "mntr", deviceID: "F", profilePath: nil),
+            .init(deviceClass: "mntr", deviceID: "G", profilePath: assigned),  // a person assigned a SpaceO profile
         ]
         return colorSync
     }
@@ -273,9 +344,10 @@ final class DisplayIdentityCleanupTests: XCTestCase {
     func testPlanSelectsOnlySpaceORegistrationsAndProfiles() throws {
         let colorSync = try fixture()
         let plan = try DisplayIdentityCleanup.plan(environment(colorSync))
-        XCTAssertEqual(plan.registrations.map(\.deviceID), ["A", "B"])
+        XCTAssertEqual(plan.registrations.map(\.deviceID), ["A", "B"],
+                       "G only has a SpaceO profile a person assigned; it is not a SpaceO device")
         XCTAssertEqual(plan.profilePaths.map { URL(fileURLWithPath: $0).lastPathComponent },
-                       ["SpaceO display 1-A.icc", "SpaceO display 2-E.icc", "test-multi-1-B.icc"])
+                       ["Assigned-G.icc", "SpaceO display 1-A.icc", "SpaceO display 2-E.icc", "test-multi-1-B.icc"])
         XCTAssertEqual(plan.unattributedWithoutProfile, 1, "a registration without a profile is left alone")
     }
 
@@ -287,6 +359,9 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         }
         let colorSync = try fixture()
         XCTAssertEqual(refusal(environment(colorSync, root: false)), .requiresRoot)
+        colorSync.lockRefused = true
+        XCTAssertEqual(refusal(environment(colorSync)), .spaceOProcessRunning, "a lifecycle owner holds the lock")
+        colorSync.lockRefused = false
         XCTAssertEqual(refusal(environment(colorSync, processRunning: true)), .spaceOProcessRunning)
         colorSync.displays = [.init(spaceO: 1, other: 1)]
         XCTAssertEqual(refusal(environment(colorSync)), .spaceODisplayOnline)
@@ -310,13 +385,13 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         XCTAssertFalse(outcome.confirmed)
         XCTAssertEqual(outcome.movedProfiles, 0)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(
-            atPath: directory.appendingPathComponent("Displays").path).count, 5)
+            atPath: directory.appendingPathComponent("Displays").path).count, 6)
     }
 
     func testEveryProfileOfASurvivingRegistrationIsKept() throws {
         let colorSync = try fixture()
         let second = try writeProfile("SpaceO display 1-A2", vendor: 0x1AF2, product: 1)
-        colorSync.registrations.append(.init(deviceClass: "mntr", deviceID: "A", profilePath: second))
+        colorSync.registrations.append(.init(deviceClass: "mntr", deviceID: "A", profilePath: second, isFactory: true))
         colorSync.ignoresUnregister = true
         let outcome = try DisplayIdentityCleanup.apply(environment(colorSync),
                                                        backupRoot: directory.appendingPathComponent("backup").path)
@@ -334,9 +409,10 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         XCTAssertEqual(outcome.unregistered, 2)
         XCTAssertEqual(outcome.movedProfiles, 3)
         let left = try FileManager.default.contentsOfDirectory(atPath: directory.appendingPathComponent("Displays").path)
-        XCTAssertEqual(Set(left), ["Color LCD-C.icc", "Other-D.icc"])
+        XCTAssertEqual(Set(left), ["Color LCD-C.icc", "Other-D.icc", "Assigned-G.icc"],
+                       "a SpaceO profile assigned to another device stays with it")
         let backedUp = try FileManager.default.contentsOfDirectory(atPath: outcome.backup + "/Profiles")
-        XCTAssertEqual(backedUp.count, 3)
+        XCTAssertEqual(backedUp.count, 4)
         XCTAssertTrue(FileManager.default.fileExists(atPath: outcome.backup + "/com.apple.colorsync.devices"))
     }
 
@@ -349,5 +425,34 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         XCTAssertEqual(outcome.remainingRegistrations, 2)
         XCTAssertEqual(outcome.unregistered, 0)
         XCTAssertEqual(outcome.movedProfiles, 1, "only the unregistered orphan profile is removed")
+    }
+
+    func testTheLifecycleLockIsHeldThroughProfileRemovalAndReleased() throws {
+        let colorSync = try fixture()
+        let outcome = try DisplayIdentityCleanup.apply(environment(colorSync),
+                                                       backupRoot: directory.appendingPathComponent("backup").path)
+        XCTAssertTrue(outcome.confirmed)
+        XCTAssertTrue(colorSync.lockHeldDuringRemoval)
+        XCTAssertFalse(colorSync.locked)
+    }
+
+    func testAProfileThatCannotBeRemovedIsReported() throws {
+        let colorSync = try fixture()
+        colorSync.undeletable = ["test-multi-1-B.icc"]
+        let outcome = try DisplayIdentityCleanup.apply(environment(colorSync),
+                                                       backupRoot: directory.appendingPathComponent("backup").path)
+        XCTAssertEqual(outcome.remainingRegistrations, 0)
+        XCTAssertEqual(outcome.failedProfiles.map { URL(fileURLWithPath: $0).lastPathComponent }, ["test-multi-1-B.icc"])
+        XCTAssertFalse(outcome.confirmed)
+    }
+
+    func testTooManyProfilesRefusesInsteadOfCleaningAPrefix() throws {
+        let colorSync = FakeColorSync()
+        for index in 0...DisplayIdentityResidue.maximumProfiles {
+            try Data().write(to: directory.appendingPathComponent("Displays/\(index).icc"))
+        }
+        XCTAssertThrowsError(try DisplayIdentityCleanup.plan(environment(colorSync))) {
+            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .profileInventoryTruncated)
+        }
     }
 }

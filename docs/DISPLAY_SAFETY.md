@@ -63,14 +63,17 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   registration, a factory profile and WindowServer display mappings for every identity it has
   seen and never removes them; ColorSync re-reads that registry for every display request, so the
   former random serial per attachment slowed every display change on the Mac, a little more each
-  time. A display's serial is now a pure function of its geometry, a slot and a generation, and a
-  slot is reused once no online display and no live display object holds it, so repeated
-  creation of one geometry reuses one identity. A geometry has 32 slots; creation refuses rather
-  than mint a 33rd. The random serial existed because a reused identity once restored a saved
+  time. A display's identity is now its geometry, a slot and a generation; its serial is derived
+  from them and recorded with every other issued serial in
+  `~/Library/Application Support/SpaceO/display-identities.json`, so two identities never share a
+  serial. A slot is reused once no online display and no live display object holds it, so repeated
+  creation of one geometry reuses one identity. A geometry has 32 slots and the record at most
+  1,024 identities; creation refuses rather than mint more. An existing record that cannot be read
+  or validated refuses creation instead of reissuing identities it may have retired; move it aside
+  only when no SpaceO display is online. The random serial existed because a reused identity once restored a saved
   configuration that left the display online but inactive, without its own Space. Publication
-  still rejects such a display, and that identity's slot advances to a new generation, persisted
-  in `~/Library/Application Support/SpaceO/display-identities.json`, so it is not offered again;
-  if that record cannot be saved, the creation error says so.
+  still rejects such a display, and that identity's slot advances to a new generation in the same
+  record, so it is not offered again; if that cannot be saved, the creation error says so.
   A display whose mode settings are refused is retained and rejected, not released implicitly.
 - The daemon keeps at most one idle display after a 15-second grace, reusing it for later tasks.
   Exact width and height must match an exclusive request. Idle displays still consume framebuffer
@@ -134,14 +137,17 @@ spaceo safety clean-display-identities --operator              # list; changes n
 sudo spaceo safety clean-display-identities --apply --operator  # back up, then remove
 ```
 
-Stop every SpaceO daemon, Viewer and MCP client first. Applying refuses while any other
+Stop every SpaceO daemon, Viewer and MCP client first, then run it with `sudo` from the account
+that uses SpaceO. It holds that account's display-lifecycle lock, which every SpaceO display
+creator needs, from its first check until the last profile is removed. It refuses while any other
 `spaceo` process or the Viewer runs, while a SpaceO display is online, when it sees no display at
-all (run it from a Terminal in the logged-in session, not over SSH), and when ColorSync's
-registry file is missing. If a SpaceO process or display appears while it works, it removes no
-profile. It copies ColorSync's device registry and each SpaceO profile into
+all (run it from a Terminal in the logged-in session, not over SSH), when ColorSync's registry
+file is missing, and when ColorSync or the profile directory lists more than it examines. If a
+SpaceO display still appears while it works, it removes no profile, and a profile it cannot
+remove is reported as a partial cleanup. It copies ColorSync's device registry and each SpaceO profile into
 `/Library/Application Support/SpaceO/ColorSync backups/colorsync-<time>/`, unregisters only
-devices whose profile names SpaceO's vendor and product (physical displays, Sidecar and other
-virtual-display tools are untouched), lists the registry again and removes only SpaceO profiles
+devices whose factory profile names SpaceO's vendor and product (physical displays, Sidecar,
+other virtual-display tools and displays a person assigned a SpaceO profile are untouched), lists the registry again and removes only SpaceO profiles
 that no remaining registration references. ColorSync reports success to a normal account while removing nothing, so
 root is required and the second listing, not the return value, decides the outcome. Listing
 the registry can take tens of seconds on an affected Mac. Log out and back in afterwards:
@@ -178,10 +184,10 @@ ColorSync load: every display attachment leaves macOS polling ColorSync until lo
 diagnostic runs that ignored that load saturated ColorSync until WindowServer's watchdog ended
 the login session. The sampler keeps running. A display change waits (up to its normal
 deadline) for combined ColorSync CPU below 25%: two measured intervals at process start or after
-a busy interval, and one interval measured after each earlier change. Saturation makes intervals
+a busy interval, and one interval measured entirely after each earlier change. Saturation makes intervals
 unmeasurable, so once a process has measured one, an unmeasurable interval never counts as quiet;
 only a sampler that has never produced a measurement keeps the override's former admission. A
-process therefore takes about ten seconds before its first display change, and about five
+process therefore takes about ten seconds before its first display change, and five to ten
 between changes. The live-test preflight and per-case health checks keep the normal 50%
 ColorSync limit; a case that finds ColorSync at or above it after cleanup stops live work, and
 recovery is the operator archive below. Native health reports carry `testingOverride: true`,

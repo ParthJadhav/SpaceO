@@ -89,6 +89,9 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
                              "a change waits for an interval measured after it")
         health.accept(sample(115, cpu: 10.3))
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
+                             "an interval that began before the change cannot show its effect")
+        health.accept(sample(120, cpu: 10.4))
         try health.requireStillSettledForReconfiguration()
     }
 

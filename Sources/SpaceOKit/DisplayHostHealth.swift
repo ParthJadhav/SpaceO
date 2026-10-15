@@ -192,7 +192,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     func resetReconfigurationSettling() {
         lock.withLock {
             if testingOverride {
-                // One quiet interval ending after this change, rather than normal mode's two.
+                // One quiet interval wholly after this change, rather than normal mode's two.
                 consecutiveSettledSamples = min(consecutiveSettledSamples, 1)
                 settlingAfter = now()
                 signalReconfigurationWaiters()
@@ -371,7 +371,7 @@ final class DisplayHostHealth: @unchecked Sendable {
     /// sticky faults, but not measured ColorSync load (RA-057): every display attachment leaves
     /// macOS polling ColorSync until logout, and diagnostic runs that ignored this load saturated
     /// ColorSync until WindowServer's watchdog ended the login session. A graph change needs a quiet
-    /// interval measured after the previous change, and a busy interval needs two quiet ones.
+    /// interval measured entirely after the previous change, and a busy interval needs two quiet ones.
     /// Saturation makes intervals unmeasurable, so once this process has measured one, an
     /// unmeasurable interval never counts as quiet; only a sampler that has never produced a
     /// measurement keeps the override's former admission.
@@ -396,7 +396,7 @@ final class DisplayHostHealth: @unchecked Sendable {
             current.colorsyncCPUPercent = cpu
             if cpu >= Self.reconfigurationCPUThresholdPercent {
                 consecutiveSettledSamples = 0
-            } else if settlingAfter.map({ next.uptime > $0 }) ?? true {
+            } else if settlingAfter.map({ before.uptime > $0 && next.uptime > $0 }) ?? true {
                 consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
                 if consecutiveSettledSamples == 2 { settlingAfter = nil }
             }

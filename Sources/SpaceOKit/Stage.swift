@@ -320,9 +320,15 @@ public final class Stage: @unchecked Sendable {
             }
             // A bounded identity, never a fresh one per attachment (RA-057). Every slot busy means
             // 32 live displays of this geometry; refuse rather than mint an unbounded identity.
-            let onlineSerials = Set(online.filter { Self.isSpaceODisplay($0) }.map { CGDisplaySerialNumber($0) })
-            guard let identity = Self.identities.claim(width: width, height: height, hiDPI: hiDPI,
-                                                       onlineSerials: onlineSerials) else {
+            let onlineSerials = Set(online.map { CGDisplaySerialNumber($0) })
+            let claimed: DisplayIdentityAllocator.Identity?
+            do {
+                claimed = try Self.identities.claim(width: width, height: height, hiDPI: hiDPI,
+                                                    onlineSerials: onlineSerials)
+            } catch {
+                throw SpaceOError.stageCreationFailed(error.localizedDescription)
+            }
+            guard let identity = claimed else {
                 throw SpaceOError.stageCreationFailed(
                     "every display identity for \(width)x\(height) is in use; release a display first")
             }

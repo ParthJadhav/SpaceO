@@ -8,14 +8,17 @@ import Foundation
 /// ColorSync's any-user registry, survives deleting the profile and rebooting, and is what
 /// ColorSync re-reads for every display request. `ColorSyncUnregisterDevice` reports success to a
 /// non-root caller while removing nothing, so applying requires root, and success is judged only
-/// by a fresh enumeration afterwards. Only registrations whose profile names SpaceO's vendor and
-/// product are touched; physical displays, Sidecar and other virtual-display tools are left alone.
+/// by a fresh enumeration afterwards. Only devices whose *factory* profile names SpaceO's vendor and
+/// product are touched; physical displays, Sidecar and other virtual-display tools are left alone,
+/// even if someone assigned one of them a SpaceO profile.
 public enum DisplayIdentityCleanup {
     public struct Registration: Sendable, Equatable {
         public var deviceClass: String
         public var deviceID: String
         /// Nil when ColorSync lists no readable profile for the device.
         public var profilePath: String?
+        /// The profile macOS generated for the device, as opposed to one a person assigned.
+        public var isFactory: Bool = false
     }
 
     public struct Plan: Sendable, Equatable {
@@ -33,7 +36,9 @@ public enum DisplayIdentityCleanup {
         public var movedProfiles: Int
         /// The display inventory changed during cleanup, so no profile was removed.
         public var profileRemovalSkipped: Bool = false
-        public var confirmed: Bool { remainingRegistrations == 0 && !profileRemovalSkipped }
+        /// Unreferenced SpaceO profiles that are still present after removal was attempted.
+        public var failedProfiles: [String] = []
+        public var confirmed: Bool { remainingRegistrations == 0 && !profileRemovalSkipped && failedProfiles.isEmpty }
     }
 
     public struct DisplayInventory: Sendable, Equatable {
@@ -49,6 +54,10 @@ public enum DisplayIdentityCleanup {
         public var isRoot: () -> Bool
         public var spaceOProcessRunning: () -> Bool
         public var displays: () throws -> DisplayInventory
+        /// Takes the invoking user's display-lifecycle lock, which every display creator needs, and
+        /// returns its release. Held from before the first check until the last profile is removed.
+        public var acquireExclusion: () throws -> () -> Void
+        public var removeProfile: (String) -> Void = { try? FileManager.default.removeItem(atPath: $0) }
 
         public static let live = Environment(
             registrations: DisplayIdentityCleanup.liveRegistrations,
@@ -61,7 +70,8 @@ public enum DisplayIdentityCleanup {
                 let online = try Stage.checkedOnlineDisplayIDs()
                 let spaceO = online.filter(Stage.isSpaceODisplay).count
                 return DisplayInventory(spaceO: spaceO, other: online.count - spaceO)
-            })
+            },
+            acquireExclusion: DisplayIdentityCleanup.liveExclusion)
     }
 
     public enum Failure: Error, LocalizedError, Equatable {
@@ -71,6 +81,9 @@ public enum DisplayIdentityCleanup {
         case noDisplays
         case registryMissing
         case listingTruncated
+        case profileInventoryTruncated
+        case invokingUserUnknown
+        case lifecycleJournalUnusable
         case backupFailed(String)
 
         public var errorDescription: String? {
@@ -87,6 +100,12 @@ public enum DisplayIdentityCleanup {
                 return "nothing was removed: ColorSync's device registry is not at \(DisplayIdentityResidue.registryPath), so it cannot be backed up"
             case .listingTruncated:
                 return "nothing was removed: ColorSync listed more devices than this command examines"
+            case .profileInventoryTruncated:
+                return "nothing was removed: \(DisplayIdentityResidue.profilesDirectory) holds more profiles than this command examines"
+            case .lifecycleJournalUnusable:
+                return "the account's SpaceO display-safety journal cannot be locked; inspect it with `spaceo doctor`"
+            case .invokingUserUnknown:
+                return "run this with sudo from the account that uses SpaceO, so it can hold that account's display lock"
             case .backupFailed(let reason):
                 return "nothing was removed: the backup failed (\(reason))"
             }
@@ -101,7 +120,11 @@ public enum DisplayIdentityCleanup {
     }
 
     public static func plan(_ environment: Environment = .live) throws -> Plan {
-        try plan(listing: environment.registrations(), profileDirectory: environment.profileDirectory)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: environment.profileDirectory)) ?? []
+        guard names.filter({ $0.hasSuffix(".icc") }).count <= DisplayIdentityResidue.maximumProfiles else {
+            throw Failure.profileInventoryTruncated
+        }
+        return plan(listing: try environment.registrations(), profileDirectory: environment.profileDirectory)
     }
 
     static func plan(listing: [Registration], profileDirectory: String) -> Plan {
@@ -112,7 +135,7 @@ public enum DisplayIdentityCleanup {
             devices.insert(registration.deviceID)
             guard let path = registration.profilePath else { continue }
             profiled.insert(registration.deviceID)
-            if isSpaceOProfile(path), spaceO.insert(registration.deviceID).inserted {
+            if registration.isFactory, isSpaceOProfile(path), spaceO.insert(registration.deviceID).inserted {
                 registrations.append(registration)
             }
         }
@@ -138,6 +161,8 @@ public enum DisplayIdentityCleanup {
     public static func apply(_ environment: Environment = .live, backupRoot: String,
                              now: Date = Date()) throws -> Outcome {
         guard environment.isRoot() else { throw Failure.requiresRoot }
+        let release = try environment.acquireExclusion()
+        defer { release() }
         try requireQuiescent(environment)
         let plan = try Self.plan(environment)
         let manager = FileManager.default
@@ -168,7 +193,8 @@ public enum DisplayIdentityCleanup {
         var outcome = Outcome(plan: plan, backup: backup.path,
                               unregistered: plan.registrations.count - remaining,
                               remainingRegistrations: remaining, movedProfiles: 0)
-        // Listing takes tens of seconds; a display attached meanwhile may own one of these profiles.
+        // The lifecycle lock keeps SpaceO creators out; anything else attaching a SpaceO display
+        // (an old binary, a direct private-API user) would own one of these profiles.
         do { try requireQuiescent(environment) } catch {
             outcome.profileRemovalSkipped = true
             return outcome
@@ -176,7 +202,9 @@ public enum DisplayIdentityCleanup {
         // Never remove a profile that any registration still references; ColorSync would recreate it.
         let referenced = Set(after.compactMap(\.profilePath))
         for path in plan.profilePaths where !referenced.contains(path) {
-            if (try? manager.removeItem(atPath: path)) != nil { outcome.movedProfiles += 1 }
+            environment.removeProfile(path)
+            if manager.fileExists(atPath: path) { outcome.failedProfiles.append(path) }
+            else { outcome.movedProfiles += 1 }
         }
         return outcome
     }
@@ -205,8 +233,10 @@ public enum DisplayIdentityCleanup {
                   CFGetTypeID(rawID as CFTypeRef) == CFUUIDGetTypeID() else { return true }
             let deviceID = CFUUIDCreateString(nil, (rawID as! CFUUID)) as String
             let url = info[kColorSyncDeviceProfileURL.takeUnretainedValue() as String] as? URL
+            let factory = info[kColorSyncDeviceProfileIsFactory.takeUnretainedValue() as String] as? Bool ?? false
             collector.registrations.append(Registration(deviceClass: deviceClass, deviceID: deviceID,
-                                                        profilePath: url?.isFileURL == true ? url?.path : nil))
+                                                        profilePath: url?.isFileURL == true ? url?.path : nil,
+                                                        isFactory: factory))
             return true
         }, context)
         guard !collector.truncated else { throw Failure.listingTruncated }
@@ -229,6 +259,42 @@ public enum DisplayIdentityCleanup {
             if process == "spaceo" || process == "SpaceO Viewer" { return true }
         }
         return false
+    }
+
+    /// The invoking account's lifecycle journal lock (`sudo` sets `SUDO_UID`). Every SpaceO display
+    /// creator takes it, so holding it keeps the daemon, Viewer and MCP servers from attaching a
+    /// display mid-cleanup. A journal created here belongs to that account, never to root; an empty
+    /// journal is the state SpaceO starts from.
+    static func liveExclusion() throws -> () -> Void {
+        guard let text = ProcessInfo.processInfo.environment["SUDO_UID"], let uid = uid_t(text), uid != 0,
+              let entry = getpwuid(uid), let home = entry.pointee.pw_dir else {
+            throw Failure.invokingUserUnknown
+        }
+        let gid = entry.pointee.pw_gid
+        let directory = String(cString: home) + "/Library/Application Support/SpaceO"
+        var directoryInfo = stat()
+        guard lstat(directory, &directoryInfo) == 0, directoryInfo.st_mode & S_IFMT == S_IFDIR,
+              directoryInfo.st_uid == uid else { throw Failure.invokingUserUnknown }
+        let path = directory + "/display-safety.json"
+        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+        guard fd >= 0 else { throw Failure.lifecycleJournalUnusable }
+        var info = stat()
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_nlink == 1 else {
+            close(fd)
+            throw Failure.lifecycleJournalUnusable
+        }
+        // Only a journal this call just created (root-owned and empty) changes owner.
+        if info.st_uid != uid {
+            guard info.st_uid == 0, info.st_size == 0, fchown(fd, uid, gid) == 0 else {
+                close(fd)
+                throw Failure.lifecycleJournalUnusable
+            }
+        }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            close(fd)
+            throw Failure.spaceOProcessRunning
+        }
+        return { close(fd) }
     }
 
     static func liveUnregister(_ registration: Registration) {

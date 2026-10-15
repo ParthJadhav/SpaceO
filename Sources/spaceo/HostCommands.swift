@@ -726,6 +726,7 @@ func runCleanDisplayIdentities(apply: Bool) -> Never {
                 "ok": outcome.confirmed, "applied": true, "backup": outcome.backup,
                 "unregistered": outcome.unregistered, "remainingRegistrations": outcome.remainingRegistrations,
                 "removedProfiles": outcome.movedProfiles, "profileRemovalSkipped": outcome.profileRemovalSkipped,
+                "failedProfiles": outcome.failedProfiles.count,
             ]))
         } else {
             print("backup: \(outcome.backup)")
@@ -735,6 +736,9 @@ func runCleanDisplayIdentities(apply: Bool) -> Never {
                 print("a SpaceO process or display appeared during cleanup, so no profile was removed; stop it and rerun")
             } else if outcome.remainingRegistrations > 0 {
                 print("\(outcome.remainingRegistrations) registrations are still listed; their profiles were kept")
+            } else if !outcome.failedProfiles.isEmpty {
+                print("\(outcome.failedProfiles.count) SpaceO profiles could not be removed; rerun after checking "
+                    + DisplayIdentityResidue.profilesDirectory)
             } else {
                 print("log out and back in (or restart): until then WindowServer keeps asking ColorSync about "
                     + "every display attached since login")
