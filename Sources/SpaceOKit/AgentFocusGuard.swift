@@ -17,13 +17,17 @@ import Foundation
 public final class AgentFocusGuard: @unchecked Sendable {
     public static let shared = AgentFocusGuard()
 
+    /// `session` is the owner recorded while the process was still agent-owned, so a report made
+    /// after a slow restoration keeps its session scope even if teardown released the process.
     public enum Outcome: Equatable, Sendable {
         /// No agent application is frontmost.
         case notNeeded
+        /// The operator has control of the session; the person chose to work there.
+        case operatorControl(session: String?)
         /// `app` is frontmost again after the agent process `agentPID` (`agentName`) took over.
-        case restored(app: String, agentPID: pid_t, agentName: String)
-        /// Restoration was not attempted or not confirmed.
-        case unavailable(String)
+        case restored(app: String, agentPID: pid_t, agentName: String, session: String?)
+        /// An agent process is frontmost and restoration was not possible or not confirmed.
+        case unavailable(reason: String, agentPID: pid_t, session: String?)
     }
 
     struct Application: Equatable, Sendable {
@@ -36,7 +40,8 @@ public final class AgentFocusGuard: @unchecked Sendable {
         var application: @Sendable (pid_t) -> Application?
         var activate: @Sendable (pid_t) -> Bool
         var isAgent: @Sendable (pid_t) -> Bool
-        var isOperatorControlled: @Sendable (pid_t) -> Bool
+        var owner: @Sendable (pid_t) -> String?
+        var isOperatorControlled: @Sendable (String) -> Bool
         var uptime: @Sendable () -> TimeInterval
         var sleep: @Sendable (TimeInterval) -> Void
 
@@ -45,9 +50,8 @@ public final class AgentFocusGuard: @unchecked Sendable {
             application: { NSRunningApplication(processIdentifier: $0).map(Application.init) },
             activate: { NSRunningApplication(processIdentifier: $0)?.activate() ?? false },
             isAgent: { AgentActivity.ownedPIDs.contains($0) },
-            isOperatorControlled: { pid in
-                ProcessOwnership.ownerOfPID(pid).map(AgentActivity.isUnderOperatorControl) ?? false
-            },
+            owner: { ProcessOwnership.ownerOfPID($0) },
+            isOperatorControlled: { AgentActivity.isUnderOperatorControl($0) },
             uptime: { ProcessInfo.processInfo.systemUptime },
             sleep: { Thread.sleep(forTimeInterval: $0) })
     }
@@ -69,6 +73,9 @@ public final class AgentFocusGuard: @unchecked Sendable {
     init(environment: Environment = .live) {
         self.environment = environment
     }
+
+    /// Processes with restoration history inside the current window (tests and bounds).
+    var restoreHistoryCount: Int { lock.withLock { recentRestores.count } }
 
     /// Follow activation for the life of the daemon. Notifications arrive on the main run loop;
     /// observing them also keeps `NSWorkspace.frontmostApplication` current in this process.
@@ -124,44 +131,48 @@ public final class AgentFocusGuard: @unchecked Sendable {
     /// back as frontmost within `timeout`; anything else is reported as unavailable.
     public func restoreIfAgentFront(preferring preferred: pid_t? = nil,
                                     timeout: TimeInterval = 1) -> Outcome {
+        let wait = timeout.isFinite ? min(max(timeout, 0), 2) : 1
         restoreLock.lock()
         defer { restoreLock.unlock() }
         guard let front = environment.frontmost(), environment.isAgent(front.pid) else { return .notNeeded }
-        guard !environment.isOperatorControlled(front.pid) else {
-            return .unavailable("the operator has control of \(front.name)")
+        let session = environment.owner(front.pid)
+        if let session, environment.isOperatorControlled(session) { return .operatorControl(session: session) }
+        func unavailable(_ reason: String) -> Outcome {
+            .unavailable(reason: reason, agentPID: front.pid, session: session)
         }
-        let preferredApp = preferred.flatMap { pid in
-            environment.isAgent(pid) ? nil : environment.application(pid)
-        }
-        guard let target = preferredApp ?? lock.withLock({ lastUser }) else {
-            return .unavailable("no earlier application of yours is known")
+        // The destination is re-read now: a remembered application may since have exited or
+        // been adopted into a session, and must never be the process being sent back.
+        let candidates = [preferred, lock.withLock { lastUser?.pid }].compactMap { $0 }
+        guard let target = candidates.lazy.filter({ $0 != front.pid && !self.environment.isAgent($0) })
+            .compactMap(environment.application).first else {
+            return unavailable("no earlier application of yours is available")
         }
         let now = environment.uptime()
         let admitted = lock.withLock { () -> Bool in
-            let recent = (recentRestores[front.pid] ?? []).filter { now - $0 < Self.restoreWindow }
-            guard recent.count < Self.maximumRestores else {
-                recentRestores[front.pid] = recent
-                return false
+            for (pid, times) in recentRestores {
+                recentRestores[pid] = times.filter { now - $0 < Self.restoreWindow }
             }
-            recentRestores[front.pid] = recent + [now]
             recentRestores = recentRestores.filter { !$0.value.isEmpty }
+            let recent = recentRestores[front.pid] ?? []
+            guard recent.count < Self.maximumRestores else { return false }
+            recentRestores[front.pid] = recent + [now]
             return true
         }
         guard admitted else {
-            return .unavailable("\(front.name) keeps taking activation; SpaceO stopped returning it")
+            return unavailable("\(front.name) keeps taking activation; SpaceO stopped returning it")
         }
         guard environment.activate(target.pid) else {
-            return .unavailable("\(target.name) could not be activated")
+            return unavailable("\(target.name) could not be activated")
         }
-        let deadline = now + max(0, min(timeout, 2))
+        let deadline = now + wait
         repeat {
             if environment.frontmost()?.pid == target.pid {
                 AgentActivity.recordFocusRestore()
-                return .restored(app: target.name, agentPID: front.pid, agentName: front.name)
+                return .restored(app: target.name, agentPID: front.pid, agentName: front.name, session: session)
             }
             environment.sleep(0.01)
         } while environment.uptime() < deadline
-        return .unavailable("\(target.name) was not frontmost again within \(Int(timeout * 1_000)) ms")
+        return unavailable("\(target.name) was not frontmost again within \(Int(wait * 1_000)) ms")
     }
 }
 

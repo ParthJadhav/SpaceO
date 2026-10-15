@@ -3429,24 +3429,30 @@ public actor SessionManager {
     /// also involves the pointer, is reported exactly as before.
     func repairActivationBreach(_ response: inout Response, action: String, before: IsolationSnapshot) {
         guard let report = response.isolation, Self.isActivationOnlyBreach(report) else { return }
+        let warning: String
         switch focusGuard.restoreIfAgentFront(preferring: before.frontmostPID) {
-        case let .restored(app, _, agentName):
-            let repaired = IsolationSnapshot.capture().report(comparedTo: before)
-            guard repaired.verdict != .breached else { return }
-            response.isolation = repaired
-            response.drift = repaired.legacyDrift
-            response.warnings = (response.warnings ?? []) + [
-                "\(agentName) took activation during \(action); SpaceO returned it to \(app) at once. "
-                    + "Keystrokes typed in that moment may have reached \(agentName).",
-            ]
+        case let .restored(app, _, agentName, _):
+            warning = "\(agentName) took activation during \(action); SpaceO returned it to \(app) at once. "
+                + "Keystrokes typed in that moment may have reached \(agentName)."
             DaemonLog.shared.event("isolation.activation_restored", [
                 "action": action, "agent": agentName, "restored": app,
             ])
-        case let .unavailable(reason):
-            response.warnings = (response.warnings ?? []) + ["SpaceO could not return activation: \(reason)"]
         case .notNeeded:
-            break
+            // The background guard may already have returned activation after this receipt's
+            // capture; only a fresh comparison against the same baseline can say so.
+            warning = "An agent application took activation during \(action); it was already returned. "
+                + "Keystrokes typed in that moment may have reached it."
+        case let .unavailable(reason, _, _):
+            response.warnings = (response.warnings ?? []) + ["SpaceO could not return activation: \(reason)"]
+            return
+        case .operatorControl:
+            return
         }
+        let repaired = IsolationSnapshot.capture().report(comparedTo: before)
+        guard repaired.verdict != .breached else { return }
+        response.isolation = repaired
+        response.drift = repaired.legacyDrift
+        response.warnings = (response.warnings ?? []) + [warning]
     }
 
     func failOnIsolationBreach(_ response: inout Response, action: String,

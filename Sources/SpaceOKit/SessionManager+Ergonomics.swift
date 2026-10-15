@@ -23,21 +23,37 @@ extension SessionManager {
     /// receipts; this covers the moments nothing is in flight. Daemon only: it needs the main
     /// run loop for activation notifications.
     public func startActivationGuard() {
-        focusGuard.start { outcome in
+        focusGuard.start { [weak self] outcome in
             switch outcome {
-            case let .restored(app, agentPID, agentName):
-                let session = ProcessOwnership.ownerOfPID(agentPID)
-                EventBus.shared.publish(kind: "isolation.activation_restored", session: session,
-                                        detail: ["agent": agentName, "restored": app])
+            case let .restored(app, _, agentName, session):
                 DaemonLog.shared.event("isolation.activation_restored", [
                     "agent": agentName, "restored": app, "session": session ?? "",
                 ])
-            case let .unavailable(reason):
-                DaemonLog.shared.event("isolation.activation_unrestored", ["reason": reason])
-            case .notNeeded:
+                // Application names are session content: never publish them daemon-wide.
+                guard let session else { return }
+                EventBus.shared.publish(kind: "isolation.activation_restored", session: session,
+                                        detail: ["agent": agentName, "restored": app])
+            case let .unavailable(reason, _, session):
+                DaemonLog.shared.event("isolation.activation_unrestored", [
+                    "reason": reason, "session": session ?? "",
+                ])
+                guard let session else { return }
+                Task { await self?.pauseAfterUnrestoredActivation(session: session, reason: reason) }
+            case .notNeeded, .operatorControl:
                 break
             }
         }
+    }
+
+    /// An agent application holds activation and could not be sent back: this is a breach with
+    /// no action in flight to report it, so pause the session and tell its subscribers now.
+    func pauseAfterUnrestoredActivation(session id: String, reason: String) {
+        guard let session = sessions[id] else { return }
+        try? session.setAgentInputPaused(true, byOperator: false)
+        emit("isolation.verdict", session: id, [
+            "verdict": "breached",
+            "failures": "an agent application took activation and SpaceO could not return it: " + reason,
+        ])
     }
 
     /// Sessions whose events a subscriber may see in full, mirroring `session.list` redaction.
