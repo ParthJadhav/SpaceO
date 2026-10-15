@@ -433,17 +433,21 @@ public enum WindowPlacement {
     /// window on the strength of a WindowServer lookup has to ask *whose* it is, or a later
     /// re-park moves a window belonging to an application SpaceO never launched.
     public static func liveOwnerPID(of windowID: CGWindowID) -> pid_t? {
-        liveOwnerPID(of: windowID, copyWindowInfo: CGWindowListCopyWindowInfo)
+        liveOwnerPID(of: windowID, describeWindows: CGWindowListCreateDescriptionFromArray)
     }
 
     static func liveOwnerPID(
         of windowID: CGWindowID,
-        copyWindowInfo: (CGWindowListOption, CGWindowID) -> CFArray?
+        describeWindows: (CFArray?) -> CFArray?
     ) -> pid_t? {
-        // CreateDescriptionFromArray expects raw CGWindowID entries, not the CFNumbers
-        // produced by bridging [windowID]. Query the single window directly instead.
+        // `CGWindowListCopyWindowInfo(.optionIncludingWindow, id)` answers only while the window
+        // is on screen, so an ordered-out window that still has WindowServer geometry looked
+        // ownerless and failed every discovery in its session (#47). CreateDescriptionFromArray
+        // describes any live window, but only from raw CGWindowID entries: bridging [windowID]
+        // produces CFNumbers, which it silently matches to nothing.
         guard windowID != 0,
-              let list = copyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+              let ids = rawWindowIDArray(windowID),
+              let list = describeWindows(ids) as? [[String: Any]],
               list.count == 1,
               let info = list.first,
               let returnedID = info[kCGWindowNumber as String] as? CGWindowID,
@@ -452,5 +456,13 @@ public enum WindowPlacement {
               let pid = pid_t(exactly: owner), pid > 0
         else { return nil }
         return pid
+    }
+
+    /// A one-element CFArray whose value is the window number itself, with no callbacks.
+    static func rawWindowIDArray(_ windowID: CGWindowID) -> CFArray? {
+        var values = [UnsafeRawPointer(bitPattern: UInt(windowID))]
+        return values.withUnsafeMutableBufferPointer {
+            CFArrayCreate(kCFAllocatorDefault, $0.baseAddress, $0.count, nil)
+        }
     }
 }

@@ -20,6 +20,16 @@ final class ViewerSessionStatusTests: XCTestCase {
 
     // MARK: - Precedence
 
+    func testIdleSessionWithIncompleteDiscoverySaysItsWindowsMayBeStale() throws {
+        let apps = #"[{"pid":42,"name":"Safari","bundleID":"com.apple.Safari","startedByUs":true}]"#
+        let fresh = try session(apps: apps)
+        XCTAssertEqual(ViewerSessionStatus.of(fresh, now: now).detail, "Safari")
+        let stale = try session(#","windowDiscoveryFailure":"known window owner is unavailable""#, apps: apps)
+        let status = ViewerSessionStatus.of(stale, now: now)
+        XCTAssertEqual(status.kind, .idle)
+        XCTAssertEqual(status.detail, ViewerSessionStatus.staleWindowsDetail)
+    }
+
     func testBreachOutranksAHelpRequest() throws {
         let waiting = try session(#","inputPaused":true,"agentPauseReason":"needs 2FA""#)
         XCTAssertEqual(ViewerSessionStatus.of(waiting, now: now).kind, .needsYou)

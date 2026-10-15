@@ -524,6 +524,31 @@ public enum MCPServer {
         FileHandle.standardError.write(Data("[spaceo-mcp] \(text)\n".utf8))
     }
 
+    /// A drift warning describes the daemon that answered when it was computed. A restart can
+    /// replace that daemon between calls without this connection seeing a transport failure,
+    /// so confirm it against the daemon answering now before an agent reads it (#47).
+    /// Only a successful provenance reply may replace or clear it: an unreachable daemon is not
+    /// evidence that the drift ended.
+    /// Every daemon reply names its producer. Recompute drift from that daemon when it is not the
+    /// one the stored warning describes, so a restart between calls can neither leave a stale
+    /// warning nor misclassify the reply. Returns whether the reply carried provenance.
+    @discardableResult
+    static func bindDaemonDrift(to response: Response, controller: MCPControllerContext) -> Bool {
+        guard let daemon = response.daemon else { return false }
+        if controller.memory.driftNeedsCheck(for: daemon.instanceID) {
+            controller.memory.setDaemonDrift(reportDaemonProvenance(daemon),
+                                             daemonInstance: daemon.instanceID, fromReply: true)
+        }
+        return true
+    }
+
+    static func revalidateDaemonDrift(socketPath: String, controller: MCPControllerContext) {
+        guard controller.memory.daemonDrift != nil,
+              let response = Transport.pingResponse(socketPath), response.ok,
+              let daemon = response.daemon else { return }
+        controller.memory.setDaemonDrift(reportDaemonProvenance(daemon), daemonInstance: daemon.instanceID)
+    }
+
     /// Log daemon provenance to stderr and return the agent-facing warning when the daemon is
     /// provably a different build. An unknown comparison is logged but not shown to the agent:
     /// it cannot act on "maybe".
@@ -1172,9 +1197,17 @@ public enum MCPServer {
             }
         }
 
+        // Drift describes the daemon that produced this call's reply, read from the provenance
+        // that reply carries. A call that reaches no daemon (or only a legacy one that does not
+        // report provenance) checks a pending warning with a ping when it replies instead.
+        var driftBoundToReply = false
+
         // One-time notes (daemon drift, sessions that ended in the background) lead whatever
         // this call returns, success or failure, so the agent reads them before acting on it.
         func reply(_ result: [String: Any]) {
+            if !driftBoundToReply, controller.memory.hasUndeliveredDaemonDrift {
+                revalidateDaemonDrift(socketPath: socketPath, controller: controller)
+            }
             let notes = controller.memory.drainNotes()
             let final = prependingNotes(notes, to: result)
             journaled.notes = notes
@@ -1219,6 +1252,7 @@ public enum MCPServer {
         case .ownedSessionDestroy(let requests):
             let destroyOutcome = destroyOwnedSessions(
                 requests, socketPath: socketPath, controller: controller)
+            driftBoundToReply = destroyOutcome.driftBound
             journaled.releasedSessions = destroyOutcome.destroyed
             outcome = destroyOutcome.failed ? "tool_error" : "ok"
             reply(destroyOutcome.failed
@@ -1251,6 +1285,7 @@ public enum MCPServer {
             return
         }
 
+        if bindDaemonDrift(to: response, controller: controller) { driftBoundToReply = true }
         response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
         controller.record(response, for: request)
         journaled.request = request
@@ -1433,7 +1468,10 @@ public enum MCPServer {
         guard let read = planned.request else { return planned.line }
         do {
             let prepared = try controller.prepare(read)
-            let observed = try Transport.send(prepared, to: socketPath, timeout: 30)
+            var observed = try Transport.send(prepared, to: socketPath, timeout: 30)
+            // The observation may come from a different daemon than the action it follows.
+            bindDaemonDrift(to: observed, controller: controller)
+            observed = rewritingOutdatedDaemon(observed, drift: controller.memory.daemonDrift)
             controller.record(observed, for: prepared)
             if observed.ok, let snapshot = observed.snapshotID, let session = prepared.session,
                let windowID = prepared.window {
@@ -1455,12 +1493,13 @@ public enum MCPServer {
         socketPath: String,
         controller: MCPControllerContext,
         timeout: TimeInterval = 120
-    ) -> (text: String, failed: Bool, destroyed: [String]) {
+    ) -> (text: String, failed: Bool, destroyed: [String], driftBound: Bool) {
         guard !requests.isEmpty else {
             return ("no sessions belong to this MCP connection; nothing to destroy. "
                     + "Sessions created by other agents are never destroyed by this tool.",
-                    false, [])
+                    false, [], false)
         }
+        var driftBound = false
 
         var destroyed: [String] = []
         var summaries: [String] = []
@@ -1468,7 +1507,9 @@ public enum MCPServer {
         for request in requests {
             let sessionID = request.session ?? "?"
             do {
-                let response = try Transport.send(request, to: socketPath, timeout: timeout)
+                var response = try Transport.send(request, to: socketPath, timeout: timeout)
+                if bindDaemonDrift(to: response, controller: controller) { driftBound = true }
+                response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
                 guard response.ok else {
                     failures.append("\(sessionID): \(renderFailure(response))")
                     continue
@@ -1493,7 +1534,7 @@ public enum MCPServer {
             lines.append("failed to destroy \(failures.count) session(s):")
             lines.append(contentsOf: failures.map { "  \($0)" })
         }
-        return (lines.joined(separator: "\n"), !failures.isEmpty, destroyed)
+        return (lines.joined(separator: "\n"), !failures.isEmpty, destroyed, driftBound)
     }
 
     /// The MCP content for a screenshot: what was captured, what its pixels mean, then the image.
@@ -1889,6 +1930,9 @@ public enum MCPServer {
                 + ", \(MCPPresentation.duration(now.timeIntervalSince(app.exitedAt))) ago)"
         }
         if exited.count > 8 { text += "\n  and \(exited.count - 8) more exited app(s)" }
+        if let failure = session.windowDiscoveryFailure {
+            text += "\n  windows are last known; discovery incomplete: \(failure)"
+        }
         for window in session.windows { text += "\n  " + describe(window) }
         return text
     }

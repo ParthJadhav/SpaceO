@@ -323,6 +323,11 @@ Status definitions:
 - Pinned-toolchain source `942e460` passed the combined static/animated/scrolling Viewer workload,
   404 captures, logical session churn and verified teardown, followed by all 36 MCP checks.
   The earlier owner-lookup failure did not recur. See the [1.0.4 record](docs/validation/2026-09-29-release-1.0.4.md).
+- October 15 follow-up (#47): the single-window query answers only for on-screen windows, so an
+  ordered-out window that still had geometry failed discovery, listing and teardown. The lookup
+  now passes a raw-ID array to `CGWindowListCreateDescriptionFromArray`, which describes
+  ordered-out windows too. `session.list` reports incomplete discovery per session instead of
+  failing. Evidence: [off-screen owner](docs/validation/2026-10-15-offscreen-window-owner.md).
 
 ### SPAO-192 — Prevent Chromium launch from taking the user's focus and Space
 

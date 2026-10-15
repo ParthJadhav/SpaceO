@@ -1151,10 +1151,18 @@ public actor SessionManager {
         return try infosNow()
     }
 
+    /// One listing refreshes every session under this shared budget, so an accessibility outage
+    /// across many sessions cannot hold the operation gate for each session's discovery timeout.
+    /// Each refresh gets a fair share of what remains, so a slow early session cannot starve
+    /// the ones after it on every listing.
+    static let sessionListRefreshBudget: TimeInterval = 4
+
     private func infosNow() throws -> [SessionInfo] {
         var infos: [SessionInfo] = []
         let healthy = (try? hostHealthCheck()) != nil
-        for session in sessions.values.sorted(by: { $0.createdAt < $1.createdAt }) {
+        let refreshDeadline = waitRuntime.now().addingTimeInterval(Self.sessionListRefreshBudget)
+        let ordered = sessions.values.sorted(by: { $0.createdAt < $1.createdAt })
+        for (position, session) in ordered.enumerated() {
             if !healthy {
                 if let snapshot = destroyingSessionSnapshots[session.id] {
                     infos.append(snapshot)
@@ -1182,8 +1190,24 @@ public actor SessionManager {
                 continue
             }
             do {
-                try session.refreshWindowsChecked()
-                let info = SessionInfo(session)
+                // One app's incomplete discovery must not fail every client's listing (#47).
+                // The failed refresh preserved the last-known ledger, and the row reports why
+                // it is not a fresh observation; commands still refuse on the throwing refresh.
+                // A skipped refresh never reaches discovery's own cancellation checks.
+                if Task.isCancelled { throw CancellationError() }
+                let remaining = refreshDeadline.timeIntervalSince(waitRuntime.now())
+                let share = remaining / Double(ordered.count - position)
+                let refreshed = share >= 0.01
+                if refreshed {
+                    do { _ = try session.refreshWindowsChecked(remaining: share) }
+                    catch let stopped as AXTraversalStopped where stopped.reason == .cancelled { throw stopped }
+                    catch is CancellationError { throw CancellationError() }
+                    catch { /* Reported on the row; the ledger kept its last-known windows. */ }
+                }
+                var info = SessionInfo(session, lastKnownWindows: !refreshed)
+                if !refreshed, info.windowDiscoveryFailure == nil {
+                    info.windowDiscoveryFailure = "not refreshed: this listing's shared discovery budget was exhausted"
+                }
                 try persistSession(
                     session,
                     operationState: session.teardownPending ? .cleanupPending : .ready)
@@ -1728,6 +1752,7 @@ public actor SessionManager {
                     var redacted = info
                     redacted.apps = []
                     redacted.windows = []
+                    redacted.windowDiscoveryFailure = nil
                     redacted.redacted = true
                     return redacted
                 }

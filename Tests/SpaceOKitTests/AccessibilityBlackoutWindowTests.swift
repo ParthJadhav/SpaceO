@@ -389,17 +389,140 @@ final class AccessibilityBlackoutWindowTests: XCTestCase {
         XCTAssertEqual(failed.errorCode, "bad_request")
         XCTAssertTrue(failed.error?.contains("fixture discovery failed") == true)
         XCTAssertNil(failed.windows, "the command must not publish cached windows as a fresh read")
+        // One session's incomplete discovery must not fail every client's listing (#47): the
+        // row keeps the retained ledger and says it is not a fresh observation.
         let listing = await manager.handle(TestController.request("session.list"))
-        XCTAssertFalse(listing.ok)
+        XCTAssertTrue(listing.ok, listing.error ?? "")
+        let row = try XCTUnwrap(listing.sessions?.first { $0.id == "checked-read" })
+        XCTAssertEqual(row.windows.map(\.windowID), [4242])
+        XCTAssertTrue(row.windowDiscoveryFailure?.contains("fixture discovery failed") == true)
+        // An unconfirmed ID may be recycled: no live WindowServer lookup enriches the row.
+        XCTAssertEqual(row.windows.first?.onStage, true, "judged from the last-known frame")
+        XCTAssertEqual(row.windows.first?.spaces, [], "Spaces are unknown, not another window's")
+        XCTAssertNil(row.windows.first?.defaultTarget, "choosing it would read live geometry")
+        let otherController = await manager.handle(TestController.request("session.list", leaseID: UUID()))
+        let redacted = try XCTUnwrap(otherController.sessions?.first { $0.id == "checked-read" })
+        XCTAssertEqual(redacted.redacted, true)
+        XCTAssertNil(redacted.windowDiscoveryFailure, "failure detail is session content")
         server.failDiscovery(nil)
         let recovered = await manager.handle(request)
         XCTAssertTrue(recovered.ok, recovered.error ?? "")
         XCTAssertEqual(recovered.windows?.map(\.windowID), [4242])
+        let refreshed = await manager.handle(TestController.request("session.list"))
+        XCTAssertNil(try XCTUnwrap(refreshed.sessions?.first { $0.id == "checked-read" }).windowDiscoveryFailure)
         XCTAssertEqual(server.legacyReadCount, 0)
         var destroy = TestController.request("session.destroy", session: "checked-read")
         destroy.quitApps = false
         let cleaned = await manager.handle(destroy)
         XCTAssertTrue(cleaned.ok, cleaned.error ?? "")
+    }
+
+    /// Lets a discovery hook cancel the listing task that is running it.
+    private final class PendingListing: @unchecked Sendable {
+        private let lock = NSLock()
+        private var task: Task<Response, Never>?
+        func set(_ task: Task<Response, Never>) { lock.withLock { self.task = task } }
+        func cancel() {
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline {
+                if let task = lock.withLock({ self.task }) { task.cancel(); return }
+                usleep(1_000)
+            }
+        }
+    }
+
+    func testSessionListSharesOneDiscoveryBudgetAcrossSessions() async throws {
+        let backing = FakeDisplayBacking(id: 92_031)
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [92_031] })
+        let pool = DisplayPool(sessionsPerDisplay: 3, displaySize: backing.bounds.size,
+            stageFactory: { _, _, _, _ in stage }, stageRetirer: { $0.invalidate(waitingForRemoval: 0) })
+        defer { _ = pool.releaseAll() }
+        let server = FakeWindowServer()
+        let clock = PollClock()
+        // Each session owns a distinct live process: this test, its runner, and an idle child.
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["30"]
+        try child.run()
+        defer { child.terminate(); child.waitUntilExit() }
+        let ids = ["budget-a", "budget-b", "budget-c"]
+        var owned: [String: LaunchedApp] = [:]
+        for (id, pid) in zip(ids, [getpid(), getppid(), child.processIdentifier]) {
+            let identity = try XCTUnwrap(ProcessIdentity.current(of: pid))
+            owned[id] = LaunchedApp(pid: pid, identity: identity, bundleIdentifier: "dev.spaceo.\(id)",
+                name: id, url: URL(fileURLWithPath: "/Applications/\(id).app"), startedByUs: false,
+                devToolsPort: nil, temporaryProfile: nil)
+            server.add(window: CGWindowID(1_000 + pid), pid: pid, at: CGRect(x: 10, y: 10, width: 20, height: 20))
+        }
+        let apps = owned
+        let manager = SessionManager(pool: pool, runJanitor: false, waitRuntime: clock.runtime,
+            sessionFactory: { id, slot in
+                try AgentSession(id: id, slot: slot,
+                    teardownDriver: SessionAppTeardownDriver(isAlive: { _ in false }, quit: { _, _ in },
+                        waitForExit: { _, _ in [] }, cleanupTemporaryProfile: { _ in }),
+                    windowDriver: server.driver, watcherFactory: { _, _ in throw CancellationError() },
+                    initialApps: apps[id].map { [$0] } ?? [])
+            })
+        for id in ids {
+            let created = await manager.handle(TestController.createRequest(
+                session: id, ownerID: id, leaseID: UUID()))
+            XCTAssertTrue(created.ok, created.error ?? id)
+        }
+        var operatorList = Request(cmd: "session.list")
+        operatorList.operatorScope = true
+
+        // Every session gets a fair share of what remains, capped by its own discovery limit.
+        server.resetDiscoveryCounts()
+        let fresh = await manager.handle(operatorList)
+        XCTAssertEqual(fresh.sessions?.compactMap(\.windowDiscoveryFailure), [])
+        let budget = SessionManager.sessionListRefreshBudget
+        let shares = server.discoveryTimeouts
+        XCTAssertEqual(shares.count, 3)
+        XCTAssertEqual(shares.first ?? 0, budget / 3, accuracy: 0.001, "the first session cannot take it all")
+
+        // An overrun that consumes the whole budget starts no further discovery.
+        server.resetDiscoveryCounts()
+        server.setDiscoveryHook { _ in clock.advance(budget + 1) }
+        let listing = await manager.handle(operatorList)
+        server.setDiscoveryHook(nil)
+        XCTAssertTrue(listing.ok, listing.error ?? "")
+        XCTAssertEqual(server.discoveryCount, 1, "the exhausted budget must not start more discovery")
+        let rows = Dictionary(uniqueKeysWithValues: (listing.sessions ?? []).map { ($0.id, $0) })
+        XCTAssertNil(rows["budget-a"]?.windowDiscoveryFailure)
+        for id in ["budget-b", "budget-c"] {
+            XCTAssertEqual(rows[id]?.windows.count, 1, "\(id) keeps its cached row")
+            XCTAssertEqual(rows[id]?.windows.first?.spaces, [], "an unrefreshed row asks nothing live")
+            XCTAssertTrue(rows[id]?.windowDiscoveryFailure?.contains("budget") == true)
+        }
+
+        // Cancellation is not a stale observation: the listing stops.
+        server.setDiscoveryHook { _ in throw AXTraversalStopped(reason: .cancelled, detail: "fixture") }
+        let cancelled = await manager.handle(operatorList)
+        server.setDiscoveryHook(nil)
+        XCTAssertFalse(cancelled.ok)
+
+        // Including when the caller is cancelled after the budget is spent, where later
+        // sessions would otherwise be skipped without reaching discovery's own checks.
+        let pending = PendingListing()
+        server.setDiscoveryHook { _ in
+            clock.advance(budget + 1)
+            pending.cancel()
+            throw SpaceOError.badRequest("fixture discovery failed")
+        }
+        let task = Task { await manager.handle(operatorList) }
+        pending.set(task)
+        let cancelledLater = await task.value
+        server.setDiscoveryHook(nil)
+        XCTAssertFalse(cancelledLater.ok)
+
+        for id in ids {
+            var destroy = Request(cmd: "session.destroy")
+            destroy.session = id
+            destroy.operatorScope = true
+            destroy.quitApps = false
+            let cleaned = await manager.handle(destroy)
+            XCTAssertTrue(cleaned.ok, cleaned.error ?? id)
+        }
     }
 
     func testGeneralRefreshFailurePreservesHistoryAndRefusesTargetsAndRepark() throws {

@@ -468,6 +468,62 @@ final class MCPCompactReceiptTests: XCTestCase {
 
     // MARK: 6. Version drift
 
+    func testRevalidatedDriftFromAReplacedDaemonIsNotDelivered() {
+        let memory = MCPConnectionMemory(verbose: false)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+        memory.setDaemonDrift(MCPPresentation.daemonDriftWarning(
+            daemonVersion: "1.0.5", daemonPID: 36_079, clientVersion: "1.0.7"))
+        XCTAssertTrue(memory.hasUndeliveredDaemonDrift)
+        // Revalidation found that the daemon answering now is this server's build.
+        memory.setDaemonDrift(nil)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+        XCTAssertTrue(memory.drainNotes().isEmpty)
+        XCTAssertNil(memory.daemonDrift)
+    }
+
+    func testDriftIsRecomputedOnlyForADifferentDaemonInstance() {
+        let memory = MCPConnectionMemory(verbose: false)
+        let original = UUID(), replacement = UUID()
+        XCTAssertTrue(memory.driftNeedsCheck(for: original), "startup drift names no daemon instance")
+        memory.setDaemonDrift("drift from the original daemon", daemonInstance: original)
+        XCTAssertFalse(memory.driftNeedsCheck(for: original))
+        XCTAssertTrue(memory.driftNeedsCheck(for: replacement), "a replacement is judged from its own reply")
+        memory.setDaemonDrift(nil, daemonInstance: replacement)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+    }
+
+    func testReplyDriftSurvivesALaterMatchingReplyInTheSameCall() {
+        let memory = MCPConnectionMemory(verbose: false)
+        // An aggregate destroy or an action's observation spans a restart: daemon A's reply was
+        // used, then a matching replacement answered before the result was delivered.
+        memory.setDaemonDrift("drift from A", daemonInstance: UUID(), fromReply: true)
+        memory.setDaemonDrift(nil, daemonInstance: UUID(), fromReply: true)
+        XCTAssertNil(memory.daemonDrift, "classification follows the latest producer")
+        XCTAssertTrue(memory.hasUndeliveredDaemonDrift)
+        XCTAssertEqual(memory.drainNotes(), ["WARNING: drift from A"])
+        XCTAssertTrue(memory.drainNotes().isEmpty, "one time only")
+    }
+
+    func testPingDriftSupersededBeforeAnyReplyIsNotDelivered() {
+        let memory = MCPConnectionMemory(verbose: false)
+        memory.setDaemonDrift("startup drift from a replaced daemon")
+        memory.setDaemonDrift(nil, daemonInstance: UUID(), fromReply: true)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+        XCTAssertTrue(memory.drainNotes().isEmpty)
+    }
+
+    func testUnreachableDaemonDoesNotClearAVerifiedDriftWarning() {
+        let memory = MCPConnectionMemory(verbose: false)
+        let warning = MCPPresentation.daemonDriftWarning(
+            daemonVersion: "1.0.5", daemonPID: 36_079, clientVersion: "1.0.7")
+        memory.setDaemonDrift(warning)
+        let controller = MCPControllerContext(memory: memory)
+        MCPServer.revalidateDaemonDrift(
+            socketPath: "/tmp/spaceo-absent-\(UUID().uuidString.prefix(8)).sock", controller: controller)
+        XCTAssertEqual(memory.daemonDrift, warning, "no provenance reply is not proof the drift ended")
+        XCTAssertTrue(memory.hasUndeliveredDaemonDrift)
+    }
+
     func testDriftWarningLeadsTheFirstResultOnlyAndRewritesUnknownCommands() {
         let memory = MCPConnectionMemory(verbose: false)
         let warning = MCPPresentation.daemonDriftWarning(daemonVersion: "1.1.0", daemonPID: 77, clientVersion: "1.1.1")

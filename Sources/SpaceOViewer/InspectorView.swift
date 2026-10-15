@@ -120,6 +120,20 @@ private struct SessionInspector: View {
             }
 
             Section("Apps") {
+                if let failure = session.windowDiscoveryFailure {
+                    Label {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(ViewerSessionStatus.staleWindowsDetail)
+                            Text(failure)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                        }
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
                 if session.apps.isEmpty {
                     Text("No apps open yet")
                         .foregroundStyle(.secondary)

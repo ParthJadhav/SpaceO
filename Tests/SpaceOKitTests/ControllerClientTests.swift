@@ -308,6 +308,36 @@ final class ControllerClientTests: XCTestCase {
         XCTAssertTrue(outcome.destroyed.isEmpty)
     }
 
+    /// The aggregate destroy sends its own requests; their replies still name the daemon that
+    /// produced them, and a different build there must surface as drift.
+    func testAggregateDestroyBindsDriftToTheReplyingDaemon() throws {
+        let daemon = StubDaemon()
+        let socketPath = temporarySocketPath()
+        let other = DaemonRuntimeInfo(version: "0.0.0-other", executableSHA256: nil,
+            executableBuildUUID: UUID().uuidString, pid: 4_242, instanceID: UUID(), startedAt: Date())
+        let server = Transport.Server(path: socketPath) { request in
+            var response = daemon.handle(request)
+            response.daemon = other
+            return response
+        }
+        try server.start()
+        defer { server.stop() }
+        let context = MCPControllerContext(owner: DurableSessionOwner(id: "mcp-drift", kind: .mcp, label: "SpaceO MCP"))
+        let create = try context.prepare(MCPServer.toolRequest(
+            name: "spaceo_session_create", arguments: ["name": "drift-session"],
+            defaultControllerOwner: context.owner))
+        context.record(try Transport.send(create, to: socketPath, timeout: 5), for: create)
+        guard case .ownedSessionDestroy(let requests) = try context.plan(MCPServer.toolRequest(
+            name: "spaceo_session_destroy", arguments: ["all": true])) else {
+            return XCTFail("a full destroy is planned per owned session")
+        }
+        XCTAssertNil(context.memory.daemonDrift)
+        let outcome = MCPServer.destroyOwnedSessions(requests, socketPath: socketPath, controller: context, timeout: 5)
+        XCTAssertEqual(outcome.destroyed, ["drift-session"])
+        XCTAssertTrue(outcome.driftBound)
+        XCTAssertTrue(context.memory.daemonDrift?.contains("0.0.0-other") == true)
+    }
+
     /// Two agents share one daemon by design. One finishing its task must not quit the other's
     /// apps mid-work, which is exactly what forwarding `full` to the daemon used to do.
     func testMCPFullDestroyLeavesAnotherConnectionsSessionAlive() throws {
@@ -335,7 +365,7 @@ final class ControllerClientTests: XCTestCase {
         _ = try connection("mcp-b", session: "b-session")
         XCTAssertEqual(daemon.liveSessionIDs(), ["a-session", "b-session"])
 
-        let outcome: (text: String, failed: Bool, destroyed: [String])
+        let outcome: (text: String, failed: Bool, destroyed: [String], driftBound: Bool)
         switch try agentA.plan(MCPServer.toolRequest(
             name: "spaceo_session_destroy", arguments: ["all": true])) {
         case .ownedSessionDestroy(let requests):
@@ -346,7 +376,8 @@ final class ControllerClientTests: XCTestCase {
             // rather than on a request shape the assertions below would never reach.
             let response = try Transport.send(request, to: socketPath, timeout: 5)
             agentA.record(response, for: request)
-            outcome = (response.message ?? response.error ?? "", !response.ok, response.ok ? [request.session ?? "?"] : [])
+            outcome = (response.message ?? response.error ?? "", !response.ok, response.ok ? [request.session ?? "?"] : [],
+                       response.daemon != nil)
         }
 
         XCTAssertFalse(outcome.failed, outcome.text)
