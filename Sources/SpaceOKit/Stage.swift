@@ -139,10 +139,13 @@ public final class Stage: @unchecked Sendable {
     }
 
     private static let lease = DisplayLifecycleLease()
-    private static let lifecycle = DisplayLifecycleCoordinator { reason in
+    private static let lifecycle = DisplayLifecycleCoordinator(onFailure: { reason in
         lease.trip(reason)
         DaemonLog.shared.event("display.safety.tripped", ["reason": reason])
-    }
+    }, onSlowQuery: { seconds in
+        // A slow geometry read keeps the last verified snapshot; it is not a graph change.
+        DaemonLog.shared.event("display.query.slow", ["deadlineSeconds": String(seconds)])
+    })
     private static let ownership = OwnershipState()
     private static let hostHealth = DisplayHostHealth(onFailure: { reason in lifecycle.trip(reason) })
 
@@ -231,7 +234,7 @@ public final class Stage: @unchecked Sendable {
         stateLock.withLock {
             guard !didInvalidate, coordinator.failureReason == nil else { return nil }
             do {
-                cachedScale = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { [backing] _ in
+                cachedScale = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true, readOnly: true) { [backing] _ in
                     let width = backing.bounds.width
                     guard let pixels = backing.pixelWidth, pixels > 0, width > 0 else { return nil }
                     return Double(pixels) / Double(width)
@@ -266,7 +269,7 @@ public final class Stage: @unchecked Sendable {
         stateLock.withLock {
             guard !didInvalidate, coordinator.failureReason == nil else { return .zero }
             do {
-                cachedBounds = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { [backing] _ in
+                cachedBounds = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true, readOnly: true) { [backing] _ in
                     backing.bounds
                 }
             } catch is DisplayLifecycleCoordinator.QueryDeferred { /* A mutation owns the worker. */ }
@@ -440,7 +443,7 @@ public final class Stage: @unchecked Sendable {
             guard usesLiveLease, !didInvalidate, coordinator.failureReason == nil else { return [] }
             let id = backing.displayID
             do {
-                cachedSpaces = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true) { _ in
+                cachedSpaces = try coordinator.perform(timeout: 1, retaining: backing, onlyWhenIdle: true, readOnly: true) { _ in
                     (SPOSpacesForDisplay(id) ?? []).map { $0.uint64Value }
                 }
             } catch is DisplayLifecycleCoordinator.QueryDeferred { /* A mutation owns the worker. */ }
