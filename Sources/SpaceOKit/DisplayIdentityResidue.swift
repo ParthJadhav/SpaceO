@@ -9,7 +9,8 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
     /// Display profiles whose `mmod` tag names SpaceO's vendor and product.
     public var spaceOProfiles: Int
     public var totalProfiles: Int
-    /// True when the directory held more entries than doctor examines; counts are then lower bounds.
+    /// True when the scan was incomplete (entry or read limits, or unreadable profiles); the counts
+    /// are then lower bounds.
     public var truncated: Bool
     public var registryBytes: Int?
 
@@ -134,7 +135,7 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
     public var summary: String {
         let registry = registryBytes.map { " ColorSync registry \($0 / 1_024) KB;" } ?? ""
         let counted = truncated
-            ? "at least \(spaceOProfiles) SpaceO display profiles among more than \(Self.maximumProfiles) (scan stopped at its bound);"
+            ? "the profile scan was incomplete; it found at least \(spaceOProfiles) SpaceO display profiles;"
             : "\(spaceOProfiles) of \(totalProfiles) display profiles are SpaceO's;"
         if spaceOProfiles > Self.cleanupThreshold {
             return "\(counted)\(registry) left by earlier versions and slow every display change — see docs/DISPLAY_SAFETY.md#display-identity-residue"

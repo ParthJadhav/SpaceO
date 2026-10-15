@@ -230,7 +230,8 @@ final class DisplayIdentityResidueTests: XCTestCase {
         let residue = DisplayIdentityResidue(spaceOProfiles: 3, totalProfiles: 5_000, truncated: true, registryBytes: nil)
         XCTAssertTrue(residue.needsCleanup)
         XCTAssertFalse(residue.summary.contains("bounded"))
-        XCTAssertTrue(residue.summary.contains("at least 3 SpaceO display profiles"), residue.summary)
+        XCTAssertTrue(residue.summary.contains("incomplete; it found at least 3 SpaceO"), residue.summary)
+        XCTAssertFalse(residue.summary.contains("4096"), "an incomplete scan claims no directory size")
     }
 
     func testProfileListingStopsAtItsBound() throws {
@@ -608,5 +609,20 @@ final class DisplayIdentityCleanupTests: XCTestCase {
             guard case .backupFailed = $0 as? DisplayIdentityCleanup.Failure else { return XCTFail("\($0)") }
         }
         XCTAssertTrue(colorSync.unregistered.isEmpty)
+    }
+
+    func testRegistrationProfilesAreReadOnceAndWithinABudget() throws {
+        let colorSync = try fixture()
+        let spaceO = colorSync.registrations[0]
+        // Many devices listing the same profile read it once.
+        let repeated = (0..<5_000).map {
+            DisplayIdentityCleanup.Registration(deviceClass: "mntr", deviceID: "R\($0)",
+                                                profilePath: spaceO.profilePath, isFactory: true)
+        }
+        XCTAssertEqual(try DisplayIdentityCleanup.spaceODevices(in: repeated, budget: 1_024).devices.count, 5_000)
+        // Distinct profiles beyond the budget refuse instead of reading without bound.
+        XCTAssertThrowsError(try DisplayIdentityCleanup.spaceODevices(in: colorSync.registrations, budget: 200)) {
+            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .listingTruncated)
+        }
     }
 }

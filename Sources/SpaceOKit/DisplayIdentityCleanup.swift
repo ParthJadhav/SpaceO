@@ -106,7 +106,7 @@ public enum DisplayIdentityCleanup {
             case .registryMissing:
                 return "nothing was removed: ColorSync's device registry is not at \(DisplayIdentityResidue.registryPath), so it cannot be backed up"
             case .listingTruncated:
-                return "nothing was removed: ColorSync listed more devices than this command examines"
+                return "nothing was removed: ColorSync listed more devices or profile data than this command examines"
             case .profileInventoryTruncated:
                 return "nothing was removed: \(DisplayIdentityResidue.profilesDirectory) holds more profiles than this command examines"
             case .lifecycleJournalUnusable:
@@ -133,19 +133,35 @@ public enum DisplayIdentityCleanup {
 
     public static func plan(_ environment: Environment = .live) throws -> Plan {
         let profiles = try spaceOProfiles(in: environment.profileDirectory)
-        let (registrations, unattributed) = spaceODevices(in: try environment.registrations())
+        let (registrations, unattributed) = try spaceODevices(in: try environment.registrations())
         return Plan(registrations: registrations, profilePaths: profiles, unattributedWithoutProfile: unattributed)
     }
 
     /// ColorSync lists a device once per profile; a device is SpaceO's when its factory profile says so.
-    static func spaceODevices(in listing: [Registration]) -> (devices: [Registration], unattributed: Int) {
+    /// Each distinct profile is read once, and all of them within the scan's total read budget.
+    static func spaceODevices(in listing: [Registration], budget: Int = DisplayIdentityResidue.maximumScanBytes)
+        throws -> (devices: [Registration], unattributed: Int) {
         var registrations: [Registration] = []
         var spaceO = Set<String>(), profiled = Set<String>(), devices = Set<String>()
+        var classified: [String: Bool] = [:], remaining = budget
         for registration in listing {
             devices.insert(registration.deviceID)
             guard let path = registration.profilePath else { continue }
             profiled.insert(registration.deviceID)
-            if registration.isFactory, isSpaceOProfile(path), spaceO.insert(registration.deviceID).inserted {
+            guard registration.isFactory, !spaceO.contains(registration.deviceID) else { continue }
+            let isSpaceO: Bool
+            if let known = classified[path] {
+                isSpaceO = known
+            } else {
+                guard remaining > 0 else { throw Failure.listingTruncated }
+                let data = DisplayIdentityResidue.readPrefix(
+                    path, maximum: min(DisplayIdentityResidue.maximumProfilePrefix, remaining)) ?? Data()
+                remaining -= max(data.count, 1)
+                isSpaceO = DisplayIdentityResidue.isSpaceOProfile(data)
+                classified[path] = isSpaceO
+            }
+            if isSpaceO {
+                spaceO.insert(registration.deviceID)
                 registrations.append(registration)
             }
         }
@@ -182,7 +198,7 @@ public enum DisplayIdentityCleanup {
         try requireQuiescent(environment)
         let profilePaths = try spaceOProfiles(in: environment.profileDirectory)
         let listing = try environment.registrations()
-        let (devices, unattributed) = spaceODevices(in: listing)
+        let (devices, unattributed) = try spaceODevices(in: listing)
         let plan = Plan(registrations: devices, profilePaths: profilePaths, unattributedWithoutProfile: unattributed)
         let manager = FileManager.default
         guard manager.fileExists(atPath: environment.registryPath) else { throw Failure.registryMissing }
