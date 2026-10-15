@@ -24,6 +24,17 @@ Status definitions:
 
 ## Active milestone
 
+### October 15–16 maintenance release 1.0.8
+
+- Merged contributor fixes #48/#49, Dependabot #50/#51, report-driven reliability #46, the #47
+  owner-lookup/listing fix #52, the #54 slow-read circuit fix #55 and the #53 activation guard
+  #56. #30 was verified fixed and closed. #38 remains open with a status update.
+- Live evidence under the testing-host override: issue reproductions and fixes, and a 42/42
+  computer-use matrix on the activation-guard branch. The full live suite stopped after 4 of 15
+  passing cases during sustained ColorSync load (RA-057); owner and journal recovery were
+  completed without a remaining display. See the
+  [preparation record](docs/validation/2026-10-16-release-1.0.8.md).
+
 ### October 11 blocked-host janitor maintenance
 
 - Stop the timed janitor when host-health admission refuses. Retain idle display owners and

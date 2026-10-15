@@ -147,11 +147,12 @@ lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md
 The current source monitors host health during display use and keeps one idle display for
 reuse. Explicit `spaceo pool trim --operator` retires idle displays without ending active
 sessions. New display creation is capped at 4/minute, 12/ten minutes and 32/rolling day.
-The 1.0.7 maintenance update corrects CPU measurement timing and reduces repeated display
-creation and window mutations. It is owner-directed with an explicit qualification exception.
-One modified-build native workflow passed; full live and signed-artifact behavior qualification
-remain incomplete. The WindowServer/ColorSync freeze remains unresolved. Version 1.0.4 remains
-unpublished; see the [1.0.7 release notes](docs/RELEASE_NOTES_1.0.7.md).
+The 1.0.8 maintenance update returns focus to you when an agent app takes it, keeps
+`session.list` working through incomplete window discovery, and stops a slow display read from
+latching the safety circuit. It is owner-directed with an explicit qualification exception: the
+full live suite stopped early under sustained ColorSync load, and signed-artifact behavior
+qualification remains incomplete. The WindowServer/ColorSync freeze remains unresolved. Version
+1.0.4 remains unpublished; see the [1.0.8 release notes](docs/RELEASE_NOTES_1.0.8.md).
 
 **Or drive an app yourself from the CLI**
 

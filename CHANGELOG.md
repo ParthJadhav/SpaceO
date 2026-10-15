@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.8] - 2026-10-16
+
 - Return activation to the person when an agent app takes it, for example Chrome showing a
   page's popup window (#53). The daemon follows public activation notifications and
   re-activates the person's previous app with public activation, usually within tens of
@@ -87,6 +89,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 - Recheck display admission after persisting its pending marker; acknowledge a safe
   pre-mutation abort before allowing retries. Bound settling waits by a monotonic deadline
   and a 32-caller limit; saturation returns a transient structured resource limit.
+
+Owner-directed maintenance release with a qualification exception: the full live suite stopped
+after 4 of 15 passing cases under sustained ColorSync load (RA-057), and signed-artifact behavior
+qualification remains incomplete. See the [release notes](docs/RELEASE_NOTES_1.0.8.md).
 
 ## [1.0.7] - 2026-10-04
 
