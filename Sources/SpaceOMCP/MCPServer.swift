@@ -533,7 +533,7 @@ public enum MCPServer {
         guard controller.memory.daemonDrift != nil,
               let response = Transport.pingResponse(socketPath), response.ok,
               let daemon = response.daemon else { return }
-        controller.memory.setDaemonDrift(reportDaemonProvenance(daemon))
+        controller.memory.setDaemonDrift(reportDaemonProvenance(daemon), daemonInstance: daemon.instanceID)
     }
 
     /// Log daemon provenance to stderr and return the agent-facing warning when the daemon is
@@ -1184,15 +1184,15 @@ public enum MCPServer {
             }
         }
 
-        // A pending drift warning is checked against the daemon about to handle this call, so
-        // the warning (or its absence) describes the daemon that produced the reply. A call that
-        // fails before reaching any daemon checks it when it replies instead.
-        var driftValidatedBeforeSend = false
+        // Drift describes the daemon that produced this call's reply, read from the provenance
+        // that reply carries. A call that reaches no daemon (or only a legacy one that does not
+        // report provenance) checks a pending warning with a ping when it replies instead.
+        var driftBoundToReply = false
 
         // One-time notes (daemon drift, sessions that ended in the background) lead whatever
         // this call returns, success or failure, so the agent reads them before acting on it.
         func reply(_ result: [String: Any]) {
-            if !driftValidatedBeforeSend, controller.memory.hasUndeliveredDaemonDrift {
+            if !driftBoundToReply, controller.memory.hasUndeliveredDaemonDrift {
                 revalidateDaemonDrift(socketPath: socketPath, controller: controller)
             }
             let notes = controller.memory.drainNotes()
@@ -1231,11 +1231,6 @@ public enum MCPServer {
             }
             return
         }
-
-        if controller.memory.hasUndeliveredDaemonDrift {
-            revalidateDaemonDrift(socketPath: socketPath, controller: controller)
-        }
-        driftValidatedBeforeSend = true
 
         let request: Request
         switch plan {
@@ -1276,8 +1271,15 @@ public enum MCPServer {
             return
         }
 
-        // Classify with the drift known when this command was sent: the daemon that refused it
-        // is the evidence, and a later ping could already reach its replacement.
+        // Every daemon reply names its producer. Recompute drift from that daemon when it is not
+        // the one the stored warning describes, so a restart between calls can neither leave a
+        // stale warning nor misclassify this reply.
+        if let daemon = response.daemon {
+            if controller.memory.driftNeedsCheck(for: daemon.instanceID) {
+                controller.memory.setDaemonDrift(reportDaemonProvenance(daemon), daemonInstance: daemon.instanceID)
+            }
+            driftBoundToReply = true
+        }
         response = rewritingOutdatedDaemon(response, drift: controller.memory.daemonDrift)
         controller.record(response, for: request)
         journaled.request = request

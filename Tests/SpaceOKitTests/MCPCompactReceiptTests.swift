@@ -481,6 +481,17 @@ final class MCPCompactReceiptTests: XCTestCase {
         XCTAssertNil(memory.daemonDrift)
     }
 
+    func testDriftIsRecomputedOnlyForADifferentDaemonInstance() {
+        let memory = MCPConnectionMemory(verbose: false)
+        let original = UUID(), replacement = UUID()
+        XCTAssertTrue(memory.driftNeedsCheck(for: original), "startup drift names no daemon instance")
+        memory.setDaemonDrift("drift from the original daemon", daemonInstance: original)
+        XCTAssertFalse(memory.driftNeedsCheck(for: original))
+        XCTAssertTrue(memory.driftNeedsCheck(for: replacement), "a replacement is judged from its own reply")
+        memory.setDaemonDrift(nil, daemonInstance: replacement)
+        XCTAssertFalse(memory.hasUndeliveredDaemonDrift)
+    }
+
     func testUnreachableDaemonDoesNotClearAVerifiedDriftWarning() {
         let memory = MCPConnectionMemory(verbose: false)
         let warning = MCPPresentation.daemonDriftWarning(

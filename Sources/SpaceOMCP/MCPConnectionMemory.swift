@@ -19,6 +19,7 @@ final class MCPConnectionMemory: @unchecked Sendable {
     private var pendingNotes: [String] = []
     private var driftWarning: String?
     private var driftWarningDelivered = false
+    private var driftDaemonInstance: UUID?
 
     /// Connection-wide verbose receipts (`SPACEO_MCP_VERBOSE=1`).
     let verbose: Bool
@@ -99,12 +100,22 @@ final class MCPConnectionMemory: @unchecked Sendable {
         pendingNotes.append(bounded)
     }
 
-    /// Set once from daemon provenance. The warning is delivered on the next tool result only.
-    func setDaemonDrift(_ warning: String?) {
+    /// Set from daemon provenance. The warning is delivered on the next tool result only.
+    /// `daemonInstance` names the daemon it was computed for, when that is known.
+    func setDaemonDrift(_ warning: String?, daemonInstance: UUID? = nil) {
         lock.lock()
         defer { lock.unlock() }
         if warning != driftWarning { driftWarningDelivered = false }
         driftWarning = warning
+        driftDaemonInstance = daemonInstance
+    }
+
+    /// Whether a reply from `instance` must recompute drift: the stored warning (or its
+    /// absence) was computed for a different daemon, or for one not identified.
+    func driftNeedsCheck(for instance: UUID) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return driftDaemonInstance != instance
     }
 
     /// A drift warning that the next tool result would deliver.
