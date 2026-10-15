@@ -334,19 +334,13 @@ def testing_override(environment=None):
 
 
 # The override never waives measured ColorSync load (RA-057): every display attachment leaves
-# macOS polling ColorSync until logout, and runs that ignored it ended the login session.
-TESTING_OVERRIDE_COLORSYNC_LIMIT = 25
-
-
+# macOS polling ColorSync until logout, and runs that ignored it ended the login session. It
+# applies the normal 50% limit here; display changes separately wait for ColorSync below 25%.
 def apply_testing_override(report):
     if testing_override():
         report["observedAdmitted"] = report["admitted"]
         report["testingOverride"] = True
-        cpu = report.get("colorsyncCPUPercent")
-        busy = isinstance(cpu, (int, float)) and cpu >= TESTING_OVERRIDE_COLORSYNC_LIMIT
-        report["admitted"] = not busy
-        if busy and "colorsync_busy" not in report["reasons"]:
-            report["reasons"].append("colorsync_busy")
+        report["admitted"] = "colorsync_busy" not in report["reasons"]
     return report
 
 

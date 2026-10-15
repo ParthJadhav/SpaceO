@@ -125,6 +125,8 @@ final class DisplayHostHealth: @unchecked Sendable {
     private var reportedAt: TimeInterval?
     private var consecutiveSettledSamples = 0
     private var settlingAfter: TimeInterval?
+    /// Under the testing override: whether any interval has been measured in this process.
+    private var overrideMeasured = false
     private var current = DisplayHostHealthReport(state: .unknown, reasons: ["not_sampled"])
     private let sample: @Sendable () throws -> DisplayHostHealthSample
     private let now: @Sendable () -> TimeInterval
@@ -189,7 +191,13 @@ final class DisplayHostHealth: @unchecked Sendable {
     /// including captures which were still being reconciled when the graph changed.
     func resetReconfigurationSettling() {
         lock.withLock {
-            if testingOverride { return }
+            if testingOverride {
+                // One quiet interval ending after this change, rather than normal mode's two.
+                consecutiveSettledSamples = min(consecutiveSettledSamples, 1)
+                settlingAfter = now()
+                signalReconfigurationWaiters()
+                return
+            }
             consecutiveSettledSamples = 0
             settlingAfter = now()
             signalReconfigurationWaiters()
@@ -359,33 +367,45 @@ final class DisplayHostHealth: @unchecked Sendable {
         if let failed { fail(failed) }
     }
 
-    /// The reserved-testing override waives memory pressure, swap, WindowServer diagnostics,
-    /// unavailable samples and sticky faults, but not measured ColorSync load (RA-057): every
-    /// display attachment leaves macOS polling ColorSync until logout, and diagnostic runs that
-    /// ignored this load saturated ColorSync until WindowServer's watchdog ended the login session.
-    /// A measured interval at or above the settling threshold refuses graph changes until two
-    /// quieter intervals follow; an unmeasurable one keeps the override's admission.
+    /// The reserved-testing override waives memory pressure, swap, WindowServer diagnostics and
+    /// sticky faults, but not measured ColorSync load (RA-057): every display attachment leaves
+    /// macOS polling ColorSync until logout, and diagnostic runs that ignored this load saturated
+    /// ColorSync until WindowServer's watchdog ended the login session. A graph change needs a quiet
+    /// interval measured after the previous change, and a busy interval needs two quiet ones.
+    /// Saturation makes intervals unmeasurable, so once this process has measured one, an
+    /// unmeasurable interval never counts as quiet; only a sampler that has never produced a
+    /// measurement keeps the override's former admission.
     private func acceptOverride(_ next: DisplayHostHealthSample?) {
         lock.withLock {
             defer { signalReconfigurationWaiters() }
             inFlightSince = nil
             let before = previous
             previous = next
-            guard let next else {
-                consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+            if let next { lastAttempt = next.uptime }
+            guard let next, let before else {
+                // No interval: a failed capture, or the first observation.
+                if next == nil, !overrideMeasured { consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1) }
                 return
             }
-            lastAttempt = next.uptime
-            // The first observation has no interval yet.
-            guard let before else { return }
-            let cpu = (try? DisplayHostHealthSample.assess(before, next))?.colorsyncCPUPercent
+            guard let cpu = (try? DisplayHostHealthSample.assess(before, next))?.colorsyncCPUPercent else {
+                current.colorsyncCPUPercent = nil
+                if !overrideMeasured { consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1) }
+                return
+            }
+            overrideMeasured = true
             current.colorsyncCPUPercent = cpu
-            if let cpu, cpu >= Self.reconfigurationCPUThresholdPercent {
+            if cpu >= Self.reconfigurationCPUThresholdPercent {
                 consecutiveSettledSamples = 0
-            } else {
+            } else if settlingAfter.map({ next.uptime > $0 }) ?? true {
                 consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
+                if consecutiveSettledSamples == 2 { settlingAfter = nil }
             }
         }
+    }
+
+    /// Deterministic tests drive a failed capture without a sampler.
+    func acceptFailedCaptureForTesting() {
+        if testingOverride { acceptOverride(nil) }
     }
 
     private func finishInitialDecision() {

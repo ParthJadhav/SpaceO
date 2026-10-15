@@ -513,8 +513,8 @@ missing parent directories and names the directory if it cannot be created.
 
 Set both `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the changed source CLI,
 its daemon and the test command. This diagnostic mode bypasses host-health admission and
-the persistent rolling creation-rate limit, except measured ColorSync load: display changes and
-the live-test preflight still wait for ColorSync below 25%. It retains bounded attempt history,
+the persistent rolling creation-rate limit, except measured ColorSync load: display changes still
+wait for ColorSync below 25%, and the live-test preflight still refuses at 50%. It retains bounded attempt history,
 pending-work checks, ownership, pool resource limits and cleanup requirements. Native safety/limits JSON
 exposes `creationRateTestingOverride: true`; health JSON exposes `testingOverride: true`.
 Normal runs keep their existing limits and may still be refused by diagnostic attempt history.

@@ -18,9 +18,10 @@ All notable user-visible changes are recorded here. SpaceO follows
   `sudo spaceo safety clean-display-identities --apply --operator` backs up and removes only
   SpaceO's ColorSync registrations and profiles. Log out and back in afterwards.
 - The reserved testing-host override (`SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1`) no longer
-  waives measured ColorSync load. Display changes, and the live-test preflight, wait for
-  ColorSync below 25%; every attachment leaves macOS polling ColorSync until logout, and runs
-  that ignored that load ended the login session.
+  waives measured ColorSync load. Display changes wait for ColorSync below 25%, measured after
+  the previous change, and the live-test preflight refuses at 50% as in normal mode; every
+  attachment leaves macOS polling ColorSync until logout, and runs that ignored that load ended
+  the login session.
 - A display whose mode settings macOS refuses is now kept and rejected instead of being released
   implicitly.
 

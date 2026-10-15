@@ -222,14 +222,20 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         var registrations: [DisplayIdentityCleanup.Registration] = []
         var ignoresUnregister = false
         var unregistered: [String] = []
+        var displays = [DisplayIdentityCleanup.DisplayInventory(spaceO: 0, other: 1)]
+        var displayReads = 0
+        var listingFails = false
     }
 
-    private func environment(_ colorSync: FakeColorSync, root: Bool = true,
-                             online: Bool = false) -> DisplayIdentityCleanup.Environment {
-        let registry = directory.appendingPathComponent("registry")
-        try? Data(count: 512).write(to: registry)
+    private func environment(_ colorSync: FakeColorSync, root: Bool = true, processRunning: Bool = false,
+                             registry: Bool = true) -> DisplayIdentityCleanup.Environment {
+        let registryURL = directory.appendingPathComponent("registry")
+        if registry { try? Data(count: 512).write(to: registryURL) }
         return DisplayIdentityCleanup.Environment(
-            registrations: { colorSync.registrations },
+            registrations: {
+                if colorSync.listingFails { throw DisplayIdentityCleanup.Failure.listingTruncated }
+                return colorSync.registrations
+            },
             unregister: { registration in
                 colorSync.unregistered.append(registration.deviceID)
                 if !colorSync.ignoresUnregister {
@@ -237,9 +243,13 @@ final class DisplayIdentityCleanupTests: XCTestCase {
                 }
             },
             profileDirectory: directory.appendingPathComponent("Displays").path,
-            registryPath: registry.path,
+            registryPath: registryURL.path,
             isRoot: { root },
-            spaceODisplayOnline: { online })
+            spaceOProcessRunning: { processRunning },
+            displays: {
+                defer { colorSync.displayReads += 1 }
+                return colorSync.displays[min(colorSync.displayReads, colorSync.displays.count - 1)]
+            })
     }
 
     private func fixture() throws -> FakeColorSync {
@@ -262,24 +272,57 @@ final class DisplayIdentityCleanupTests: XCTestCase {
 
     func testPlanSelectsOnlySpaceORegistrationsAndProfiles() throws {
         let colorSync = try fixture()
-        let plan = DisplayIdentityCleanup.plan(environment(colorSync))
+        let plan = try DisplayIdentityCleanup.plan(environment(colorSync))
         XCTAssertEqual(plan.registrations.map(\.deviceID), ["A", "B"])
         XCTAssertEqual(plan.profilePaths.map { URL(fileURLWithPath: $0).lastPathComponent },
                        ["SpaceO display 1-A.icc", "SpaceO display 2-E.icc", "test-multi-1-B.icc"])
         XCTAssertEqual(plan.unattributedWithoutProfile, 1, "a registration without a profile is left alone")
     }
 
-    func testApplyRefusesWithoutRootOrWithASpaceODisplayOnline() throws {
+    func testApplyRefusesUnlessRootQuiescentAndBackedUp() throws {
+        let backupRoot = directory.appendingPathComponent("b").path
+        func refusal(_ environment: DisplayIdentityCleanup.Environment) -> DisplayIdentityCleanup.Failure? {
+            do { _ = try DisplayIdentityCleanup.apply(environment, backupRoot: backupRoot); return nil }
+            catch { return error as? DisplayIdentityCleanup.Failure }
+        }
         let colorSync = try fixture()
-        XCTAssertThrowsError(try DisplayIdentityCleanup.apply(environment(colorSync, root: false),
-                                                              backupRoot: directory.appendingPathComponent("b").path)) {
-            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .requiresRoot)
-        }
-        XCTAssertThrowsError(try DisplayIdentityCleanup.apply(environment(colorSync, online: true),
-                                                              backupRoot: directory.appendingPathComponent("b").path)) {
-            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .spaceODisplayOnline)
-        }
+        XCTAssertEqual(refusal(environment(colorSync, root: false)), .requiresRoot)
+        XCTAssertEqual(refusal(environment(colorSync, processRunning: true)), .spaceOProcessRunning)
+        colorSync.displays = [.init(spaceO: 1, other: 1)]
+        XCTAssertEqual(refusal(environment(colorSync)), .spaceODisplayOnline)
+        colorSync.displays = [.init(spaceO: 0, other: 0)]
+        XCTAssertEqual(refusal(environment(colorSync)), .noDisplays, "an empty inventory is not proof of quiet")
+        colorSync.displays = [.init(spaceO: 0, other: 1)]
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("registry"))
+        XCTAssertEqual(refusal(environment(colorSync, registry: false)), .registryMissing)
+        colorSync.listingFails = true
+        XCTAssertEqual(refusal(environment(colorSync)), .listingTruncated)
         XCTAssertTrue(colorSync.unregistered.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: backupRoot))
+    }
+
+    func testADisplayAppearingDuringCleanupKeepsEveryProfile() throws {
+        let colorSync = try fixture()
+        colorSync.displays = [.init(spaceO: 0, other: 1), .init(spaceO: 1, other: 1)]
+        let outcome = try DisplayIdentityCleanup.apply(environment(colorSync),
+                                                       backupRoot: directory.appendingPathComponent("backup").path)
+        XCTAssertTrue(outcome.profileRemovalSkipped)
+        XCTAssertFalse(outcome.confirmed)
+        XCTAssertEqual(outcome.movedProfiles, 0)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(
+            atPath: directory.appendingPathComponent("Displays").path).count, 5)
+    }
+
+    func testEveryProfileOfASurvivingRegistrationIsKept() throws {
+        let colorSync = try fixture()
+        let second = try writeProfile("SpaceO display 1-A2", vendor: 0x1AF2, product: 1)
+        colorSync.registrations.append(.init(deviceClass: "mntr", deviceID: "A", profilePath: second))
+        colorSync.ignoresUnregister = true
+        let outcome = try DisplayIdentityCleanup.apply(environment(colorSync),
+                                                       backupRoot: directory.appendingPathComponent("backup").path)
+        XCTAssertEqual(outcome.remainingRegistrations, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second), "a device's second profile is still referenced")
+        XCTAssertEqual(outcome.movedProfiles, 1)
     }
 
     func testApplyBacksUpUnregistersAndRemovesSpaceOProfiles() throws {

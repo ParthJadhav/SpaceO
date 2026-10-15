@@ -114,17 +114,14 @@ class HostHealthTests(unittest.TestCase):
             self.assertTrue(report['testingOverride'])
             self.assertEqual(report['reasons'], ['recent_windowserver_diagnostic'])
             quiet = health.apply_testing_override(dict(admitted=False, reasons=['swap_activity'],
-                                                       colorsyncCPUPercent=24.9))
+                                                       colorsyncCPUPercent=49.9))
             self.assertTrue(quiet['admitted'])
-            # RA-057: measured ColorSync load is never waived, even below the normal 50% limit.
-            busy = health.apply_testing_override(dict(admitted=True, reasons=[], colorsyncCPUPercent=25.0))
+            # RA-057: measured ColorSync load is never waived; the override keeps the normal limit.
+            busy = health.apply_testing_override(dict(admitted=False, reasons=['colorsync_busy', 'swap_activity'],
+                                                      colorsyncCPUPercent=50.0))
             self.assertFalse(busy['admitted'])
-            self.assertTrue(busy['observedAdmitted'])
-            self.assertEqual(busy['reasons'], ['colorsync_busy'])
-            saturated = health.apply_testing_override(dict(admitted=False, reasons=['colorsync_busy'],
-                                                           colorsyncCPUPercent=99.0))
-            self.assertFalse(saturated['admitted'])
-            self.assertEqual(saturated['reasons'], ['colorsync_busy'])
+            self.assertFalse(busy['observedAdmitted'])
+            self.assertEqual(busy['reasons'], ['colorsync_busy', 'swap_activity'])
             with mock.patch.object(health.sys, 'platform', 'unsupported'), \
                     mock.patch('sys.stdout', new_callable=io.StringIO) as output:
                 self.assertEqual(health.main(), 0)

@@ -148,6 +148,8 @@ public final class Stage: @unchecked Sendable {
     })
     private static let ownership = OwnershipState()
     private static let identities = DisplayIdentityAllocator.shared
+    private static let identityNotRetired =
+        "; its display identity could not be retired in display-identities.json and may be offered again after a restart"
     private static let hostHealth = DisplayHostHealth(onFailure: { reason in lifecycle.trip(reason) })
 
     /// Status reads never start sampling or touch the display server.
@@ -376,18 +378,20 @@ public final class Stage: @unchecked Sendable {
             guard publicationFailure == nil else {
                 // macOS may have restored this identity into a saved state it cannot leave
                 // (mirrored, inactive, sharing a Space). Never offer that identity again.
-                Self.identities.rotate(identity)
+                let retired = Self.identities.rotate(identity)
                 // Attachment reset the settling fence. Immediate rollback cannot safely pass
                 // it; retain the owner and preserve the actual publication failure for recovery.
-                try Self.rejectPublication(display, reason: publicationFailure ?? "unsafe display publication",
+                try Self.rejectPublication(display, reason: (publicationFailure ?? "unsafe display publication")
+                                               + (retired ? "" : Self.identityNotRetired),
                                            coordinator: Self.lifecycle)
             }
             try operation.check()
             let spaces = (SPOSpacesForDisplay(display.displayID) ?? []).map { $0.uint64Value }
             try operation.check()
             guard !spaces.isEmpty else {
-                Self.identities.rotate(identity)
-                throw SpaceOError.stageCreationFailed("published display has no verified managed Space")
+                let retired = Self.identities.rotate(identity)
+                throw SpaceOError.stageCreationFailed("published display has no verified managed Space"
+                    + (retired ? "" : Self.identityNotRetired))
             }
             let bounds = display.bounds
             let scale: Double? = display.pixelWidth.flatMap { pixels in

@@ -57,6 +57,41 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertEqual(health.report.state, .ready)
     }
 
+    func testTestingOverrideNeverCountsAnUnmeasurableIntervalAsQuietAfterAMeasurement() throws {
+        let health = DisplayHostHealth(testingOverride: true)
+        health.accept(sample(100, cpu: 10))
+        health.accept(sample(105, cpu: 10.5))
+        health.accept(sample(110, cpu: 11))
+        try health.requireStillSettledForReconfiguration()
+        health.accept(sample(115, cpu: 13))  // busy
+        // Saturation shows up as restarts and overrun intervals, not as quiet measurements.
+        health.accept(sample(120, cpu: 13, pid: 40))
+        health.accept(sample(125, cpu: 13, pid: 50))
+        health.acceptFailedCaptureForTesting()
+        health.acceptFailedCaptureForTesting()
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration())
+        health.accept(sample(130, cpu: 13, pid: 50))
+        health.accept(sample(135, cpu: 13.1, pid: 50))
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(), "two quiet intervals follow a busy one")
+        health.accept(sample(140, cpu: 13.2, pid: 50))
+        try health.requireStillSettledForReconfiguration()
+    }
+
+    func testTestingOverrideMeasuresAfterEveryGraphChange() throws {
+        let clock = Clock()
+        let health = DisplayHostHealth(testingOverride: true, now: { clock.value })
+        health.accept(sample(100, cpu: 10))
+        health.accept(sample(105, cpu: 10.1))
+        health.accept(sample(110, cpu: 10.2))
+        try health.requireStillSettledForReconfiguration()
+        clock.value = 111
+        health.resetReconfigurationSettling()
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
+                             "a change waits for an interval measured after it")
+        health.accept(sample(115, cpu: 10.3))
+        try health.requireStillSettledForReconfiguration()
+    }
+
     private final class Clock: @unchecked Sendable {
         private let lock = NSLock()
         private var time = 100.0

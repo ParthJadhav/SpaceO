@@ -694,7 +694,9 @@ func runDaemonRestart() -> Never {
 /// ignores unregistration from a normal account.
 func runCleanDisplayIdentities(apply: Bool) -> Never {
     if !apply {
-        let plan = DisplayIdentityCleanup.plan()
+        let plan: DisplayIdentityCleanup.Plan
+        do { plan = try DisplayIdentityCleanup.plan() }
+        catch { fail(error.localizedDescription, exit: .failure, code: "display_identity_cleanup_refused") }
         if args.hasJSON {
             print(CLIJSON.object([
                 "ok": true, "applied": false,
@@ -723,16 +725,20 @@ func runCleanDisplayIdentities(apply: Bool) -> Never {
             print(CLIJSON.object([
                 "ok": outcome.confirmed, "applied": true, "backup": outcome.backup,
                 "unregistered": outcome.unregistered, "remainingRegistrations": outcome.remainingRegistrations,
-                "removedProfiles": outcome.movedProfiles,
+                "removedProfiles": outcome.movedProfiles, "profileRemovalSkipped": outcome.profileRemovalSkipped,
             ]))
         } else {
             print("backup: \(outcome.backup)")
             print("unregistered \(outcome.unregistered) of \(outcome.plan.registrations.count) SpaceO registrations; "
                 + "removed \(outcome.movedProfiles) of \(outcome.plan.profilePaths.count) profiles")
-            print(outcome.confirmed
-                ? "log out and back in (or restart): until then WindowServer keeps asking ColorSync about "
-                    + "every display attached since login"
-                : "\(outcome.remainingRegistrations) registrations are still listed; their profiles were kept")
+            if outcome.profileRemovalSkipped {
+                print("a SpaceO process or display appeared during cleanup, so no profile was removed; stop it and rerun")
+            } else if outcome.remainingRegistrations > 0 {
+                print("\(outcome.remainingRegistrations) registrations are still listed; their profiles were kept")
+            } else {
+                print("log out and back in (or restart): until then WindowServer keeps asking ColorSync about "
+                    + "every display attached since login")
+            }
         }
         exit(outcome.confirmed ? 0 : 1)
     } catch {

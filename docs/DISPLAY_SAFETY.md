@@ -69,7 +69,8 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   than mint a 33rd. The random serial existed because a reused identity once restored a saved
   configuration that left the display online but inactive, without its own Space. Publication
   still rejects such a display, and that identity's slot advances to a new generation, persisted
-  in `~/Library/Application Support/SpaceO/display-identities.json`, so it is never offered again.
+  in `~/Library/Application Support/SpaceO/display-identities.json`, so it is not offered again;
+  if that record cannot be saved, the creation error says so.
   A display whose mode settings are refused is retained and rejected, not released implicitly.
 - The daemon keeps at most one idle display after a 15-second grace, reusing it for later tasks.
   Exact width and height must match an exclusive request. Idle displays still consume framebuffer
@@ -133,12 +134,15 @@ spaceo safety clean-display-identities --operator              # list; changes n
 sudo spaceo safety clean-display-identities --apply --operator  # back up, then remove
 ```
 
-Stop every SpaceO daemon, Viewer and MCP client first; applying refuses while a SpaceO display
-is online. It copies ColorSync's device registry and each SpaceO profile into
+Stop every SpaceO daemon, Viewer and MCP client first. Applying refuses while any other
+`spaceo` process or the Viewer runs, while a SpaceO display is online, when it sees no display at
+all (run it from a Terminal in the logged-in session, not over SSH), and when ColorSync's
+registry file is missing. If a SpaceO process or display appears while it works, it removes no
+profile. It copies ColorSync's device registry and each SpaceO profile into
 `/Library/Application Support/SpaceO/ColorSync backups/colorsync-<time>/`, unregisters only
 devices whose profile names SpaceO's vendor and product (physical displays, Sidecar and other
-virtual-display tools are untouched), lists the registry again and removes only profiles whose
-registration is gone. ColorSync reports success to a normal account while removing nothing, so
+virtual-display tools are untouched), lists the registry again and removes only SpaceO profiles
+that no remaining registration references. ColorSync reports success to a normal account while removing nothing, so
 root is required and the second listing, not the return value, decides the outcome. Listing
 the registry can take tens of seconds on an affected Mac. Log out and back in afterwards:
 until WindowServer restarts it keeps asking ColorSync about every display attached since login,
@@ -172,10 +176,15 @@ This bypasses host-health admission, including historical WindowServer reports, 
 pressure, swap, unavailable samples and sticky health faults. It does **not** bypass measured
 ColorSync load: every display attachment leaves macOS polling ColorSync until logout (RA-057), and
 diagnostic runs that ignored that load saturated ColorSync until WindowServer's watchdog ended
-the login session. The sampler keeps running, and a display change waits (up to its normal
-deadline) until two consecutive intervals measure combined ColorSync CPU below 25%; an interval
-that cannot be measured still counts as quiet. A process therefore takes about ten seconds before
-its first display change. Native health reports carry `testingOverride: true`,
+the login session. The sampler keeps running. A display change waits (up to its normal
+deadline) for combined ColorSync CPU below 25%: two measured intervals at process start or after
+a busy interval, and one interval measured after each earlier change. Saturation makes intervals
+unmeasurable, so once a process has measured one, an unmeasurable interval never counts as quiet;
+only a sampler that has never produced a measurement keeps the override's former admission. A
+process therefore takes about ten seconds before its first display change, and about five
+between changes. The live-test preflight and per-case health checks keep the normal 50%
+ColorSync limit; a case that finds ColorSync at or above it after cleanup stops live work, and
+recovery is the operator archive below. Native health reports carry `testingOverride: true`,
 `testing_override` and the measured `colorsyncCPUPercent`, never an invented one. The
 independent helper still samples and retains its actual reasons and counters as
 `observedAdmitted`; it marks admission as overridden. One flag alone has no effect.

@@ -91,8 +91,8 @@ cleanup removes only SpaceO's registrations and profiles. The testing override n
 measured ColorSync load.
 
 A controlled experiment confirmed that reuse adds no registry, profile or mapping entries. It also
-confirmed that the poll is per attachment, so attachments stay budgeted and gated on measured
-load. RA-057 stays open until the owner cleans this host and a normal-admission live run is
+confirmed that the poll is per attachment. Normal admission keeps budgeting attachments, and both
+normal admission and the testing override gate them on measured ColorSync load. RA-057 stays open until the owner cleans this host and a normal-admission live run is
 retained.
 
 October 4 continued investigation measured approximately 31% combined ColorSync CPU with
