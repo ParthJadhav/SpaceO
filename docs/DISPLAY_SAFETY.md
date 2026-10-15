@@ -150,7 +150,8 @@ devices whose factory profile names SpaceO's vendor and product (physical displa
 other virtual-display tools and displays a person assigned a SpaceO profile are untouched), lists the registry again and removes only SpaceO profiles
 that no remaining registration references. ColorSync reports success to a normal account while removing nothing, so
 root is required and the second listing, not the return value, decides the outcome. Listing
-the registry can take tens of seconds on an affected Mac. Log out and back in afterwards:
+the registry can take tens of seconds on an affected Mac; a listing that has not finished after
+three minutes refuses before any change, or reports the cleanup as unconfirmed after it. Log out and back in afterwards:
 until WindowServer restarts it keeps asking ColorSync about every display attached since login,
 about two requests every five seconds per attachment, even after the display is gone.
 Do not delete WindowServer's display preferences; that resets the arrangement of physical

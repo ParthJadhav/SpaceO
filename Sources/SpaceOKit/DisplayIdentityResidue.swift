@@ -76,13 +76,15 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
         for name in listing.names {
             guard remaining > 0 else { return (paths, examined, true, unreadable) }
             let path = URL(fileURLWithPath: directory).appendingPathComponent(name).path
-            guard let data = readPrefix(path, maximum: min(maximumProfilePrefix, remaining)) else {
+            guard let read = readPrefix(path, maximum: min(maximumProfilePrefix, remaining)) else {
                 unreadable += 1
                 continue
             }
-            remaining -= data.count
+            remaining -= read.data.count
+            // The budget cut this profile short of the prefix that decides it: the scan is incomplete.
+            guard read.complete(prefix: maximumProfilePrefix) else { return (paths, examined, true, unreadable) }
             examined += 1
-            if isSpaceOProfile(data) { paths.append(path) }
+            if isSpaceOProfile(read.data) { paths.append(path) }
         }
         return (paths, examined, listing.truncated, unreadable)
     }
@@ -92,8 +94,15 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
         return model.vendor == 0x1AF2 && model.product == 0x0001
     }
 
-    /// The first `maximum` bytes of a regular file; nil for anything else or on error.
-    static func readPrefix(_ path: String, maximum: Int) -> Data? {
+    struct Prefix {
+        var data: Data
+        var fileSize: Int
+        /// Whether `data` holds everything up to `prefix` bytes, or the whole of a shorter file.
+        func complete(prefix: Int) -> Bool { data.count >= min(prefix, fileSize) }
+    }
+
+    /// The first `maximum` bytes of a regular file; nil for anything else or on any read error.
+    static func readPrefix(_ path: String, maximum: Int) -> Prefix? {
         guard maximum > 0, !path.utf8.contains(0) else { return nil }
         let descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)
         guard descriptor >= 0 else { return nil }
@@ -104,11 +113,14 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
         var count = 0
         while count < maximum {
             let read = bytes.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress! + count, maximum - count) }
-            if read < 0, errno == EINTR { continue }
-            guard read > 0 else { break }
+            if read < 0 {
+                if errno == EINTR { continue }
+                return nil
+            }
+            if read == 0 { break }
             count += read
         }
-        return Data(bytes.prefix(count))
+        return Prefix(data: Data(bytes.prefix(count)), fileSize: Int(clamping: info.st_size))
     }
 
     /// The vendor and product in an ICC profile's Apple `mmod` tag, or nil when absent or malformed.

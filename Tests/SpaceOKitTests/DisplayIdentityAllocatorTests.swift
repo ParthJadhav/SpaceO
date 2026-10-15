@@ -625,4 +625,39 @@ final class DisplayIdentityCleanupTests: XCTestCase {
             XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .listingTruncated)
         }
     }
+
+    func testABudgetThatShortensTheLastProfileMarksTheScanIncomplete() throws {
+        _ = try fixture()
+        let displays = directory.appendingPathComponent("Displays").path
+        let sizes = try FileManager.default.contentsOfDirectory(atPath: displays).map {
+            try FileManager.default.attributesOfItem(atPath: displays + "/" + $0)[.size] as! Int
+        }
+        let total = sizes.reduce(0, +)
+        XCTAssertFalse(try DisplayIdentityResidue.spaceOProfiles(in: displays, budget: total).truncated)
+        XCTAssertTrue(try DisplayIdentityResidue.spaceOProfiles(in: displays, budget: total - 10).truncated)
+        let colorSync = try fixture()
+        XCTAssertThrowsError(try DisplayIdentityCleanup.spaceODevices(in: colorSync.registrations, budget: 300)) {
+            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .listingTruncated)
+        }
+    }
+
+    func testAnUnreadableRegistrationProfileIsLeftAloneAsUnattributed() throws {
+        let colorSync = try fixture()
+        colorSync.registrations.append(.init(deviceClass: "mntr", deviceID: "H",
+                                             profilePath: directory.appendingPathComponent("Displays/gone.icc").path,
+                                             isFactory: true))
+        let plan = try DisplayIdentityCleanup.plan(environment(colorSync))
+        XCTAssertFalse(plan.registrations.map(\.deviceID).contains("H"))
+        XCTAssertEqual(plan.unattributedWithoutProfile, 2)
+    }
+
+    func testColorSyncListingHasADeadline() {
+        XCTAssertThrowsError(try DisplayIdentityCleanup.withDeadline(0.05) { () -> Int in usleep(500_000); return 1 }) {
+            XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .listingTimedOut)
+        }
+        XCTAssertEqual(try DisplayIdentityCleanup.withDeadline(5) { 7 }, 7)
+        XCTAssertThrowsError(try DisplayIdentityCleanup.withDeadline(5) { () -> Int in
+            throw DisplayIdentityCleanup.Failure.listingTruncated
+        }) { XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .listingTruncated) }
+    }
 }

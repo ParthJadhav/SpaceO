@@ -25,6 +25,7 @@ public enum DisplayIdentityCleanup {
         public var registrations: [Registration]
         /// SpaceO profile files, whether or not a registration still refers to them.
         public var profilePaths: [String]
+        /// Devices with no readable profile; left alone because nothing identifies them as SpaceO's.
         public var unattributedWithoutProfile: Int
     }
 
@@ -66,7 +67,8 @@ public enum DisplayIdentityCleanup {
         public var removeProfile: (String) -> Void = { try? FileManager.default.removeItem(atPath: $0) }
 
         public static let live = Environment(
-            registrations: DisplayIdentityCleanup.liveRegistrations,
+            registrations: { try DisplayIdentityCleanup.withDeadline(DisplayIdentityCleanup.listingDeadline,
+                                                                     DisplayIdentityCleanup.liveRegistrations) },
             unregister: DisplayIdentityCleanup.liveUnregister,
             profileDirectory: DisplayIdentityResidue.profilesDirectory,
             registryPath: DisplayIdentityResidue.registryPath,
@@ -87,6 +89,7 @@ public enum DisplayIdentityCleanup {
         case noDisplays
         case registryMissing
         case listingTruncated
+        case listingTimedOut
         case profileInventoryTruncated
         case profileInventoryUnreadable
         case invokingUserUnknown
@@ -107,6 +110,9 @@ public enum DisplayIdentityCleanup {
                 return "nothing was removed: ColorSync's device registry is not at \(DisplayIdentityResidue.registryPath), so it cannot be backed up"
             case .listingTruncated:
                 return "nothing was removed: ColorSync listed more devices or profile data than this command examines"
+            case .listingTimedOut:
+                return "nothing was removed: ColorSync did not finish listing its devices in time; it may be saturated, "
+                    + "so log out and back in, then rerun"
             case .profileInventoryTruncated:
                 return "nothing was removed: \(DisplayIdentityResidue.profilesDirectory) holds more profiles than this command examines"
             case .lifecycleJournalUnusable:
@@ -122,14 +128,11 @@ public enum DisplayIdentityCleanup {
     }
 
     static let maximumRegistryBytes = 268_435_456
+    /// Listing took 24 seconds on a Mac with 525 leftover devices; a stalled ColorSync never returns.
+    static let listingDeadline: TimeInterval = 180
     /// A generated display profile is about 3.4 KB.
     static let maximumProfileBytes = 1_048_576
     static let maximumProfileBackupBytes = 268_435_456
-
-    static func isSpaceOProfile(_ path: String) -> Bool {
-        DisplayIdentityResidue.readPrefix(path, maximum: DisplayIdentityResidue.maximumProfilePrefix)
-            .map(DisplayIdentityResidue.isSpaceOProfile) ?? false
-    }
 
     public static func plan(_ environment: Environment = .live) throws -> Plan {
         let profiles = try spaceOProfiles(in: environment.profileDirectory)
@@ -143,29 +146,38 @@ public enum DisplayIdentityCleanup {
         throws -> (devices: [Registration], unattributed: Int) {
         var registrations: [Registration] = []
         var spaceO = Set<String>(), profiled = Set<String>(), devices = Set<String>()
-        var classified: [String: Bool] = [:], remaining = budget
+        var classified: [String: Bool?] = [:], remaining = budget, unreadable = Set<String>()
         for registration in listing {
             devices.insert(registration.deviceID)
             guard let path = registration.profilePath else { continue }
             profiled.insert(registration.deviceID)
             guard registration.isFactory, !spaceO.contains(registration.deviceID) else { continue }
-            let isSpaceO: Bool
+            let isSpaceO: Bool?
             if let known = classified[path] {
                 isSpaceO = known
             } else {
                 guard remaining > 0 else { throw Failure.listingTruncated }
-                let data = DisplayIdentityResidue.readPrefix(
-                    path, maximum: min(DisplayIdentityResidue.maximumProfilePrefix, remaining)) ?? Data()
-                remaining -= max(data.count, 1)
-                isSpaceO = DisplayIdentityResidue.isSpaceOProfile(data)
+                let prefix = DisplayIdentityResidue.maximumProfilePrefix
+                // An unreadable profile is not SpaceO's evidence; a budget-shortened read is unknown.
+                let read = DisplayIdentityResidue.readPrefix(path, maximum: min(prefix, remaining))
+                if let read, !read.complete(prefix: prefix) { throw Failure.listingTruncated }
+                remaining -= max(read?.data.count ?? 0, 1)
+                isSpaceO = read.map { DisplayIdentityResidue.isSpaceOProfile($0.data) }
                 classified[path] = isSpaceO
             }
-            if isSpaceO {
+            switch isSpaceO {
+            case true?:
                 spaceO.insert(registration.deviceID)
                 registrations.append(registration)
+            case nil:
+                // Unreadable (often a profile someone deleted): unattributed, never touched.
+                unreadable.insert(registration.deviceID)
+            case false?:
+                break
             }
         }
-        return (registrations, devices.subtracting(profiled).count)
+        let unattributed = devices.subtracting(profiled).union(unreadable.subtracting(spaceO))
+        return (registrations, unattributed.count)
     }
 
     /// Every SpaceO profile in the directory, or a refusal; never a partial or substituted list.
@@ -316,6 +328,30 @@ public enum DisplayIdentityCleanup {
         }, context)
         guard !collector.truncated else { throw Failure.listingTruncated }
         return collector.registrations
+    }
+
+    private final class DeadlineResult<T>: @unchecked Sendable {
+        let lock = NSLock()
+        var value: Result<T, Error>?
+    }
+
+    /// Runs `body` on its own thread and waits at most `seconds`. A call that outlives the deadline
+    /// cannot be cancelled; its thread is left to finish or to end with the process, and the
+    /// caller gets `listingTimedOut`. Before any change that is a refusal; after unregistration,
+    /// `apply` reports it as an unconfirmed outcome.
+    static func withDeadline<T>(_ seconds: TimeInterval, _ body: @escaping () throws -> T) throws -> T {
+        let result = DeadlineResult<T>()
+        let done = DispatchSemaphore(value: 0)
+        let thread = Thread {
+            let value = Result { try body() }
+            result.lock.withLock { result.value = value }
+            done.signal()
+        }
+        thread.stackSize = 1 << 20
+        thread.start()
+        guard done.wait(timeout: .now() + seconds) == .success,
+              let value = result.lock.withLock({ result.value }) else { throw Failure.listingTimedOut }
+        return try value.get()
     }
 
     /// Any other `spaceo` process (daemon, MCP server, CLI) or the Viewer could attach a display

@@ -707,7 +707,7 @@ func runCleanDisplayIdentities(apply: Bool) -> Never {
             print("SpaceO ColorSync registrations: \(plan.registrations.count)")
             print("SpaceO display profiles:        \(plan.profilePaths.count)")
             if plan.unattributedWithoutProfile > 0 {
-                print("registrations without a profile (left alone): \(plan.unattributedWithoutProfile)")
+                print("registrations without a readable profile (left alone): \(plan.unattributedWithoutProfile)")
             }
             print(plan.registrations.isEmpty && plan.profilePaths.isEmpty
                 ? "nothing to clean"
