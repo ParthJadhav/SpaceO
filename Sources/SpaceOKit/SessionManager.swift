@@ -3430,7 +3430,7 @@ public actor SessionManager {
     func repairActivationBreach(_ response: inout Response, action: String, before: IsolationSnapshot) {
         guard let report = response.isolation, Self.isActivationOnlyBreach(report) else { return }
         let warning: String
-        switch focusGuard.restoreIfAgentFront(preferring: before.frontmostPID) {
+        switch focusGuard.restoreIfAgentFront(preferring: before.frontmostIdentity) {
         case let .restored(app, _, agentName, _):
             warning = "\(agentName) took activation during \(action); SpaceO returned it to \(app) at once. "
                 + "Keystrokes typed in that moment may have reached \(agentName)."
@@ -3446,9 +3446,9 @@ public actor SessionManager {
             response.warnings = (response.warnings ?? []) + ["SpaceO could not return activation: \(reason)"]
             return
         }
-        // Only a fully observed recovery replaces the breach; unknown routes keep it.
+        // Only an observed recovery replaces the breach (see `AgentFocusGuard.routeRecovered`).
         let repaired = IsolationSnapshot.capture().report(comparedTo: before)
-        guard repaired.verdict == .intact else { return }
+        guard AgentFocusGuard.routeRecovered(repaired) else { return }
         response.isolation = repaired
         response.drift = repaired.legacyDrift
         response.warnings = (response.warnings ?? []) + [warning]

@@ -56,9 +56,22 @@ public final class AgentFocusGuard: @unchecked Sendable {
             owner: { app in
                 (app.identity ?? ProcessIdentity.current(of: app.pid)).flatMap(ProcessOwnership.owner(of:))
             },
-            isolationIntact: { IsolationSnapshot.capture().currentReport().verdict == .intact },
+            isolationIntact: { AgentFocusGuard.routeRecovered(IsolationSnapshot.capture().currentReport()) },
             uptime: { ProcessInfo.processInfo.systemUptime },
             sleep: { Thread.sleep(forTimeInterval: $0) })
+    }
+
+    /// Whether the person's route has observably left the agent: no check fails, and the menu
+    /// bar owner, front process and active Space — the checks an activation changes and AppKit
+    /// can observe — each pass. Key and text routes have no safe public getter and stay unknown
+    /// whenever the focused application exposes no Accessibility focus (common for Electron
+    /// apps), exactly as in every other receipt; unknown is never counted as a pass.
+    static func routeRecovered(_ report: IsolationReport) -> Bool {
+        guard report.failures.isEmpty else { return false }
+        let observable: Set<IsolationDimension> = [.menuBarOwner, .windowServerFrontProcess, .activeSpace]
+        return observable.allSatisfy { dimension in
+            report.checks.contains { $0.dimension == dimension && $0.status == .passed }
+        }
     }
 
     /// At most this many restorations per agent process within `restoreWindow` seconds.
@@ -71,6 +84,8 @@ public final class AgentFocusGuard: @unchecked Sendable {
     private let restoreLock = NSLock()
     private var lastUser: Application?
     private var recentRestores: [pid_t: [TimeInterval]] = [:]
+    /// At most one queued check per agent process, however often it re-takes activation.
+    private var pendingChecks: Set<pid_t> = []
     private var observer: NSObjectProtocol?
     private var onBackgroundRestore: (@Sendable (Outcome) -> Void)?
     private let worker = DispatchQueue(label: "spaceo.agent-focus-guard")
@@ -81,6 +96,8 @@ public final class AgentFocusGuard: @unchecked Sendable {
 
     /// Processes with restoration history inside the current window (tests and bounds).
     var restoreHistoryCount: Int { lock.withLock { recentRestores.count } }
+    /// Agent processes with a queued activation check (tests and bounds).
+    var pendingCheckCount: Int { lock.withLock { pendingChecks.count } }
 
     /// Follow activation for the life of the daemon. Notifications arrive on the main run loop;
     /// observing them also keeps `NSWorkspace.frontmostApplication` current in this process.
@@ -120,8 +137,11 @@ public final class AgentFocusGuard: @unchecked Sendable {
             lock.withLock { lastUser = app }
             return
         }
+        guard lock.withLock({ pendingChecks.insert(app.pid).inserted }) else { return }
         worker.async { [weak self] in
             guard let self else { return }
+            // Cleared before checking, so an activation during this check queues one more.
+            self.lock.withLock { _ = self.pendingChecks.remove(app.pid) }
             let outcome = self.restoreAfterActivation(of: app)
             guard outcome != .notNeeded else { return }
             let report = self.lock.withLock { self.onBackgroundRestore }
@@ -143,11 +163,11 @@ public final class AgentFocusGuard: @unchecked Sendable {
     /// Return activation to the person's application if an agent process is frontmost.
     ///
     /// The destination is the most recent non-agent application this guard saw activated (never
-    /// older than an action's own baseline); `preferring` names the application that was
-    /// frontmost before an agent action, used when nothing newer is known. Success means the
+    /// older than an action's own baseline); `preferring` identifies the exact application that
+    /// was frontmost before an agent action, used when nothing newer is known. Success means the
     /// destination is frontmost again and the whole route is intact within `timeout`; if the
     /// person switches to another application of theirs meanwhile, nothing is left to restore.
-    public func restoreIfAgentFront(preferring preferred: pid_t? = nil,
+    public func restoreIfAgentFront(preferring preferred: ProcessIdentity? = nil,
                                     timeout: TimeInterval = 1) -> Outcome {
         let wait = timeout.isFinite ? min(max(timeout, 0), 2) : 1
         restoreLock.lock()
@@ -202,14 +222,16 @@ public final class AgentFocusGuard: @unchecked Sendable {
 
     /// Re-read now: a remembered application may since have exited, been replaced by another
     /// process reusing its PID, or been adopted into a session.
-    private func destination(excluding front: Application, preferring preferred: pid_t?) -> Application? {
+    private func destination(excluding front: Application, preferring preferred: ProcessIdentity?) -> Application? {
         let remembered = lock.withLock { lastUser }
         var candidates: [Application] = []
         if let remembered, let current = environment.application(remembered.pid),
            remembered.identity == nil || current.identity == remembered.identity {
             candidates.append(current)
         }
-        if let preferred, let current = environment.application(preferred) { candidates.append(current) }
+        if let preferred, let current = environment.application(preferred.pid), current.identity == preferred {
+            candidates.append(current)
+        }
         return candidates.first { $0.pid != front.pid && environment.owner($0) == nil }
     }
 }

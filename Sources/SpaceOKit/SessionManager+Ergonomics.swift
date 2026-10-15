@@ -25,14 +25,16 @@ extension SessionManager {
     public func startActivationGuard() {
         focusGuard.start { [weak self] outcome in
             switch outcome {
-            case let .restored(app, _, agentName, session):
+            case let .restored(app, agentPID, agentName, session):
                 DaemonLog.shared.event("isolation.activation_restored", [
                     "agent": agentName, "restored": app, "session": session ?? "",
                 ])
                 // Application names are session content: never publish them daemon-wide.
                 guard let session else { return }
-                EventBus.shared.publish(kind: "isolation.activation_restored", session: session,
-                                        detail: ["agent": agentName, "restored": app])
+                Task {
+                    await self?.publishActivationRestored(session: session, agentPID: agentPID,
+                                                          agent: agentName, restored: app)
+                }
             case let .unavailable(reason, agentPID, session):
                 DaemonLog.shared.event("isolation.activation_unrestored", [
                     "reason": reason, "session": session ?? "",
@@ -52,10 +54,20 @@ extension SessionManager {
     /// The session must still own exactly that process: a session created later under a reused
     /// name is not the one whose application took activation. Ownership is read from the locked
     /// registry, never from a ledger a detached teardown may be rewriting.
-    func pauseAfterUnrestoredActivation(session id: String, agentPID: pid_t, reason: String) {
+    private func sessionStillOwning(_ id: String, agentPID: pid_t) -> AgentSession? {
         guard !destroyingSessionIDs.contains(id), let session = sessions[id],
               let identity = ProcessIdentity.current(of: agentPID),
-              ProcessOwnership.owner(of: identity) == id else { return }
+              ProcessOwnership.owner(of: identity) == id else { return nil }
+        return session
+    }
+
+    func publishActivationRestored(session id: String, agentPID: pid_t, agent: String, restored: String) {
+        guard sessionStillOwning(id, agentPID: agentPID) != nil else { return }
+        emit("isolation.activation_restored", session: id, ["agent": agent, "restored": restored])
+    }
+
+    func pauseAfterUnrestoredActivation(session id: String, agentPID: pid_t, reason: String) {
+        guard let session = sessionStillOwning(id, agentPID: agentPID) else { return }
         try? session.setAgentInputPaused(true, byOperator: false)
         emit("isolation.verdict", session: id, [
             "verdict": "breached",

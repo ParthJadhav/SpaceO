@@ -15,6 +15,7 @@ final class AgentFocusGuardTests: XCTestCase {
         private var isolationLags = 0
         private var frontLag: (reads: Int, stale: App?) = (0, nil)
         private var redirect: pid_t?
+        private var frontGate: DispatchSemaphore?
         private var time: TimeInterval = 1_000
         private(set) var activations: [pid_t] = []
 
@@ -47,13 +48,16 @@ final class AgentFocusGuardTests: XCTestCase {
             }
         }
         func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
+        /// Frontmost queries block until `gate` is signalled (one wait per query).
+        func gateFrontmost(_ gate: DispatchSemaphore?) { lock.withLock { frontGate = gate } }
         var frontPID: pid_t? { lock.withLock { front?.pid } }
         var activationCount: Int { lock.withLock { activations.count } }
 
         var environment: AgentFocusGuard.Environment {
             .init(
                 frontmost: {
-                    self.lock.withLock {
+                    if let gate = self.lock.withLock({ self.frontGate }) { gate.wait() }
+                    return self.lock.withLock {
                         guard self.frontLag.reads > 0 else { return self.front }
                         self.frontLag.reads -= 1
                         return self.frontLag.stale
@@ -99,7 +103,7 @@ final class AgentFocusGuardTests: XCTestCase {
         let workspace = workspace()
         workspace.bringToFront(10)
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), .notNeeded)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: workspace.app(10).identity), .notNeeded)
         XCTAssertEqual(workspace.activationCount, 0)
     }
 
@@ -107,7 +111,7 @@ final class AgentFocusGuardTests: XCTestCase {
         let workspace = workspace()
         workspace.bringToFront(20)
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 11),
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: workspace.app(11).identity),
                        .restored(app: "Notes", agentPID: 20, agentName: "Google Chrome", session: "session-20"))
         XCTAssertEqual(workspace.frontPID, 11)
     }
@@ -118,7 +122,7 @@ final class AgentFocusGuardTests: XCTestCase {
         guardian.noteActivation(workspace.app(10))
         workspace.bringToFront(20)
         // The action started with Notes in front; the person has since chosen Editor.
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 11), restoredToEditor)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: workspace.app(11).identity), restoredToEditor)
     }
 
     func testOwnershipFollowsExactIdentityNotARecycledPID() {
@@ -172,7 +176,7 @@ final class AgentFocusGuardTests: XCTestCase {
         workspace.bringToFront(20)
         workspace.personSwitchesTo(11)
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), .notNeeded)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: workspace.app(10).identity), .notNeeded)
         XCTAssertEqual(workspace.frontPID, 11, "the person's own choice stands")
     }
 
@@ -181,7 +185,7 @@ final class AgentFocusGuardTests: XCTestCase {
         workspace.bringToFront(20)
         workspace.ignoreActivation()
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        guard case let .unavailable(reason, _, _) = guardian.restoreIfAgentFront(preferring: 10, timeout: 0.2) else {
+        guard case let .unavailable(reason, _, _) = guardian.restoreIfAgentFront(preferring: workspace.app(10).identity, timeout: 0.2) else {
             return XCTFail("an activation that did not take is not a restoration")
         }
         XCTAssertTrue(reason.contains("Editor"), reason)
@@ -192,13 +196,13 @@ final class AgentFocusGuardTests: XCTestCase {
         workspace.bringToFront(20)
         workspace.lagIsolation(3)
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), restoredToEditor, "a short lag is waited out")
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: workspace.app(10).identity), restoredToEditor, "a short lag is waited out")
 
         let stuck = self.workspace()
         stuck.bringToFront(20)
         stuck.lagIsolation(Int.max)
         let second = AgentFocusGuard(environment: stuck.environment)
-        guard case let .unavailable(reason, 20, "session-20") = second.restoreIfAgentFront(preferring: 10, timeout: 0.3),
+        guard case let .unavailable(reason, 20, "session-20") = second.restoreIfAgentFront(preferring: stuck.app(10).identity, timeout: 0.3),
               reason.contains("isolation was not confirmed") else {
             return XCTFail("the front application alone is not a restoration")
         }
@@ -209,17 +213,17 @@ final class AgentFocusGuardTests: XCTestCase {
         let guardian = AgentFocusGuard(environment: workspace.environment)
         for _ in 0..<AgentFocusGuard.maximumRestores {
             workspace.bringToFront(20)
-            guard case .restored = guardian.restoreIfAgentFront(preferring: 10) else {
+            guard case .restored = guardian.restoreIfAgentFront(preferring: workspace.app(10).identity) else {
                 return XCTFail("restorations within the budget succeed")
             }
         }
         workspace.bringToFront(20)
-        guard case .unavailable = guardian.restoreIfAgentFront(preferring: 10) else {
+        guard case .unavailable = guardian.restoreIfAgentFront(preferring: workspace.app(10).identity) else {
             return XCTFail("the guard must not trade the front with the agent indefinitely")
         }
         XCTAssertEqual(workspace.activationCount, AgentFocusGuard.maximumRestores)
         workspace.advance(AgentFocusGuard.restoreWindow + 1)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), restoredToEditor)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: workspace.app(10).identity), restoredToEditor)
     }
 
     func testRestoreHistoryForEveryProcessExpires() {
@@ -228,14 +232,14 @@ final class AgentFocusGuardTests: XCTestCase {
         let guardian = AgentFocusGuard(environment: workspace.environment)
         for pid in [pid_t(20), 21] {
             workspace.bringToFront(pid)
-            guard case .restored = guardian.restoreIfAgentFront(preferring: 10) else {
+            guard case .restored = guardian.restoreIfAgentFront(preferring: workspace.app(10).identity) else {
                 return XCTFail("restoration succeeds")
             }
         }
         XCTAssertEqual(guardian.restoreHistoryCount, 2)
         workspace.advance(AgentFocusGuard.restoreWindow + 1)
         workspace.bringToFront(20)
-        _ = guardian.restoreIfAgentFront(preferring: 10)
+        _ = guardian.restoreIfAgentFront(preferring: workspace.app(10).identity)
         XCTAssertEqual(guardian.restoreHistoryCount, 1, "expired histories of other processes are dropped")
     }
 
@@ -246,7 +250,7 @@ final class AgentFocusGuardTests: XCTestCase {
         let guardian = AgentFocusGuard(environment: workspace.environment)
         for timeout in [TimeInterval.infinity, .nan, -1] {
             workspace.advance(AgentFocusGuard.restoreWindow + 1)
-            guard case .unavailable = guardian.restoreIfAgentFront(preferring: 10, timeout: timeout) else {
+            guard case .unavailable = guardian.restoreIfAgentFront(preferring: workspace.app(10).identity, timeout: timeout) else {
                 return XCTFail("timeout \(timeout) must report unavailable")
             }
         }
@@ -278,6 +282,37 @@ final class AgentFocusGuardTests: XCTestCase {
         XCTAssertEqual(guardian.restoreAfterActivation(of: workspace.app(20)), restoredToEditor)
     }
 
+    func testABaselineWhosePIDWasReusedIsNotADestination() {
+        let workspace = workspace()
+        let original = workspace.app(11).identity
+        workspace.add(11, "Unrelated", generation: 2)
+        workspace.bringToFront(20)
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        guard case .unavailable = guardian.restoreIfAgentFront(preferring: original) else {
+            return XCTFail("the replacement process must never be activated")
+        }
+        XCTAssertEqual(workspace.activationCount, 0)
+    }
+
+    func testRepeatedActivationQueuesAtMostOneCheckPerProcess() {
+        let workspace = workspace()
+        workspace.bringToFront(10)
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        let reported = expectation(description: "restoration reported")
+        reported.assertForOverFulfill = false
+        guardian.start(observingWorkspace: false) { _ in reported.fulfill() }
+        workspace.bringToFront(20)
+        let gate = DispatchSemaphore(value: 0)
+        workspace.gateFrontmost(gate)
+        for _ in 0..<50 { guardian.noteActivation(workspace.app(20)) }
+        XCTAssertLessThanOrEqual(guardian.pendingCheckCount, 1)
+        workspace.gateFrontmost(nil)
+        for _ in 0..<4 { gate.signal() }
+        wait(for: [reported], timeout: 2)
+        XCTAssertLessThanOrEqual(workspace.activationCount, 2, "fifty notifications are not fifty restorations")
+        guardian.stop()
+    }
+
     func testNoKnownPersonalApplicationMeansNoActivation() {
         let workspace = workspace()
         workspace.bringToFront(20)
@@ -295,6 +330,30 @@ final class AgentFocusGuardTests: XCTestCase {
                 status: failed ? .failed : .passed, evidence: "fixture",
                 failures: failed ? ["\(dimension.rawValue) changed"] : [])
         })
+    }
+
+    private func report(failing failed: [IsolationDimension] = [], unknown: [IsolationDimension]) -> IsolationReport {
+        IsolationReport(checks: IsolationDimension.allCases.map { dimension in
+            if unknown.contains(dimension) {
+                return IsolationCheckReport(dimension: dimension, coverage: .unknown, status: .unknown,
+                                            evidence: "fixture", failures: [])
+            }
+            let failing = failed.contains(dimension)
+            return IsolationCheckReport(dimension: dimension, coverage: .observed,
+                status: failing ? .failed : .passed, evidence: "fixture",
+                failures: failing ? ["\(dimension.rawValue) changed"] : [])
+        })
+    }
+
+    func testARecoveredRouteNeedsObservedActivationChecksButNotKnowableKeyRoutes() {
+        XCTAssertTrue(AgentFocusGuard.routeRecovered(report(failing: [])))
+        XCTAssertTrue(AgentFocusGuard.routeRecovered(report(unknown: [.keyInputRoute, .textInputRoute])),
+                      "an app without Accessibility focus leaves the key routes unknown, as in every receipt")
+        XCTAssertFalse(AgentFocusGuard.routeRecovered(report(unknown: [.activeSpace])),
+                       "an unobserved Space is not a recovered one")
+        XCTAssertFalse(AgentFocusGuard.routeRecovered(report(unknown: [.menuBarOwner])))
+        XCTAssertFalse(AgentFocusGuard.routeRecovered(report(failing: [.keyInputRoute], unknown: [])))
+        XCTAssertFalse(AgentFocusGuard.routeRecovered(report(failing: [.cursorLocation], unknown: [])))
     }
 
     func testOnlyAnActivationBreachIsRepairedByReturningActivation() {
