@@ -151,15 +151,7 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
         }
         let seconds = timeout.isFinite ? min(max(timeout, 0.1), 30) : 10
         let deadline = DispatchTime.now() + seconds
-        let operation = Operation(deadline: deadline) { [weak self] in
-            guard let self else {
-                throw SpaceOError.stageCreationFailed("display lifecycle owner no longer exists")
-            }
-            if DispatchTime.now() >= deadline {
-                self.trip("a display operation exhausted its total deadline")
-            }
-            try self.check()
-        }
+        let operation = makeOperation(deadline: deadline, readOnly: readOnly)
         if let value { operation.retain(value) }
         let id = UUID()
         let completion = Completion<T>()
@@ -203,7 +195,8 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
                 return true
             }
             if late {
-                onSlowQuery(seconds)
+                // Best-effort diagnostics never extend the caller's deadline (logging may stall).
+                failureQueue.async { [onSlowQuery] in onSlowQuery(seconds) }
                 throw QueryDeferred()
             }
             if !readOnly {
@@ -214,6 +207,22 @@ final class DisplayLifecycleCoordinator: @unchecked Sendable {
             return try finish(id, completion)
         }
         return try finish(id, completion)
+    }
+
+    /// A mutation that reaches its deadline before or while running opens the circuit. A
+    /// read-only query that only starts after its deadline (a starved worker) is skipped: it has
+    /// changed nothing, and its caller already returned the last verified snapshot.
+    func makeOperation(deadline: DispatchTime, readOnly: Bool) -> Operation {
+        Operation(deadline: deadline) { [weak self] in
+            guard let self else {
+                throw SpaceOError.stageCreationFailed("display lifecycle owner no longer exists")
+            }
+            if DispatchTime.now() >= deadline {
+                if readOnly { throw QueryDeferred() }
+                self.trip("a display operation exhausted its total deadline")
+            }
+            try self.check()
+        }
     }
 
     private func finish<T>(_ id: UUID, _ completion: Completion<T>) throws -> T {

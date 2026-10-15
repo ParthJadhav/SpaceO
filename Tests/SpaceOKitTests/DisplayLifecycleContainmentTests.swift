@@ -125,18 +125,11 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         XCTAssertTrue(stage.invalidate(waitingForRemoval: 0.1))
     }
 
-    private final class Count: @unchecked Sendable {
-        private let lock = NSLock()
-        private var count = 0
-        var value: Int { lock.withLock { count } }
-        func increment() { lock.withLock { count += 1 } }
-    }
-
     func testSlowReadOnlyQueryDefersWithoutTrippingAndRetainsItsContext() {
-        let slow = Count()
+        let slow = expectation(description: "slow query reported off the caller")
         let coordinator = DisplayLifecycleCoordinator(
             onFailure: { _ in XCTFail("a slow read must not latch the journal") },
-            onSlowQuery: { _ in slow.increment() })
+            onSlowQuery: { _ in slow.fulfill() })
         let unblock = DispatchSemaphore(value: 0)
         let returned = expectation(description: "late read returned")
         let observed = WeakBacking()
@@ -150,7 +143,7 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         }) { XCTAssertTrue($0 is DisplayLifecycleCoordinator.QueryDeferred, "\($0)") }
         backing = nil
         XCTAssertNil(coordinator.failureReason)
-        XCTAssertEqual(slow.value, 1)
+        wait(for: [slow], timeout: 1)
 
         // While the read is stuck, later reads defer at once instead of queueing behind it.
         let start = ContinuousClock.now
@@ -167,6 +160,22 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         XCTAssertNotNil(observed.value, "ARC must not implicitly detach a display after a late read")
         XCTAssertEqual(try coordinator.perform(timeout: 1, onlyWhenIdle: true, readOnly: true) { _ in 3 }, 3)
         XCTAssertNil(coordinator.failureReason)
+    }
+
+    func testAReadThatStartsAfterItsDeadlineIsSkippedWithoutTripping() {
+        let coordinator = DisplayLifecycleCoordinator { _ in XCTFail("a starved read must not latch") }
+        let expired = DispatchTime.now() - .milliseconds(1)
+        XCTAssertThrowsError(try coordinator.makeOperation(deadline: expired, readOnly: true).check()) {
+            XCTAssertTrue($0 is DisplayLifecycleCoordinator.QueryDeferred, "\($0)")
+        }
+        XCTAssertNil(coordinator.failureReason)
+        XCTAssertNoThrow(try coordinator.makeOperation(deadline: .now() + 1, readOnly: true).check())
+
+        let tripped = expectation(description: "mutation deadline opens the circuit")
+        let mutations = DisplayLifecycleCoordinator { _ in tripped.fulfill() }
+        XCTAssertThrowsError(try mutations.makeOperation(deadline: expired, readOnly: false).check())
+        wait(for: [tripped], timeout: 1)
+        XCTAssertNotNil(mutations.failureReason)
     }
 
     func testMutationBehindAStuckReadStillOpensTheCircuitAtItsDeadline() {
