@@ -726,13 +726,16 @@ func runCleanDisplayIdentities(apply: Bool) -> Never {
                 "ok": outcome.confirmed, "applied": true, "backup": outcome.backup,
                 "unregistered": outcome.unregistered, "remainingRegistrations": outcome.remainingRegistrations,
                 "removedProfiles": outcome.movedProfiles, "profileRemovalSkipped": outcome.profileRemovalSkipped,
-                "failedProfiles": outcome.failedProfiles.count,
+                "failedProfiles": outcome.failedProfiles.count, "verificationFailed": outcome.verificationFailed,
             ]))
         } else {
             print("backup: \(outcome.backup)")
             print("unregistered \(outcome.unregistered) of \(outcome.plan.registrations.count) SpaceO registrations; "
                 + "removed \(outcome.movedProfiles) of \(outcome.plan.profilePaths.count) profiles")
-            if outcome.profileRemovalSkipped {
+            if outcome.verificationFailed {
+                print("ColorSync could not be listed again, so the unregistration is unconfirmed and no profile was "
+                    + "removed; the backup above holds the registry from before; rerun the command")
+            } else if outcome.profileRemovalSkipped {
                 print("a SpaceO process or display appeared during cleanup, so no profile was removed; stop it and rerun")
             } else if outcome.remainingRegistrations > 0 {
                 print("\(outcome.remainingRegistrations) registrations are still listed; their profiles were kept")

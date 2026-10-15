@@ -120,6 +120,20 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertEqual(health.report.reconfigurationSettled, false)
     }
 
+    func testTestingOverrideAgesEvidenceFromWhenItWasObserved() throws {
+        let clock = Clock()
+        let health = DisplayHostHealth(testingOverride: true, now: { clock.value })
+        feed(health, clock, sample(100, cpu: 10))
+        feed(health, clock, sample(105, cpu: 10.1))
+        clock.value = 112.9  // observed at 110, delivered just inside the freshness limit
+        health.accept(sample(110, cpu: 10.2))
+        clock.value = 119
+        try health.requireStillSettledForReconfiguration()
+        clock.value = 120.5
+        XCTAssertThrowsError(try health.requireStillSettledForReconfiguration(),
+                             "late delivery must not extend the ten-second evidence window")
+    }
+
     private final class Clock: @unchecked Sendable {
         private let lock = NSLock()
         private var time = 100.0

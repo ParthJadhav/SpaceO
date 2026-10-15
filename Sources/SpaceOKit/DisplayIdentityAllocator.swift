@@ -108,6 +108,7 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
         let key = Self.key(width: width, height: height, hiDPI: hiDPI)
         return try lock.withLock {
             var record = try loadedRecord()
+            var needsNewIdentity = false
             for slot in 0..<Self.slotCount {
                 let generation = record.generations["\(key)/\(slot)"] ?? 0
                 let id = "\(key)/\(slot)/\(generation)"
@@ -116,7 +117,8 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
                     holders[serial] = Holder()
                     return Identity(key: key, slot: slot, generation: generation, serial: serial)
                 }
-                guard record.serials.count < Self.maximumIdentities else { throw RecordError.full }
+                // A full record can still offer a later slot's recorded identity.
+                guard record.serials.count < Self.maximumIdentities else { needsNewIdentity = true; continue }
                 let issued = Set(record.serials.values)
                 guard let serial = (0..<64).lazy
                     .map({ Self.serial(key: key, slot: slot, generation: generation, salt: $0) })
@@ -127,6 +129,7 @@ final class DisplayIdentityAllocator: @unchecked Sendable {
                 holders[serial] = Holder()
                 return Identity(key: key, slot: slot, generation: generation, serial: serial)
             }
+            if needsNewIdentity { throw RecordError.full }
             return nil
         }
     }

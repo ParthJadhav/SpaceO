@@ -383,9 +383,10 @@ final class DisplayHostHealth: @unchecked Sendable {
             defer { signalReconfigurationWaiters() }
             inFlightSince = nil
             let time = now()
-            func countQuiet() {
+            // Evidence ages from when it was observed, so a late delivery cannot extend it.
+            func countQuiet(observedAt: TimeInterval) {
                 consecutiveSettledSamples = min(2, consecutiveSettledSamples + 1)
-                overrideEvidenceAt = time
+                overrideEvidenceAt = observedAt
             }
             // A capture delivered late describes a host that may have changed since.
             let fresh = next.map { $0.uptime.isFinite && abs(time - $0.uptime) <= 3 } ?? false
@@ -394,12 +395,12 @@ final class DisplayHostHealth: @unchecked Sendable {
             if let next, fresh { lastAttempt = next.uptime }
             guard let next, fresh, let before else {
                 // No measurable interval: a failed or late capture, or the first observation.
-                if (next == nil || !fresh), !overrideMeasured { countQuiet() }
+                if (next == nil || !fresh), !overrideMeasured { countQuiet(observedAt: time) }
                 return
             }
             guard let cpu = (try? DisplayHostHealthSample.assess(before, next))?.colorsyncCPUPercent else {
                 current.colorsyncCPUPercent = nil
-                if !overrideMeasured { countQuiet() }
+                if !overrideMeasured { countQuiet(observedAt: time) }
                 return
             }
             overrideMeasured = true
@@ -407,7 +408,7 @@ final class DisplayHostHealth: @unchecked Sendable {
             if cpu >= Self.reconfigurationCPUThresholdPercent {
                 consecutiveSettledSamples = 0
             } else if settlingAfter.map({ before.uptime > $0 && next.uptime > $0 }) ?? true {
-                countQuiet()
+                countQuiet(observedAt: next.uptime)
                 if consecutiveSettledSamples == 2 { settlingAfter = nil }
             }
         }

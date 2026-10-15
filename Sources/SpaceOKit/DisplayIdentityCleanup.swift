@@ -38,7 +38,13 @@ public enum DisplayIdentityCleanup {
         public var profileRemovalSkipped: Bool = false
         /// Unreferenced SpaceO profiles that are still present after removal was attempted.
         public var failedProfiles: [String] = []
-        public var confirmed: Bool { remainingRegistrations == 0 && !profileRemovalSkipped && failedProfiles.isEmpty }
+        /// ColorSync could not be listed again after unregistration, so its effect is unknown and
+        /// no profile was removed. `unregistered` is then zero and every registration is counted
+        /// as remaining, because neither is confirmed.
+        public var verificationFailed: Bool = false
+        public var confirmed: Bool {
+            remainingRegistrations == 0 && !profileRemovalSkipped && failedProfiles.isEmpty && !verificationFailed
+        }
     }
 
     public struct DisplayInventory: Sendable, Equatable {
@@ -115,6 +121,8 @@ public enum DisplayIdentityCleanup {
         }
     }
 
+    static let maximumRegistryBytes = 268_435_456
+
     static func isSpaceOProfile(_ path: String) -> Bool {
         guard let data = try? BoundedRegularFile.read(URL(fileURLWithPath: path),
                                                       maximumBytes: DisplayIdentityResidue.maximumProfileBytes),
@@ -145,13 +153,12 @@ public enum DisplayIdentityCleanup {
 
     /// Every SpaceO profile in the directory, or a refusal; never a partial or substituted list.
     static func spaceOProfiles(in directory: String) throws -> [String] {
-        let names: [String]
-        do { names = try FileManager.default.contentsOfDirectory(atPath: directory) }
-        catch CocoaError.fileReadNoSuchFile { return [] }
+        let listing: (names: [String], truncated: Bool)
+        do { listing = try DisplayIdentityResidue.profileNames(in: directory) }
+        catch DisplayIdentityResidue.ListingError.missing { return [] }
         catch { throw Failure.profileInventoryUnreadable }
-        let profiles = names.filter { $0.hasSuffix(".icc") }.sorted()
-        guard profiles.count <= DisplayIdentityResidue.maximumProfiles else { throw Failure.profileInventoryTruncated }
-        return profiles.map { URL(fileURLWithPath: directory).appendingPathComponent($0).path }
+        guard !listing.truncated else { throw Failure.profileInventoryTruncated }
+        return listing.names.map { URL(fileURLWithPath: directory).appendingPathComponent($0).path }
             .filter(isSpaceOProfile)
     }
 
@@ -184,18 +191,34 @@ public enum DisplayIdentityCleanup {
             try manager.createDirectory(at: backup.appendingPathComponent("Profiles"),
                                         withIntermediateDirectories: true,
                                         attributes: [.posixPermissions: 0o700])
-            try manager.copyItem(atPath: environment.registryPath,
-                                 toPath: backup.appendingPathComponent("com.apple.colorsync.devices").path)
+            // Bounded: a corrupt or runaway registry must not fill the disk under root.
+            let registry: Data
+            do {
+                registry = try BoundedRegularFile.read(URL(fileURLWithPath: environment.registryPath),
+                                                       maximumBytes: Self.maximumRegistryBytes)
+            } catch {
+                throw Failure.backupFailed("ColorSync's registry is not a regular file of at most "
+                    + "\(Self.maximumRegistryBytes / 1_048_576) MB")
+            }
+            try registry.write(to: backup.appendingPathComponent("com.apple.colorsync.devices"), options: [.withoutOverwriting])
             for path in plan.profilePaths {
                 let name = URL(fileURLWithPath: path).lastPathComponent
                 try manager.copyItem(atPath: path, toPath: backup.appendingPathComponent("Profiles/\(name)").path)
             }
+        } catch let failure as Failure {
+            throw failure
         } catch {
             throw Failure.backupFailed(error.localizedDescription)
         }
 
         for registration in plan.registrations { environment.unregister(registration) }
-        let after = try environment.registrations()
+        let after: [Registration]
+        do { after = try environment.registrations() } catch {
+            // Unregistration may already have taken effect: report it, keep every profile.
+            return Outcome(plan: plan, backup: backup.path, unregistered: 0,
+                           remainingRegistrations: plan.registrations.count, movedProfiles: 0,
+                           verificationFailed: true)
+        }
         let remaining = spaceODevices(in: after).devices.count
         var outcome = Outcome(plan: plan, backup: backup.path,
                               unregistered: plan.registrations.count - remaining,

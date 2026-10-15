@@ -186,6 +186,20 @@ final class DisplayIdentityAllocatorTests: XCTestCase {
                         "an identity already recorded is still offered")
     }
 
+    func testAFullRecordStillOffersALaterSlotsRecordedIdentity() throws {
+        var serials: [String: Int] = ["1920x1080@2/1/0": 77]
+        for index in 0..<(DisplayIdentityAllocator.maximumIdentities - 1) { serials["filler\(index)/0/0"] = 1_000 + index }
+        let record: [String: Any] = ["version": 1, "generations": ["1920x1080@2/0": 1], "serials": serials]
+        try JSONSerialization.data(withJSONObject: record).write(to: URL(fileURLWithPath: path))
+        let allocator = DisplayIdentityAllocator(path: path)
+        let identity = try XCTUnwrap(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: []))
+        XCTAssertEqual(identity.slot, 1, "slot 0's retired identity has no room for a new serial; slot 1 is reusable")
+        XCTAssertEqual(identity.serial, 77)
+        XCTAssertThrowsError(try allocator.claim(width: 1_920, height: 1_080, hiDPI: true, onlineSerials: [])) {
+            XCTAssertEqual($0 as? DisplayIdentityAllocator.RecordError, .full)
+        }
+    }
+
     func testAnUnsavableRecordRefusesANewIdentity() throws {
         let locked = directory.appendingPathComponent("locked")
         try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
@@ -216,7 +230,24 @@ final class DisplayIdentityResidueTests: XCTestCase {
         let residue = DisplayIdentityResidue(spaceOProfiles: 3, totalProfiles: 5_000, truncated: true, registryBytes: nil)
         XCTAssertTrue(residue.needsCleanup)
         XCTAssertFalse(residue.summary.contains("bounded"))
-        XCTAssertTrue(residue.summary.contains("at least 3 of 5000"), residue.summary)
+        XCTAssertTrue(residue.summary.contains("at least 3 SpaceO display profiles"), residue.summary)
+    }
+
+    func testProfileListingStopsAtItsBound() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("spaceo-listing-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        for index in 0..<10 { try Data().write(to: directory.appendingPathComponent("\(index).icc")) }
+        for index in 0..<10 { try Data().write(to: directory.appendingPathComponent("\(index).txt")) }
+        let all = try DisplayIdentityResidue.profileNames(in: directory.path, maximum: 10, maximumEntries: 20)
+        XCTAssertEqual(all.names.count, 10)
+        XCTAssertFalse(all.truncated)
+        let profiles = try DisplayIdentityResidue.profileNames(in: directory.path, maximum: 3, maximumEntries: 100)
+        XCTAssertEqual(profiles.names.count, 3)
+        XCTAssertTrue(profiles.truncated)
+        XCTAssertTrue(try DisplayIdentityResidue.profileNames(in: directory.path, maximum: 100, maximumEntries: 5).truncated)
+        XCTAssertThrowsError(try DisplayIdentityResidue.profileNames(in: directory.appendingPathComponent("none").path))
     }
 
     func testParsesTheMakeAndModelTag() throws {
@@ -286,6 +317,7 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         var displays = [DisplayIdentityCleanup.DisplayInventory(spaceO: 0, other: 1)]
         var displayReads = 0
         var listingFails = false
+        var listingFailsAfterUnregister = false
         var locked = false
         var lockHeldDuringRemoval = true
         var lockRefused = false
@@ -299,6 +331,9 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         return DisplayIdentityCleanup.Environment(
             registrations: {
                 if colorSync.listingFails { throw DisplayIdentityCleanup.Failure.listingTruncated }
+                if colorSync.listingFailsAfterUnregister, !colorSync.unregistered.isEmpty {
+                    throw DisplayIdentityCleanup.Failure.listingTruncated
+                }
                 return colorSync.registrations
             },
             unregister: { registration in
@@ -471,5 +506,32 @@ final class DisplayIdentityCleanupTests: XCTestCase {
         XCTAssertThrowsError(try DisplayIdentityCleanup.plan(environment(colorSync))) {
             XCTAssertEqual($0 as? DisplayIdentityCleanup.Failure, .profileInventoryTruncated)
         }
+    }
+
+    func testAFailedVerificationListingIsReportedAsUnconfirmedAndKeepsProfiles() throws {
+        let colorSync = try fixture()
+        colorSync.listingFailsAfterUnregister = true
+        let outcome = try DisplayIdentityCleanup.apply(environment(colorSync),
+                                                       backupRoot: directory.appendingPathComponent("backup").path)
+        XCTAssertTrue(outcome.verificationFailed)
+        XCTAssertFalse(outcome.confirmed)
+        XCTAssertEqual(colorSync.unregistered, ["A", "B"])
+        XCTAssertEqual(outcome.movedProfiles, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: outcome.backup + "/com.apple.colorsync.devices"))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(
+            atPath: directory.appendingPathComponent("Displays").path).count, 6)
+    }
+
+    func testARegistryThatIsNotABoundedRegularFileIsNotCopied() throws {
+        let colorSync = try fixture()
+        var environment = environment(colorSync)
+        let registry = directory.appendingPathComponent("registry-directory")
+        try FileManager.default.createDirectory(at: registry, withIntermediateDirectories: true)
+        environment.registryPath = registry.path
+        XCTAssertThrowsError(try DisplayIdentityCleanup.apply(environment,
+                                                              backupRoot: directory.appendingPathComponent("b").path)) {
+            guard case .backupFailed = $0 as? DisplayIdentityCleanup.Failure else { return XCTFail("\($0)") }
+        }
+        XCTAssertTrue(colorSync.unregistered.isEmpty)
     }
 }
