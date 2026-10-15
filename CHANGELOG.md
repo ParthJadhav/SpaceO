@@ -6,6 +6,10 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Keep a slow read-only display query from latching the persistent safety circuit. A geometry
+  or Space read that outlives its one-second deadline now keeps the last verified snapshot and
+  logs `display.query.slow`; a mutation that cannot run behind it still opens the circuit at its
+  own deadline (#54).
 - Resolve the owner of an ordered-out window. The single-window Core Graphics query answers
   only for on-screen windows, so a closing Chrome sign-in popup that still had WindowServer
   geometry failed every window read in its session with "known window owner is unavailable"

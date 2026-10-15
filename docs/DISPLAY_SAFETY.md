@@ -49,7 +49,11 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   Allocation claims the Space IDs verified at publication and refuses a circuit-failed Stage.
   Geometry/Space queries use their last verified snapshot while another lifecycle operation
   owns the worker, avoiding short query deadlines expiring behind healthy mutations; idle queries
-  refresh the snapshot. Cleanup preflight failure retains the backing even when no invalidation
+  refresh the snapshot. A read-only query that outlives its one-second deadline changes nothing,
+  so it does not open the circuit: the caller keeps the snapshot, the daemon logs
+  `display.query.slow`, and the read stays on the worker until it returns. Later queries defer
+  to the snapshot meanwhile, and a mutation queued behind it still opens the circuit at its own
+  deadline. A late read's display references are retained, never released by ARC. Cleanup preflight failure retains the backing even when no invalidation
   has started, including the deinitialization fallback.
   Failure persistence/logging runs separately with at most 100 ms of caller wait, so a worker
   stalled while holding the journal lock cannot also trap the timeout caller. If storage stalls,

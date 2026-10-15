@@ -44,8 +44,14 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         let displayID: CGDirectDisplayID = 99_111
         private let lock = NSLock()
         private var frame = CGRect(x: 2000, y: 0, width: 1280, height: 800)
+        private var gate: (() -> Void)?
+        /// Runs on every geometry read, outside the lock, to simulate a slow WindowServer reply.
+        func gateReads(_ gate: (() -> Void)?) { lock.withLock { self.gate = gate } }
         var bounds: CGRect {
-            get { lock.withLock { frame } }
+            get {
+                lock.withLock { gate }?()
+                return lock.withLock { frame }
+            }
             set { lock.withLock { frame = newValue } }
         }
         let pixelWidth: Int? = 2560
@@ -116,6 +122,115 @@ final class DisplayLifecycleContainmentTests: XCTestCase {
         wait(for: [finished], timeout: 2)
         XCTAssertEqual(stage.bounds, backing.bounds, "refresh the snapshot when the worker is idle")
         XCTAssertEqual(stage.backingScale, 1)
+        XCTAssertTrue(stage.invalidate(waitingForRemoval: 0.1))
+    }
+
+    func testSlowReadOnlyQueryDefersWithoutTrippingAndRetainsItsContext() {
+        let slow = expectation(description: "slow query reported off the caller")
+        let coordinator = DisplayLifecycleCoordinator(
+            onFailure: { _ in XCTFail("a slow read must not latch the journal") },
+            onSlowQuery: { _ in slow.fulfill() })
+        let unblock = DispatchSemaphore(value: 0)
+        let returned = expectation(description: "late read returned")
+        let observed = WeakBacking()
+        var backing: Backing? = Backing { XCTFail("a late read must not detach its display") }
+        observed.value = backing
+        XCTAssertThrowsError(try coordinator.perform(
+            timeout: 0.1, retaining: backing!, onlyWhenIdle: true, readOnly: true) { _ -> Int in
+            unblock.wait()
+            returned.fulfill()
+            return 1
+        }) { XCTAssertTrue($0 is DisplayLifecycleCoordinator.QueryDeferred, "\($0)") }
+        backing = nil
+        XCTAssertNil(coordinator.failureReason)
+        wait(for: [slow], timeout: 1)
+
+        // While the read is stuck, later reads defer at once instead of queueing behind it.
+        let start = ContinuousClock.now
+        XCTAssertThrowsError(try coordinator.perform(timeout: 1, onlyWhenIdle: true, readOnly: true) { _ in 2 }) {
+            XCTAssertTrue($0 is DisplayLifecycleCoordinator.QueryDeferred, "\($0)")
+        }
+        XCTAssertLessThan(start.duration(to: .now), .seconds(0.5))
+
+        unblock.signal()
+        wait(for: [returned], timeout: 1)
+        let deadline = Date().addingTimeInterval(2)
+        while coordinator.pendingOperationCount > 0, Date() < deadline { usleep(5_000) }
+        XCTAssertEqual(coordinator.pendingOperationCount, 0, "a late read releases the worker")
+        XCTAssertNotNil(observed.value, "ARC must not implicitly detach a display after a late read")
+        XCTAssertEqual(try coordinator.perform(timeout: 1, onlyWhenIdle: true, readOnly: true) { _ in 3 }, 3)
+        XCTAssertNil(coordinator.failureReason)
+    }
+
+    func testAReadThatStartsAfterItsDeadlineIsSkippedWithoutTripping() {
+        let coordinator = DisplayLifecycleCoordinator { _ in XCTFail("a starved read must not latch") }
+        let expired = DispatchTime.now() - .milliseconds(1)
+        XCTAssertThrowsError(try coordinator.makeOperation(deadline: expired, readOnly: true).check()) {
+            XCTAssertTrue($0 is DisplayLifecycleCoordinator.QueryDeferred, "\($0)")
+        }
+        XCTAssertNil(coordinator.failureReason)
+        XCTAssertNoThrow(try coordinator.makeOperation(deadline: .now() + 1, readOnly: true).check())
+
+        let tripped = expectation(description: "mutation deadline opens the circuit")
+        let mutations = DisplayLifecycleCoordinator { _ in tripped.fulfill() }
+        XCTAssertThrowsError(try mutations.makeOperation(deadline: expired, readOnly: false).check())
+        wait(for: [tripped], timeout: 1)
+        XCTAssertNotNil(mutations.failureReason)
+    }
+
+    func testStalledSlowQueryLoggingCannotDelayFailurePersistence() {
+        let logBlocked = DispatchSemaphore(value: 0)
+        let unblockRead = DispatchSemaphore(value: 0)
+        let persisted = expectation(description: "failure persisted while logging stalls")
+        let coordinator = DisplayLifecycleCoordinator(
+            onFailure: { _ in persisted.fulfill() },
+            onSlowQuery: { _ in _ = logBlocked.wait(timeout: .now() + 3) })
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.1, onlyWhenIdle: true, readOnly: true) { _ -> Int in
+            _ = unblockRead.wait(timeout: .now() + 3)
+            return 1
+        })
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.2) { _ in })
+        wait(for: [persisted], timeout: 1)
+        logBlocked.signal()
+        unblockRead.signal()
+    }
+
+    func testMutationBehindAStuckReadStillOpensTheCircuitAtItsDeadline() {
+        let tripped = expectation(description: "circuit opened")
+        let coordinator = DisplayLifecycleCoordinator { _ in tripped.fulfill() }
+        let unblock = DispatchSemaphore(value: 0)
+        let returned = expectation(description: "stuck read returned")
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.1, onlyWhenIdle: true, readOnly: true) { _ -> Int in
+            unblock.wait()
+            returned.fulfill()
+            return 1
+        })
+        XCTAssertNil(coordinator.failureReason)
+        XCTAssertThrowsError(try coordinator.perform(timeout: 0.2) { _ in
+            XCTFail("a mutation must never start after its deadline")
+        })
+        wait(for: [tripped], timeout: 1)
+        XCTAssertNotNil(coordinator.failureReason, "an unanswered worker still fails closed for mutations")
+        unblock.signal()
+        wait(for: [returned], timeout: 1)
+    }
+
+    func testStageGeometryKeepsItsSnapshotWhenAReadIsSlow() {
+        let coordinator = DisplayLifecycleCoordinator { _ in XCTFail("a slow read must not latch") }
+        let backing = Backing()
+        let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [] }, coordinator: coordinator)
+        let expected = stage.bounds
+        let unblock = DispatchSemaphore(value: 0)
+        backing.gateReads { _ = unblock.wait(timeout: .now() + 3) }
+        backing.bounds = CGRect(x: 3000, y: 0, width: 2560, height: 1600)
+        XCTAssertEqual(stage.bounds, expected, "the last verified snapshot stands in for a slow read")
+        XCTAssertNil(coordinator.failureReason)
+        XCTAssertFalse(stage.hasLifecycleFailure)
+        backing.gateReads(nil)
+        unblock.signal()
+        let deadline = Date().addingTimeInterval(2)
+        while coordinator.pendingOperationCount > 0, Date() < deadline { usleep(5_000) }
+        XCTAssertEqual(stage.bounds, backing.bounds, "refresh once the worker answers again")
         XCTAssertTrue(stage.invalidate(waitingForRemoval: 0.1))
     }
 
