@@ -31,7 +31,8 @@ API, CLI, or browser harness when it can do the job without visual desktop contr
    60 s; `element_label`, `element_gone`, `window_title_contains`, `web_selector`,
    `web_title_contains`, `stable_ms`, `ms`) instead of polling screenshots.
 6. `spaceo_verify_isolation` after anything that could have disturbed the user. `intact` or
-   `partial`: continue. `breached`: stop; the session is paused.
+   `partial`: continue. `breached`: stop; the session is paused. A warning that an app "took
+   activation" means SpaceO already returned it to the user; continue.
 7. `spaceo_session_destroy` when done.
 
 ## Receipts and errors

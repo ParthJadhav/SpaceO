@@ -6,6 +6,14 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Return activation to the person when an agent app takes it, for example Chrome showing a
+  page's popup window (#53). The daemon follows public activation notifications and
+  re-activates the person's previous app with public activation, usually within tens of
+  milliseconds. Agent receipts report the event as a warning, and background events publish
+  `isolation.activation_restored`. Pointer breaches, returns whose route is not fully confirmed,
+  and apps that keep re-taking activation still report a breach and pause. Following these
+  notifications also keeps the daemon's frontmost-app view current, so a resolved breach no
+  longer lingers for seconds.
 - Keep a slow read-only display query from latching the persistent safety circuit. A geometry
   or Space read that outlives its one-second deadline now keeps the last verified snapshot and
   logs `display.query.slow`; a mutation that cannot run behind it still opens the circuit at its

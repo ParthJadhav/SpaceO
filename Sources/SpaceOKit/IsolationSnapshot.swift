@@ -206,6 +206,9 @@ public struct IsolationSnapshot: Equatable, Sendable, CustomStringConvertible {
     /// Whether this process held the Accessibility grant at capture time; nil when unknown
     /// (synthetic snapshots). Carried into reports so their summary can name the real cause.
     public var accessibilityGranted: Bool? = nil
+    /// The exact process that owned the menu bar, when it could be identified, so a later
+    /// decision cannot mistake a process that reused its PID for the person's application.
+    public var frontmostIdentity: ProcessIdentity? = nil
 
     public init(frontmostPID: pid_t,
                 windowServerFrontPID: pid_t,
@@ -321,6 +324,7 @@ public struct IsolationSnapshot: Equatable, Sendable, CustomStringConvertible {
             coverage: captureCoverage
         )
         snapshot.accessibilityGranted = AXIsProcessTrusted()
+        snapshot.frontmostIdentity = frontmostPID > 0 ? ProcessIdentity.current(of: frontmostPID) : nil
         return snapshot
     }
 

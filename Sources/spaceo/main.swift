@@ -1117,6 +1117,8 @@ case "daemon":
         // Wake and display reconfiguration revalidate every session's display (public API
         // observation only; callbacks arrive on the main run loop started below).
         await installedManager.startDisplayEnvironmentObservation()
+        // Agent applications that activate themselves are sent back to the person (#53).
+        await installedManager.startActivationGuard()
     }
     // Startup hygiene (SPAO-153): one summary line; profiles referenced by live or detached
     // records are never touched, and nothing younger than a day is.

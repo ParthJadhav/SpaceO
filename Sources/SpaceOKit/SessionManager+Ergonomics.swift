@@ -18,6 +18,63 @@ extension SessionManager {
         EventBus.shared.publish(kind: kind, session: session, detail: detail)
     }
 
+    /// Return activation to the person when an agent application takes it outside any agent
+    /// action, such as a popup opened by a page timer (#53). Action paths repair their own
+    /// receipts; this covers the moments nothing is in flight. Daemon only: it needs the main
+    /// run loop for activation notifications.
+    public func startActivationGuard() {
+        focusGuard.start { [weak self] outcome in
+            switch outcome {
+            case let .restored(app, agentPID, agentName, session):
+                DaemonLog.shared.event("isolation.activation_restored", [
+                    "agent": agentName, "restored": app, "session": session ?? "",
+                ])
+                // Application names are session content: never publish them daemon-wide.
+                guard let session else { return }
+                Task {
+                    await self?.publishActivationRestored(session: session, agentPID: agentPID,
+                                                          agent: agentName, restored: app)
+                }
+            case let .unavailable(reason, agentPID, session):
+                DaemonLog.shared.event("isolation.activation_unrestored", [
+                    "reason": reason, "session": session ?? "",
+                ])
+                guard let session else { return }
+                Task {
+                    await self?.pauseAfterUnrestoredActivation(session: session, agentPID: agentPID, reason: reason)
+                }
+            case .notNeeded:
+                break
+            }
+        }
+    }
+
+    /// An agent application holds activation and could not be sent back: this is a breach with
+    /// no action in flight to report it, so pause the session and tell its subscribers now.
+    /// The session must still own exactly that process: a session created later under a reused
+    /// name is not the one whose application took activation. Ownership is read from the locked
+    /// registry, never from a ledger a detached teardown may be rewriting.
+    private func sessionStillOwning(_ id: String, agentPID: pid_t) -> AgentSession? {
+        guard !destroyingSessionIDs.contains(id), let session = sessions[id],
+              let identity = ProcessIdentity.current(of: agentPID),
+              ProcessOwnership.owner(of: identity) == id else { return nil }
+        return session
+    }
+
+    func publishActivationRestored(session id: String, agentPID: pid_t, agent: String, restored: String) {
+        guard sessionStillOwning(id, agentPID: agentPID) != nil else { return }
+        emit("isolation.activation_restored", session: id, ["agent": agent, "restored": restored])
+    }
+
+    func pauseAfterUnrestoredActivation(session id: String, agentPID: pid_t, reason: String) {
+        guard let session = sessionStillOwning(id, agentPID: agentPID) else { return }
+        try? session.setAgentInputPaused(true, byOperator: false)
+        emit("isolation.verdict", session: id, [
+            "verdict": "breached",
+            "failures": "an agent application took activation and SpaceO could not return it: " + reason,
+        ])
+    }
+
     /// Sessions whose events a subscriber may see in full, mirroring `session.list` redaction.
     public func coveredSessionIDs(for request: Request) -> Set<String> {
         var covered = Set<String>()
@@ -476,7 +533,7 @@ extension SessionManager {
             route: "chromium-devtools",
             completion: outcome.load == "complete" ? "operation_completed_postcondition_not_asserted" : "operation_completed_load_unconfirmed",
             elapsedSeconds: 0)
-        failOnIsolationBreach(&response, action: "open.url")
+        failOnIsolationBreach(&response, action: "open.url", before: before)
         response.action?.outcome = response.ok
             ? (outcome.load == "complete" ? "confirmed" : "unconfirmed") : "refused"
         if response.ok {
