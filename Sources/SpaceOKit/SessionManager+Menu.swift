@@ -81,7 +81,7 @@ extension SessionManager {
         response.isolation = now.report(comparedTo: before)
         response.drift = response.isolation?.legacyDrift
         response.ambient = now.ambientChanges(from: before)
-        failOnIsolationBreach(&response, action: "menu")
+        failOnIsolationBreach(&response, action: "menu", before: before)
         // The application accepted AXPress for this exact item; what the command then does is
         // the postcondition the receipt does not assert.
         response.action?.outcome = response.ok ? "confirmed" : "refused"

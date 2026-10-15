@@ -18,6 +18,28 @@ extension SessionManager {
         EventBus.shared.publish(kind: kind, session: session, detail: detail)
     }
 
+    /// Return activation to the person when an agent application takes it outside any agent
+    /// action, such as a popup opened by a page timer (#53). Action paths repair their own
+    /// receipts; this covers the moments nothing is in flight. Daemon only: it needs the main
+    /// run loop for activation notifications.
+    public func startActivationGuard() {
+        focusGuard.start { outcome in
+            switch outcome {
+            case let .restored(app, agentPID, agentName):
+                let session = ProcessOwnership.ownerOfPID(agentPID)
+                EventBus.shared.publish(kind: "isolation.activation_restored", session: session,
+                                        detail: ["agent": agentName, "restored": app])
+                DaemonLog.shared.event("isolation.activation_restored", [
+                    "agent": agentName, "restored": app, "session": session ?? "",
+                ])
+            case let .unavailable(reason):
+                DaemonLog.shared.event("isolation.activation_unrestored", ["reason": reason])
+            case .notNeeded:
+                break
+            }
+        }
+    }
+
     /// Sessions whose events a subscriber may see in full, mirroring `session.list` redaction.
     public func coveredSessionIDs(for request: Request) -> Set<String> {
         var covered = Set<String>()
@@ -476,7 +498,7 @@ extension SessionManager {
             route: "chromium-devtools",
             completion: outcome.load == "complete" ? "operation_completed_postcondition_not_asserted" : "operation_completed_load_unconfirmed",
             elapsedSeconds: 0)
-        failOnIsolationBreach(&response, action: "open.url")
+        failOnIsolationBreach(&response, action: "open.url", before: before)
         response.action?.outcome = response.ok
             ? (outcome.load == "complete" ? "confirmed" : "unconfirmed") : "refused"
         if response.ok {

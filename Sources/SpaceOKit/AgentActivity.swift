@@ -17,6 +17,7 @@ public enum AgentActivity {
         var focusRestores = 0
         var agentPIDs: Set<pid_t> = []
         var agentSpaces: Set<UInt64> = []
+        var operatorControlledSessions: Set<String> = []
     }
 
     private static let state = State()
@@ -63,6 +64,21 @@ public enum AgentActivity {
         state.lock.withLock { state.agentSpaces.subtract(spaces) }
     }
 
+    // MARK: - Operator control
+    //
+    // While a person has taken control of a session, its applications may legitimately be in
+    // front; the activation guard must not take that away from them.
+
+    public static func setOperatorControl(session: String, _ active: Bool) {
+        state.lock.withLock {
+            if active { state.operatorControlledSessions.insert(session) }
+            else { state.operatorControlledSessions.remove(session) }
+        }
+    }
+    public static func isUnderOperatorControl(_ session: String) -> Bool {
+        state.lock.withLock { state.operatorControlledSessions.contains(session) }
+    }
+
     /// Test seam.
     static func reset() {
         state.lock.withLock {
@@ -70,6 +86,7 @@ public enum AgentActivity {
             state.focusRestores = 0
             state.agentPIDs = []
             state.agentSpaces = []
+            state.operatorControlledSessions = []
         }
     }
 }

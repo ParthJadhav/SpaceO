@@ -79,6 +79,8 @@ public actor SessionManager {
     /// verification can be tested without a real framebuffer on the host.
     let onlineDisplayIDs: @Sendable () -> [CGDirectDisplayID]
     private var janitor: Task<Void, Never>?
+    /// Returns activation to the person when an agent application takes it (#53).
+    let focusGuard = AgentFocusGuard.shared
     private let janitorEnabled: Bool
     private let janitorIntervalNanoseconds: UInt64 = 3_000_000_000
     /// A named live teardown leaves the actor while it waits for processes. Reject a duplicate
@@ -2037,7 +2039,7 @@ public actor SessionManager {
                 message += "\n  note: \(app.name) grabbed focus on startup; handed it back to \(restored)"
             }
             response.message = message
-            failOnIsolationBreach(&response, action: "launch")
+            failOnIsolationBreach(&response, action: "launch", before: before)
             emit("app.launched", session: session.id, [
                 "app": app.name, "pid": String(app.pid), "ok": String(response.ok),
             ])
@@ -2086,7 +2088,7 @@ public actor SessionManager {
             response.message = "adopted \(app.name) (pid \(pid))"
             response.isolation = IsolationSnapshot.capture().report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
-            failOnIsolationBreach(&response, action: "adopt")
+            failOnIsolationBreach(&response, action: "adopt", before: before)
             return response
 
         case "place":
@@ -2117,7 +2119,7 @@ public actor SessionManager {
                 response.error = "application did not accept the requested frame; inspect placement receipt"
             }
             response.isolation = IsolationSnapshot.capture().report(comparedTo: before)
-            failOnIsolationBreach(&response, action: "place")
+            failOnIsolationBreach(&response, action: "place", before: before)
             session.refreshWindows()
             if let failure = session.windowRefreshFailure {
                 response.warnings = (response.warnings ?? []) + ["window discovery is incomplete: \(failure)"]
@@ -2522,7 +2524,7 @@ public actor SessionManager {
             response.isolation = now.report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
-            failOnIsolationBreach(&response, action: "click")
+            failOnIsolationBreach(&response, action: "click", before: before)
             response.action?.outcome = response.ok
                 ? (clickWarnings.isEmpty ? "confirmed" : "unconfirmed") : "refused"
             if response.ok {
@@ -2719,7 +2721,7 @@ public actor SessionManager {
             response.isolation = now.report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
-            failOnIsolationBreach(&response, action: request.cmd)
+            failOnIsolationBreach(&response, action: request.cmd, before: before)
             response.action?.outcome = response.ok
                 ? (pointerWarnings.isEmpty ? "confirmed" : "unconfirmed") : "refused"
             if response.ok {
@@ -2832,7 +2834,7 @@ public actor SessionManager {
             if typingRoute == .devTools(automatic: true) {
                 response.message = Self.automaticWebRouteNote("typed")
             }
-            failOnIsolationBreach(&response, action: "typing")
+            failOnIsolationBreach(&response, action: "typing", before: before)
             response.action?.outcome = Self.receiptOutcome(ok: response.ok, handler: nil,
                                                            warnings: response.warnings)
             if response.ok {
@@ -2966,7 +2968,7 @@ public actor SessionManager {
             response.isolation = now.report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
-            failOnIsolationBreach(&response, action: "key press")
+            failOnIsolationBreach(&response, action: "key press", before: before)
             response.action?.outcome = Self.receiptOutcome(ok: response.ok, handler: nil,
                                                            warnings: response.warnings)
             if response.ok, operatorDriven {
@@ -3044,7 +3046,7 @@ public actor SessionManager {
             response.isolation = now.report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
             response.ambient = now.ambientChanges(from: before)
-            failOnIsolationBreach(&response, action: "select")
+            failOnIsolationBreach(&response, action: "select", before: before)
             // The editor reported the selection it adopted, which is the confirmation.
             response.action?.outcome = response.ok ? "confirmed" : "refused"
             if response.ok {
@@ -3268,7 +3270,7 @@ public actor SessionManager {
             }
             response.isolation = IsolationSnapshot.capture().report(comparedTo: before)
             response.drift = response.isolation?.legacyDrift
-            failOnIsolationBreach(&response, action: "repark")
+            failOnIsolationBreach(&response, action: "repark", before: before)
             return response
 
         default:
@@ -3408,7 +3410,48 @@ public actor SessionManager {
         }
     }
 
-    func failOnIsolationBreach(_ response: inout Response, action: String) {
+    /// Isolation checks that an agent application taking activation explains on its own.
+    static let activationDimensions: Set<IsolationDimension> = [
+        .menuBarOwner, .windowServerFrontProcess, .keyInputRoute, .textInputRoute, .activeSpace,
+    ]
+
+    /// A breach that an agent application taking activation explains entirely; a moved pointer
+    /// or any other failure is never repaired by handing activation back.
+    static func isActivationOnlyBreach(_ report: IsolationReport) -> Bool {
+        guard report.verdict == .breached else { return false }
+        let failed = Set(report.checks.filter { $0.status == .failed }.map(\.dimension))
+        return !failed.isEmpty && failed.isSubset(of: activationDimensions)
+    }
+
+    /// An agent application that activated itself during the action — Chromium showing a page's
+    /// popup window does (#53) — is sent back at once, and the receipt is re-checked against the
+    /// same baseline. A repaired receipt says what happened; a breach that remains, or one that
+    /// also involves the pointer, is reported exactly as before.
+    func repairActivationBreach(_ response: inout Response, action: String, before: IsolationSnapshot) {
+        guard let report = response.isolation, Self.isActivationOnlyBreach(report) else { return }
+        switch focusGuard.restoreIfAgentFront(preferring: before.frontmostPID) {
+        case let .restored(app, _, agentName):
+            let repaired = IsolationSnapshot.capture().report(comparedTo: before)
+            guard repaired.verdict != .breached else { return }
+            response.isolation = repaired
+            response.drift = repaired.legacyDrift
+            response.warnings = (response.warnings ?? []) + [
+                "\(agentName) took activation during \(action); SpaceO returned it to \(app) at once. "
+                    + "Keystrokes typed in that moment may have reached \(agentName).",
+            ]
+            DaemonLog.shared.event("isolation.activation_restored", [
+                "action": action, "agent": agentName, "restored": app,
+            ])
+        case let .unavailable(reason):
+            response.warnings = (response.warnings ?? []) + ["SpaceO could not return activation: \(reason)"]
+        case .notNeeded:
+            break
+        }
+    }
+
+    func failOnIsolationBreach(_ response: inout Response, action: String,
+                               before: IsolationSnapshot? = nil) {
+        if let before { repairActivationBreach(&response, action: action, before: before) }
         let failures = response.isolation?.failures ?? response.drift ?? []
         guard !failures.isEmpty else { return }
         response.ok = false

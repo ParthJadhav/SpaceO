@@ -240,7 +240,9 @@ keeps apps in your login on displays you don't see.
 
 **Will it steal my focus or move my mouse?**
 SpaceO never warps the pointer and does not deliberately activate agent apps. Apps can still
-activate themselves. When that happens, SpaceO reports the breach instead of hiding it
+activate themselves (a browser showing a popup, for example). When an agent app takes activation,
+SpaceO hands it straight back to the app you were using and says so in the receipt or event
+stream. Anything it cannot repair is reported as a breach and pauses the session
 (`spaceo_verify_isolation`).
 
 **Which apps work?**
