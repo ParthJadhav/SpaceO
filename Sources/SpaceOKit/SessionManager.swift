@@ -3445,11 +3445,10 @@ public actor SessionManager {
         case let .unavailable(reason, _, _):
             response.warnings = (response.warnings ?? []) + ["SpaceO could not return activation: \(reason)"]
             return
-        case .operatorControl:
-            return
         }
+        // Only a fully observed recovery replaces the breach; unknown routes keep it.
         let repaired = IsolationSnapshot.capture().report(comparedTo: before)
-        guard repaired.verdict != .breached else { return }
+        guard repaired.verdict == .intact else { return }
         response.isolation = repaired
         response.drift = repaired.legacyDrift
         response.warnings = (response.warnings ?? []) + [warning]

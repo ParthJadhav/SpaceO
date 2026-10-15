@@ -11,39 +11,40 @@ import Foundation
 /// public `NSRunningApplication.activate()` — the recovery teardown already uses. It never calls a
 /// private focus API, warps the pointer or changes a Space directly.
 ///
-/// A session whose operator has control is left alone: the person chose to work there. A process
-/// that keeps re-taking activation stops being restored, so the ordinary breach handling reports
-/// it instead of two applications trading the front indefinitely.
+/// Nothing in SpaceO puts an agent application in front on purpose — the Viewer's human control
+/// injects input without activating it — so every agent activation is returned. Ownership is
+/// judged by exact process identity, and a restoration counts only when the person's whole
+/// route is intact again. A process that keeps re-taking activation stops being restored, so the
+/// ordinary breach handling reports it instead of two applications trading the front.
 public final class AgentFocusGuard: @unchecked Sendable {
     public static let shared = AgentFocusGuard()
 
     /// `session` is the owner recorded while the process was still agent-owned, so a report made
     /// after a slow restoration keeps its session scope even if teardown released the process.
     public enum Outcome: Equatable, Sendable {
-        /// No agent application is frontmost.
+        /// No agent application holds activation (any more).
         case notNeeded
-        /// The operator has control of the session; the person chose to work there.
-        case operatorControl(session: String?)
         /// `app` is frontmost again after the agent process `agentPID` (`agentName`) took over.
         case restored(app: String, agentPID: pid_t, agentName: String, session: String?)
-        /// An agent process is frontmost and restoration was not possible or not confirmed.
+        /// An agent process holds activation and restoration was not possible or not confirmed.
         case unavailable(reason: String, agentPID: pid_t, session: String?)
     }
 
     struct Application: Equatable, Sendable {
         let pid: pid_t
         let name: String
+        /// Exact identity when known; a recycled PID is a different application.
+        let identity: ProcessIdentity?
     }
 
     struct Environment: Sendable {
         var frontmost: @Sendable () -> Application?
         var application: @Sendable (pid_t) -> Application?
         var activate: @Sendable (pid_t) -> Bool
-        var isAgent: @Sendable (pid_t) -> Bool
-        var owner: @Sendable (pid_t) -> String?
-        var isOperatorControlled: @Sendable (String) -> Bool
-        /// The person's current isolation, checked after activation returns: the active Space
-        /// and input route can lag the front application, or stay with the agent.
+        /// The owning session of an exactly identified agent process, or nil for anyone else.
+        var owner: @Sendable (Application) -> String?
+        /// The person's whole current route — menu bar, Space and input focus — is observed
+        /// intact. Unknown evidence is not intact.
         var isolationIntact: @Sendable () -> Bool
         var uptime: @Sendable () -> TimeInterval
         var sleep: @Sendable (TimeInterval) -> Void
@@ -52,10 +53,10 @@ public final class AgentFocusGuard: @unchecked Sendable {
             frontmost: { NSWorkspace.shared.frontmostApplication.map(Application.init) },
             application: { NSRunningApplication(processIdentifier: $0).map(Application.init) },
             activate: { NSRunningApplication(processIdentifier: $0)?.activate() ?? false },
-            isAgent: { AgentActivity.ownedPIDs.contains($0) },
-            owner: { ProcessOwnership.ownerOfPID($0) },
-            isOperatorControlled: { AgentActivity.isUnderOperatorControl($0) },
-            isolationIntact: { IsolationSnapshot.capture().currentReport().verdict != .breached },
+            owner: { app in
+                (app.identity ?? ProcessIdentity.current(of: app.pid)).flatMap(ProcessOwnership.owner(of:))
+            },
+            isolationIntact: { IsolationSnapshot.capture().currentReport().verdict == .intact },
             uptime: { ProcessInfo.processInfo.systemUptime },
             sleep: { Thread.sleep(forTimeInterval: $0) })
     }
@@ -92,7 +93,7 @@ public final class AgentFocusGuard: @unchecked Sendable {
         lock.withLock {
             guard observer == nil, self.onBackgroundRestore == nil else { return }
             self.onBackgroundRestore = onBackgroundRestore
-            if let front = environment.frontmost(), !environment.isAgent(front.pid) { lastUser = front }
+            if let front = environment.frontmost(), environment.owner(front) == nil { lastUser = front }
             guard observingWorkspace else { return }
             observer = NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil
@@ -115,7 +116,7 @@ public final class AgentFocusGuard: @unchecked Sendable {
     /// Remember the person's application, or start returning activation to it. Never blocks
     /// the notification's thread.
     func noteActivation(_ app: Application) {
-        guard environment.isAgent(app.pid) else {
+        guard environment.owner(app) != nil else {
             lock.withLock { lastUser = app }
             return
         }
@@ -141,25 +142,23 @@ public final class AgentFocusGuard: @unchecked Sendable {
 
     /// Return activation to the person's application if an agent process is frontmost.
     ///
-    /// `preferring` names the application that was frontmost before an agent action; otherwise
-    /// the most recent non-agent application is used. Success means that application is read
-    /// back as frontmost within `timeout`; anything else is reported as unavailable.
+    /// The destination is the most recent non-agent application this guard saw activated (never
+    /// older than an action's own baseline); `preferring` names the application that was
+    /// frontmost before an agent action, used when nothing newer is known. Success means the
+    /// destination is frontmost again and the whole route is intact within `timeout`; if the
+    /// person switches to another application of theirs meanwhile, nothing is left to restore.
     public func restoreIfAgentFront(preferring preferred: pid_t? = nil,
                                     timeout: TimeInterval = 1) -> Outcome {
         let wait = timeout.isFinite ? min(max(timeout, 0), 2) : 1
         restoreLock.lock()
         defer { restoreLock.unlock() }
-        guard let front = environment.frontmost(), environment.isAgent(front.pid) else { return .notNeeded }
-        let session = environment.owner(front.pid)
-        if let session, environment.isOperatorControlled(session) { return .operatorControl(session: session) }
+        guard let front = environment.frontmost(), let session = environment.owner(front) else {
+            return .notNeeded
+        }
         func unavailable(_ reason: String) -> Outcome {
             .unavailable(reason: reason, agentPID: front.pid, session: session)
         }
-        // The destination is re-read now: a remembered application may since have exited or
-        // been adopted into a session, and must never be the process being sent back.
-        let candidates = [preferred, lock.withLock { lastUser?.pid }].compactMap { $0 }
-        guard let target = candidates.lazy.filter({ $0 != front.pid && !self.environment.isAgent($0) })
-            .compactMap(environment.application).first else {
+        guard let target = destination(excluding: front, preferring: preferred) else {
             return unavailable("no earlier application of yours is available")
         }
         let now = environment.uptime()
@@ -182,28 +181,43 @@ public final class AgentFocusGuard: @unchecked Sendable {
         let deadline = now + wait
         var frontmostAgain = false
         repeat {
-            if environment.frontmost()?.pid == target.pid {
-                frontmostAgain = true
+            if let current = environment.frontmost(), environment.owner(current) == nil {
                 // The front application alone is not the whole route: the Space and input focus
-                // must have left the agent too before this counts as a restoration.
+                // must have left the agent too before this counts.
                 if environment.isolationIntact() {
+                    guard current.pid == target.pid else { return .notNeeded }
                     AgentActivity.recordFocusRestore()
                     return .restored(app: target.name, agentPID: front.pid, agentName: front.name, session: session)
                 }
+                frontmostAgain = frontmostAgain || current.pid == target.pid
                 environment.sleep(0.025)
             } else {
                 environment.sleep(0.01)
             }
         } while environment.uptime() < deadline
         return unavailable(frontmostAgain
-            ? "\(target.name) is frontmost again but isolation did not recover within \(Int(wait * 1_000)) ms"
+            ? "\(target.name) is frontmost again but isolation was not confirmed within \(Int(wait * 1_000)) ms"
             : "\(target.name) was not frontmost again within \(Int(wait * 1_000)) ms")
+    }
+
+    /// Re-read now: a remembered application may since have exited, been replaced by another
+    /// process reusing its PID, or been adopted into a session.
+    private func destination(excluding front: Application, preferring preferred: pid_t?) -> Application? {
+        let remembered = lock.withLock { lastUser }
+        var candidates: [Application] = []
+        if let remembered, let current = environment.application(remembered.pid),
+           remembered.identity == nil || current.identity == remembered.identity {
+            candidates.append(current)
+        }
+        if let preferred, let current = environment.application(preferred) { candidates.append(current) }
+        return candidates.first { $0.pid != front.pid && environment.owner($0) == nil }
     }
 }
 
 extension AgentFocusGuard.Application {
     init(_ app: NSRunningApplication) {
         self.init(pid: app.processIdentifier,
-                  name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)")
+                  name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
+                  identity: ProcessIdentity.current(of: app.processIdentifier))
     }
 }

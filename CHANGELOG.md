@@ -10,8 +10,8 @@ All notable user-visible changes are recorded here. SpaceO follows
   page's popup window (#53). The daemon follows public activation notifications and
   re-activates the person's previous app with public activation, usually within tens of
   milliseconds. Agent receipts report the event as a warning, and background events publish
-  `isolation.activation_restored`. Pointer breaches, unconfirmed returns, operator control, and
-  apps that keep re-taking activation still report a breach and pause. Following these
+  `isolation.activation_restored`. Pointer breaches, returns whose route is not fully confirmed,
+  and apps that keep re-taking activation still report a breach and pause. Following these
   notifications also keeps the daemon's frontmost-app view current, so a resolved breach no
   longer lingers for seconds.
 - Keep a slow read-only display query from latching the persistent safety circuit. A geometry

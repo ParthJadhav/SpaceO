@@ -3,39 +3,47 @@ import XCTest
 
 /// The activation guard against a scripted workspace: no real application is activated.
 final class AgentFocusGuardTests: XCTestCase {
+    private typealias App = AgentFocusGuard.Application
+
     private final class Workspace: @unchecked Sendable {
         private let lock = NSLock()
-        private var front: AgentFocusGuard.Application?
-        private var apps: [pid_t: String] = [:]
-        private var agents: Set<pid_t> = []
-        private var owners: [pid_t: String] = [:]
-        private var operatorControlled: Set<String> = []
+        private var front: App?
+        private var apps: [pid_t: App] = [:]
+        /// Exact identities owned by a session; a recycled PID has a different identity.
+        private var owned: [ProcessIdentity: String] = [:]
         private var activationTakes = true
         private var isolationLags = 0
-        private var frontLag: (reads: Int, stale: AgentFocusGuard.Application?) = (0, nil)
+        private var frontLag: (reads: Int, stale: App?) = (0, nil)
+        private var redirect: pid_t?
         private var time: TimeInterval = 1_000
         private(set) var activations: [pid_t] = []
 
-        func add(_ pid: pid_t, _ name: String, agent: Bool = false) {
+        private static func identity(_ pid: pid_t, generation: UInt64) -> ProcessIdentity {
+            ProcessIdentity(pid: pid, startedAtMicroseconds: generation)
+        }
+
+        func add(_ pid: pid_t, _ name: String, agent: Bool = false, generation: UInt64 = 1) {
             lock.withLock {
-                apps[pid] = name
-                if agent { agents.insert(pid); owners[pid] = "session-\(pid)" }
+                let app = App(pid: pid, name: name, identity: Self.identity(pid, generation: generation))
+                apps[pid] = app
+                if agent { owned[app.identity!] = "session-\(pid)" }
             }
         }
-        func adopt(_ pid: pid_t) { lock.withLock { agents.insert(pid); owners[pid] = "session-\(pid)" } }
-        func quit(_ pid: pid_t) { lock.withLock { _ = apps.removeValue(forKey: pid) } }
-        func bringToFront(_ pid: pid_t) {
-            lock.withLock { front = apps[pid].map { .init(pid: pid, name: $0) } }
+        func adopt(_ pid: pid_t) {
+            lock.withLock { if let identity = apps[pid]?.identity { owned[identity] = "session-\(pid)" } }
         }
-        func setOperatorControlled(_ pid: pid_t) { lock.withLock { _ = operatorControlled.insert("session-\(pid)") } }
+        func quit(_ pid: pid_t) { lock.withLock { _ = apps.removeValue(forKey: pid) } }
+        func bringToFront(_ pid: pid_t) { lock.withLock { front = apps[pid] } }
         func ignoreActivation() { lock.withLock { activationTakes = false } }
+        /// The person picks this application right after SpaceO's activation request.
+        func personSwitchesTo(_ pid: pid_t) { lock.withLock { redirect = pid } }
         /// The Space or input route stays with the agent for this many isolation checks.
         func lagIsolation(_ checks: Int) { lock.withLock { isolationLags = checks } }
         /// The next `reads` frontmost queries still report the application that was in front.
         func bringToFrontLagging(_ pid: pid_t, reads: Int) {
             lock.withLock {
                 frontLag = (reads, front)
-                front = apps[pid].map { .init(pid: pid, name: $0) }
+                front = apps[pid]
             }
         }
         func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
@@ -51,18 +59,17 @@ final class AgentFocusGuardTests: XCTestCase {
                         return self.frontLag.stale
                     }
                 },
-                application: { pid in self.lock.withLock { self.apps[pid].map { .init(pid: pid, name: $0) } } },
+                application: { pid in self.lock.withLock { self.apps[pid] } },
                 activate: { pid in
                     self.lock.withLock {
                         self.activations.append(pid)
-                        guard self.activationTakes, let name = self.apps[pid] else { return self.apps[pid] != nil }
-                        self.front = .init(pid: pid, name: name)
+                        guard let app = self.apps[pid] else { return false }
+                        if let redirect = self.redirect { self.front = self.apps[redirect] }
+                        else if self.activationTakes { self.front = app }
                         return true
                     }
                 },
-                isAgent: { pid in self.lock.withLock { self.agents.contains(pid) } },
-                owner: { pid in self.lock.withLock { self.owners[pid] } },
-                isOperatorControlled: { session in self.lock.withLock { self.operatorControlled.contains(session) } },
+                owner: { app in self.lock.withLock { app.identity.flatMap { self.owned[$0] } } },
                 isolationIntact: {
                     self.lock.withLock {
                         guard self.isolationLags > 0 else { return true }
@@ -73,6 +80,8 @@ final class AgentFocusGuardTests: XCTestCase {
                 uptime: { self.lock.withLock { self.time } },
                 sleep: { seconds in self.lock.withLock { self.time += seconds } })
         }
+
+        func app(_ pid: pid_t) -> App { lock.withLock { apps[pid]! } }
     }
 
     private func workspace() -> Workspace {
@@ -83,6 +92,9 @@ final class AgentFocusGuardTests: XCTestCase {
         return workspace
     }
 
+    private let restoredToEditor = AgentFocusGuard.Outcome.restored(
+        app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20")
+
     func testNothingHappensWhileThePersonsApplicationIsInFront() {
         let workspace = workspace()
         workspace.bringToFront(10)
@@ -91,7 +103,7 @@ final class AgentFocusGuardTests: XCTestCase {
         XCTAssertEqual(workspace.activationCount, 0)
     }
 
-    func testAgentActivationReturnsToTheApplicationFrontmostBeforeTheAction() {
+    func testWithNothingNewerTheActionBaselineIsTheDestination() {
         let workspace = workspace()
         workspace.bringToFront(20)
         let guardian = AgentFocusGuard(environment: workspace.environment)
@@ -100,25 +112,68 @@ final class AgentFocusGuardTests: XCTestCase {
         XCTAssertEqual(workspace.frontPID, 11)
     }
 
-    func testWithoutAPreferenceTheMostRecentPersonalApplicationIsUsed() {
+    func testThePersonsNewestChoiceWinsOverTheActionBaseline() {
         let workspace = workspace()
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        guardian.noteActivation(.init(pid: 11, name: "Notes"))
+        guardian.noteActivation(workspace.app(10))
         workspace.bringToFront(20)
-        // An agent process named as the preference is never the destination.
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 20),
-                       .restored(app: "Notes", agentPID: 20, agentName: "Google Chrome", session: "session-20"))
+        // The action started with Notes in front; the person has since chosen Editor.
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 11), restoredToEditor)
     }
 
-    func testOperatorControlIsLeftAlone() {
+    func testOwnershipFollowsExactIdentityNotARecycledPID() {
+        let workspace = workspace()
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        guardian.noteActivation(workspace.app(10))
+        // An unrelated application that inherited an agent's PID is the person's, not the agent's.
+        workspace.add(20, "Mail", agent: false, generation: 2)
+        workspace.bringToFront(20)
+        guardian.noteActivation(workspace.app(20))
+        XCTAssertEqual(guardian.restoreIfAgentFront(), .notNeeded)
+        XCTAssertEqual(workspace.activationCount, 0)
+    }
+
+    func testARememberedApplicationReplacedByARecycledPIDIsNotADestination() {
+        let workspace = workspace()
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        guardian.noteActivation(workspace.app(11))
+        workspace.add(11, "Unrelated", generation: 2)
+        workspace.bringToFront(20)
+        guard case .unavailable = guardian.restoreIfAgentFront() else {
+            return XCTFail("a different process reusing the PID must never be activated")
+        }
+        XCTAssertEqual(workspace.activationCount, 0)
+    }
+
+    func testARememberedApplicationLaterAdoptedOrQuitIsNotADestination() {
+        let workspace = workspace()
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        guardian.noteActivation(workspace.app(11))
+        workspace.adopt(11)
+        workspace.bringToFront(11)
+        guard case .unavailable(_, 11, "session-11") = guardian.restoreIfAgentFront() else {
+            return XCTFail("an adopted process must never be reported as restored to itself")
+        }
+        XCTAssertEqual(workspace.activationCount, 0)
+
+        let other = self.workspace()
+        let second = AgentFocusGuard(environment: other.environment)
+        second.noteActivation(other.app(11))
+        other.quit(11)
+        other.bringToFront(20)
+        guard case .unavailable = second.restoreIfAgentFront() else {
+            return XCTFail("an application that exited is not a destination")
+        }
+        XCTAssertEqual(other.activationCount, 0)
+    }
+
+    func testThePersonSwitchingElsewhereMeansNothingIsLeftToRestore() {
         let workspace = workspace()
         workspace.bringToFront(20)
-        workspace.setOperatorControlled(20)
+        workspace.personSwitchesTo(11)
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), .operatorControl(session: "session-20"),
-                       "a person working in the agent's application keeps it")
-        XCTAssertEqual(workspace.activationCount, 0)
-        XCTAssertEqual(workspace.frontPID, 20)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), .notNeeded)
+        XCTAssertEqual(workspace.frontPID, 11, "the person's own choice stands")
     }
 
     func testUnconfirmedRestorationIsReportedAsUnavailable() {
@@ -130,6 +185,23 @@ final class AgentFocusGuardTests: XCTestCase {
             return XCTFail("an activation that did not take is not a restoration")
         }
         XCTAssertTrue(reason.contains("Editor"), reason)
+    }
+
+    func testRestorationWaitsForTheWholeRouteAndReportsALaggingOne() {
+        let workspace = workspace()
+        workspace.bringToFront(20)
+        workspace.lagIsolation(3)
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), restoredToEditor, "a short lag is waited out")
+
+        let stuck = self.workspace()
+        stuck.bringToFront(20)
+        stuck.lagIsolation(Int.max)
+        let second = AgentFocusGuard(environment: stuck.environment)
+        guard case let .unavailable(reason, 20, "session-20") = second.restoreIfAgentFront(preferring: 10, timeout: 0.3),
+              reason.contains("isolation was not confirmed") else {
+            return XCTFail("the front application alone is not a restoration")
+        }
     }
 
     func testAProcessThatKeepsTakingActivationStopsBeingRestored() {
@@ -147,78 +219,7 @@ final class AgentFocusGuardTests: XCTestCase {
         }
         XCTAssertEqual(workspace.activationCount, AgentFocusGuard.maximumRestores)
         workspace.advance(AgentFocusGuard.restoreWindow + 1)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10),
-                       .restored(app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20"))
-    }
-
-    func testBackgroundActivationIsReturnedAndReported() {
-        let workspace = workspace()
-        workspace.bringToFront(10)
-        let guardian = AgentFocusGuard(environment: workspace.environment)
-        let reported = expectation(description: "background restoration reported")
-        guardian.start(observingWorkspace: false) { outcome in
-            XCTAssertEqual(outcome, .restored(app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20"))
-            reported.fulfill()
-        }
-        workspace.bringToFront(20)
-        guardian.noteActivation(.init(pid: 20, name: "Google Chrome"))
-        wait(for: [reported], timeout: 2)
-        XCTAssertEqual(workspace.frontPID, 10)
-        guardian.stop()
-    }
-
-    func testRestorationWaitsForTheWholeRouteAndReportsALaggingOne() {
-        let workspace = workspace()
-        workspace.bringToFront(20)
-        workspace.lagIsolation(3)
-        let guardian = AgentFocusGuard(environment: workspace.environment)
-        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10),
-                       .restored(app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20"),
-                       "a short lag is waited out")
-
-        let stuck = self.workspace()
-        stuck.bringToFront(20)
-        stuck.lagIsolation(Int.max)
-        let second = AgentFocusGuard(environment: stuck.environment)
-        guard case let .unavailable(reason, 20, "session-20") = second.restoreIfAgentFront(preferring: 10, timeout: 0.3),
-              reason.contains("isolation did not recover") else {
-            return XCTFail("the front application alone is not a restoration")
-        }
-    }
-
-    func testARememberedApplicationLaterAdoptedOrQuitIsNotADestination() {
-        let workspace = workspace()
-        let guardian = AgentFocusGuard(environment: workspace.environment)
-        guardian.noteActivation(.init(pid: 11, name: "Notes"))
-        workspace.adopt(11)
-        workspace.bringToFront(11)
-        guard case .unavailable(_, 11, "session-11") = guardian.restoreIfAgentFront() else {
-            return XCTFail("an adopted process must never be reported as restored to itself")
-        }
-        XCTAssertEqual(workspace.activationCount, 0)
-
-        let other = self.workspace()
-        let second = AgentFocusGuard(environment: other.environment)
-        second.noteActivation(.init(pid: 11, name: "Notes"))
-        other.quit(11)
-        other.bringToFront(20)
-        guard case .unavailable = second.restoreIfAgentFront() else {
-            return XCTFail("an application that exited is not a destination")
-        }
-        XCTAssertEqual(other.activationCount, 0)
-    }
-
-    func testANonFiniteTimeoutIsBoundedInsteadOfTrapping() {
-        let workspace = workspace()
-        workspace.bringToFront(20)
-        workspace.ignoreActivation()
-        let guardian = AgentFocusGuard(environment: workspace.environment)
-        for timeout in [TimeInterval.infinity, .nan, -1] {
-            workspace.advance(AgentFocusGuard.restoreWindow + 1)
-            guard case .unavailable = guardian.restoreIfAgentFront(preferring: 10, timeout: timeout) else {
-                return XCTFail("timeout \(timeout) must report unavailable")
-            }
-        }
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10), restoredToEditor)
     }
 
     func testRestoreHistoryForEveryProcessExpires() {
@@ -238,14 +239,43 @@ final class AgentFocusGuardTests: XCTestCase {
         XCTAssertEqual(guardian.restoreHistoryCount, 1, "expired histories of other processes are dropped")
     }
 
+    func testANonFiniteTimeoutIsBoundedInsteadOfTrapping() {
+        let workspace = workspace()
+        workspace.bringToFront(20)
+        workspace.ignoreActivation()
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        for timeout in [TimeInterval.infinity, .nan, -1] {
+            workspace.advance(AgentFocusGuard.restoreWindow + 1)
+            guard case .unavailable = guardian.restoreIfAgentFront(preferring: 10, timeout: timeout) else {
+                return XCTFail("timeout \(timeout) must report unavailable")
+            }
+        }
+    }
+
+    func testBackgroundActivationIsReturnedAndReported() {
+        let workspace = workspace()
+        workspace.bringToFront(10)
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        let restored = restoredToEditor
+        let reported = expectation(description: "background restoration reported")
+        guardian.start(observingWorkspace: false) { outcome in
+            XCTAssertEqual(outcome, restored)
+            reported.fulfill()
+        }
+        workspace.bringToFront(20)
+        guardian.noteActivation(workspace.app(20))
+        wait(for: [reported], timeout: 2)
+        XCTAssertEqual(workspace.frontPID, 10)
+        guardian.stop()
+    }
+
     func testANotificationAheadOfTheFrontmostViewIsStillRestored() {
         let workspace = workspace()
         workspace.bringToFront(10)
         let guardian = AgentFocusGuard(environment: workspace.environment)
-        guardian.noteActivation(.init(pid: 10, name: "Editor"))
+        guardian.noteActivation(workspace.app(10))
         workspace.bringToFrontLagging(20, reads: 5)
-        XCTAssertEqual(guardian.restoreAfterActivation(of: .init(pid: 20, name: "Google Chrome")),
-                       .restored(app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20"))
+        XCTAssertEqual(guardian.restoreAfterActivation(of: workspace.app(20)), restoredToEditor)
     }
 
     func testNoKnownPersonalApplicationMeansNoActivation() {
@@ -274,13 +304,6 @@ final class AgentFocusGuardTests: XCTestCase {
         XCTAssertFalse(SessionManager.isActivationOnlyBreach(report(failing: [.cursorLocation])),
                        "a moved pointer is never explained by activation")
         XCTAssertFalse(SessionManager.isActivationOnlyBreach(report(failing: [.menuBarOwner, .cursorLocation])))
-    }
-
-    func testOperatorControlFollowsTheSession() {
-        AgentActivity.setOperatorControl(session: "guard-test", true)
-        XCTAssertTrue(AgentActivity.isUnderOperatorControl("guard-test"))
-        AgentActivity.setOperatorControl(session: "guard-test", false)
-        XCTAssertFalse(AgentActivity.isUnderOperatorControl("guard-test"))
     }
 }
 

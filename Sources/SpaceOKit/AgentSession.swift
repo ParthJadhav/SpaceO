@@ -834,7 +834,6 @@ public final class AgentSession: @unchecked Sendable {
                         operatorControlSince = now
                         operatorControlWindowIDs = Set(windows.map(\.windowID))
                     }
-                    AgentActivity.setOperatorControl(session: id, true)
                 } else if let reason {
                     agentPauseReason = String(reason.prefix(240))
                 }
@@ -864,7 +863,6 @@ public final class AgentSession: @unchecked Sendable {
             agentPauseReason = nil
             agentInputPaused = false
             agentInputPausedByOperator = false
-            AgentActivity.setOperatorControl(session: id, false)
         }
     }
 
@@ -2070,7 +2068,6 @@ public final class AgentSession: @unchecked Sendable {
             }
             // Belt and braces: a completed teardown must not leave an unrepresented stale claim.
             ProcessOwnership.releaseAll(owner: id)
-            AgentActivity.setOperatorControl(session: id, false)
             for watcher in watchers.values { watcher.stop() }
             watchers.removeAll()
             watcherCreationFailures.removeAll()
