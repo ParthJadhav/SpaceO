@@ -42,6 +42,9 @@ public final class AgentFocusGuard: @unchecked Sendable {
         var isAgent: @Sendable (pid_t) -> Bool
         var owner: @Sendable (pid_t) -> String?
         var isOperatorControlled: @Sendable (String) -> Bool
+        /// The person's current isolation, checked after activation returns: the active Space
+        /// and input route can lag the front application, or stay with the agent.
+        var isolationIntact: @Sendable () -> Bool
         var uptime: @Sendable () -> TimeInterval
         var sleep: @Sendable (TimeInterval) -> Void
 
@@ -52,6 +55,7 @@ public final class AgentFocusGuard: @unchecked Sendable {
             isAgent: { AgentActivity.ownedPIDs.contains($0) },
             owner: { ProcessOwnership.ownerOfPID($0) },
             isOperatorControlled: { AgentActivity.isUnderOperatorControl($0) },
+            isolationIntact: { IsolationSnapshot.capture().currentReport().verdict != .breached },
             uptime: { ProcessInfo.processInfo.systemUptime },
             sleep: { Thread.sleep(forTimeInterval: $0) })
     }
@@ -117,11 +121,22 @@ public final class AgentFocusGuard: @unchecked Sendable {
         }
         worker.async { [weak self] in
             guard let self else { return }
-            let outcome = self.restoreIfAgentFront()
+            let outcome = self.restoreAfterActivation(of: app)
             guard outcome != .notNeeded else { return }
             let report = self.lock.withLock { self.onBackgroundRestore }
             report?(outcome)
         }
+    }
+
+    /// The notification can arrive before this process's frontmost-application view reflects it
+    /// (tens of milliseconds). Wait briefly for the view to agree, so the restoration is not
+    /// skipped as unnecessary; if the person has already moved on, nothing is done.
+    func restoreAfterActivation(of app: Application, settle: TimeInterval = 0.25) -> Outcome {
+        let deadline = environment.uptime() + settle
+        while environment.frontmost()?.pid != app.pid, environment.uptime() < deadline {
+            environment.sleep(0.01)
+        }
+        return restoreIfAgentFront()
     }
 
     /// Return activation to the person's application if an agent process is frontmost.
@@ -165,14 +180,24 @@ public final class AgentFocusGuard: @unchecked Sendable {
             return unavailable("\(target.name) could not be activated")
         }
         let deadline = now + wait
+        var frontmostAgain = false
         repeat {
             if environment.frontmost()?.pid == target.pid {
-                AgentActivity.recordFocusRestore()
-                return .restored(app: target.name, agentPID: front.pid, agentName: front.name, session: session)
+                frontmostAgain = true
+                // The front application alone is not the whole route: the Space and input focus
+                // must have left the agent too before this counts as a restoration.
+                if environment.isolationIntact() {
+                    AgentActivity.recordFocusRestore()
+                    return .restored(app: target.name, agentPID: front.pid, agentName: front.name, session: session)
+                }
+                environment.sleep(0.025)
+            } else {
+                environment.sleep(0.01)
             }
-            environment.sleep(0.01)
         } while environment.uptime() < deadline
-        return unavailable("\(target.name) was not frontmost again within \(Int(wait * 1_000)) ms")
+        return unavailable(frontmostAgain
+            ? "\(target.name) is frontmost again but isolation did not recover within \(Int(wait * 1_000)) ms"
+            : "\(target.name) was not frontmost again within \(Int(wait * 1_000)) ms")
     }
 }
 

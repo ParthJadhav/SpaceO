@@ -33,12 +33,14 @@ extension SessionManager {
                 guard let session else { return }
                 EventBus.shared.publish(kind: "isolation.activation_restored", session: session,
                                         detail: ["agent": agentName, "restored": app])
-            case let .unavailable(reason, _, session):
+            case let .unavailable(reason, agentPID, session):
                 DaemonLog.shared.event("isolation.activation_unrestored", [
                     "reason": reason, "session": session ?? "",
                 ])
                 guard let session else { return }
-                Task { await self?.pauseAfterUnrestoredActivation(session: session, reason: reason) }
+                Task {
+                    await self?.pauseAfterUnrestoredActivation(session: session, agentPID: agentPID, reason: reason)
+                }
             case .notNeeded, .operatorControl:
                 break
             }
@@ -47,8 +49,11 @@ extension SessionManager {
 
     /// An agent application holds activation and could not be sent back: this is a breach with
     /// no action in flight to report it, so pause the session and tell its subscribers now.
-    func pauseAfterUnrestoredActivation(session id: String, reason: String) {
-        guard let session = sessions[id] else { return }
+    /// The session must still own `agentPID`: a session created later under a reused name is
+    /// not the one whose application took activation.
+    func pauseAfterUnrestoredActivation(session id: String, agentPID: pid_t, reason: String) {
+        guard let session = sessions[id],
+              session.apps.contains(where: { $0.pid == agentPID && $0.identity.isAlive }) else { return }
         try? session.setAgentInputPaused(true, byOperator: false)
         emit("isolation.verdict", session: id, [
             "verdict": "breached",

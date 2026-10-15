@@ -11,6 +11,8 @@ final class AgentFocusGuardTests: XCTestCase {
         private var owners: [pid_t: String] = [:]
         private var operatorControlled: Set<String> = []
         private var activationTakes = true
+        private var isolationLags = 0
+        private var frontLag: (reads: Int, stale: AgentFocusGuard.Application?) = (0, nil)
         private var time: TimeInterval = 1_000
         private(set) var activations: [pid_t] = []
 
@@ -27,13 +29,28 @@ final class AgentFocusGuardTests: XCTestCase {
         }
         func setOperatorControlled(_ pid: pid_t) { lock.withLock { _ = operatorControlled.insert("session-\(pid)") } }
         func ignoreActivation() { lock.withLock { activationTakes = false } }
+        /// The Space or input route stays with the agent for this many isolation checks.
+        func lagIsolation(_ checks: Int) { lock.withLock { isolationLags = checks } }
+        /// The next `reads` frontmost queries still report the application that was in front.
+        func bringToFrontLagging(_ pid: pid_t, reads: Int) {
+            lock.withLock {
+                frontLag = (reads, front)
+                front = apps[pid].map { .init(pid: pid, name: $0) }
+            }
+        }
         func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
         var frontPID: pid_t? { lock.withLock { front?.pid } }
         var activationCount: Int { lock.withLock { activations.count } }
 
         var environment: AgentFocusGuard.Environment {
             .init(
-                frontmost: { self.lock.withLock { self.front } },
+                frontmost: {
+                    self.lock.withLock {
+                        guard self.frontLag.reads > 0 else { return self.front }
+                        self.frontLag.reads -= 1
+                        return self.frontLag.stale
+                    }
+                },
                 application: { pid in self.lock.withLock { self.apps[pid].map { .init(pid: pid, name: $0) } } },
                 activate: { pid in
                     self.lock.withLock {
@@ -46,6 +63,13 @@ final class AgentFocusGuardTests: XCTestCase {
                 isAgent: { pid in self.lock.withLock { self.agents.contains(pid) } },
                 owner: { pid in self.lock.withLock { self.owners[pid] } },
                 isOperatorControlled: { session in self.lock.withLock { self.operatorControlled.contains(session) } },
+                isolationIntact: {
+                    self.lock.withLock {
+                        guard self.isolationLags > 0 else { return true }
+                        self.isolationLags -= 1
+                        return false
+                    }
+                },
                 uptime: { self.lock.withLock { self.time } },
                 sleep: { seconds in self.lock.withLock { self.time += seconds } })
         }
@@ -143,6 +167,25 @@ final class AgentFocusGuardTests: XCTestCase {
         guardian.stop()
     }
 
+    func testRestorationWaitsForTheWholeRouteAndReportsALaggingOne() {
+        let workspace = workspace()
+        workspace.bringToFront(20)
+        workspace.lagIsolation(3)
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        XCTAssertEqual(guardian.restoreIfAgentFront(preferring: 10),
+                       .restored(app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20"),
+                       "a short lag is waited out")
+
+        let stuck = self.workspace()
+        stuck.bringToFront(20)
+        stuck.lagIsolation(Int.max)
+        let second = AgentFocusGuard(environment: stuck.environment)
+        guard case let .unavailable(reason, 20, "session-20") = second.restoreIfAgentFront(preferring: 10, timeout: 0.3),
+              reason.contains("isolation did not recover") else {
+            return XCTFail("the front application alone is not a restoration")
+        }
+    }
+
     func testARememberedApplicationLaterAdoptedOrQuitIsNotADestination() {
         let workspace = workspace()
         let guardian = AgentFocusGuard(environment: workspace.environment)
@@ -195,6 +238,16 @@ final class AgentFocusGuardTests: XCTestCase {
         XCTAssertEqual(guardian.restoreHistoryCount, 1, "expired histories of other processes are dropped")
     }
 
+    func testANotificationAheadOfTheFrontmostViewIsStillRestored() {
+        let workspace = workspace()
+        workspace.bringToFront(10)
+        let guardian = AgentFocusGuard(environment: workspace.environment)
+        guardian.noteActivation(.init(pid: 10, name: "Editor"))
+        workspace.bringToFrontLagging(20, reads: 5)
+        XCTAssertEqual(guardian.restoreAfterActivation(of: .init(pid: 20, name: "Google Chrome")),
+                       .restored(app: "Editor", agentPID: 20, agentName: "Google Chrome", session: "session-20"))
+    }
+
     func testNoKnownPersonalApplicationMeansNoActivation() {
         let workspace = workspace()
         workspace.bringToFront(20)
@@ -244,15 +297,31 @@ final class UnrestoredActivationTests: XCTestCase {
     func testAnUnrestoredBackgroundActivationPausesItsSession() async throws {
         let backing = Backing()
         let stage = Stage(testingBacking: backing, onlineDisplayIDs: { [backing.displayID] })
+        let identity = try XCTUnwrap(ProcessIdentity.current(of: getpid()))
+        let app = LaunchedApp(pid: identity.pid, identity: identity, bundleIdentifier: "dev.spaceo.unrestored",
+            name: "Agent", url: URL(fileURLWithPath: "/Applications/Agent.app"), startedByUs: false,
+            devToolsPort: nil, temporaryProfile: nil)
         let manager = SessionManager(
             pool: DisplayPool(stageFactory: { _, _, _, _ in stage }), runJanitor: false,
-            sessionFactory: { AgentSession(id: $0, slot: $1) })
+            sessionFactory: { id, slot in
+                try AgentSession(id: id, slot: slot,
+                    teardownDriver: SessionAppTeardownDriver(isAlive: { _ in false }, quit: { _, _ in },
+                        waitForExit: { _, _ in [] }, cleanupTemporaryProfile: { _ in }),
+                    windowDriver: .windowlessForTesting, watcherFactory: { _, _ in throw CancellationError() },
+                    initialApps: [app])
+            })
         let created = await manager.handle(TestController.createRequest(session: "unrestored"))
         XCTAssertTrue(created.ok, created.error ?? "")
 
-        await manager.pauseAfterUnrestoredActivation(session: "unrestored", reason: "fixture")
-        let listing = await manager.handle(TestController.request("session.list"))
-        let row = try XCTUnwrap(listing.sessions?.first { $0.id == "unrestored" })
+        // A session that does not own the process (a reused name) is never paused for it.
+        await manager.pauseAfterUnrestoredActivation(session: "unrestored", agentPID: 4_242_424, reason: "fixture")
+        var listing = await manager.handle(TestController.request("session.list"))
+        var row = try XCTUnwrap(listing.sessions?.first { $0.id == "unrestored" })
+        XCTAssertNotEqual(row.inputPaused, true)
+
+        await manager.pauseAfterUnrestoredActivation(session: "unrestored", agentPID: getpid(), reason: "fixture")
+        listing = await manager.handle(TestController.request("session.list"))
+        row = try XCTUnwrap(listing.sessions?.first { $0.id == "unrestored" })
         XCTAssertEqual(row.inputPaused, true)
         XCTAssertNil(row.agentPauseReason, "an isolation pause, not one the agent asked for")
 
