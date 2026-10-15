@@ -6,6 +6,25 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- Stop growing macOS's display state with every virtual display (RA-057). SpaceO gave each
+  attachment a new random serial, and macOS keeps a ColorSync device registration, a display
+  profile and WindowServer mappings for every serial it sees. ColorSync re-reads that registry
+  for each display request, so on a heavily used Mac every display change got slower until
+  ColorSync saturated and WindowServer's watchdog ended the login session. Serials now come from
+  a bounded, deterministic set per display size (32 slots), so re-creating a display reuses its
+  identity; an identity macOS restores into an unusable state is rejected and retired for good.
+- `spaceo doctor` reports leftover SpaceO display identities, and the new
+  `spaceo safety clean-display-identities --operator` lists them;
+  `sudo spaceo safety clean-display-identities --apply --operator` backs up and removes only
+  SpaceO's ColorSync registrations and profiles. Log out and back in afterwards.
+- The reserved testing-host override (`SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1`) no longer
+  waives measured ColorSync load. Display changes wait for ColorSync below 25%, measured after
+  the previous change, and the live-test preflight refuses at 50% as in normal mode; every
+  attachment leaves macOS polling ColorSync until logout, and runs that ignored that load ended
+  the login session.
+- A display whose mode settings macOS refuses is now kept and rejected instead of being released
+  implicitly.
+
 ## [1.0.8] - 2026-10-16
 
 - Return activation to the person when an agent app takes it, for example Chrome showing a

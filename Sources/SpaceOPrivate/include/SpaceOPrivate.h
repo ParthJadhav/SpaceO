@@ -50,12 +50,23 @@ BOOL SPOBuiltWithARC(void);
 /// higher-level code verifies and reports removal.
 @interface SPOVirtualDisplay : NSObject
 
+/// `serial` is the display's persistent hardware identity to WindowServer and ColorSync, which
+/// keep per-identity state forever; pass a value from a bounded set. Zero picks a random serial
+/// (the historical behavior, which grows that state with every attachment).
 - (nullable instancetype)initWithName:(NSString *)name
                                 width:(uint32_t)width
                                height:(uint32_t)height
-                                hiDPI:(BOOL)hiDPI NS_DESIGNATED_INITIALIZER;
+                                hiDPI:(BOOL)hiDPI
+                               serial:(uint32_t)serial NS_DESIGNATED_INITIALIZER;
+- (nullable instancetype)initWithName:(NSString *)name
+                                width:(uint32_t)width
+                               height:(uint32_t)height
+                                hiDPI:(BOOL)hiDPI;
 - (instancetype)init NS_UNAVAILABLE;
 
+/// NO when the display attached but its mode settings were refused. The object still owns the
+/// attached display so the caller can retain it rather than releasing it implicitly.
+@property (nonatomic, readonly) BOOL settingsApplied;
 @property (nonatomic, readonly) CGDirectDisplayID displayID;
 @property (nonatomic, readonly) BOOL valid;
 @property (nonatomic, readonly) CGRect bounds;

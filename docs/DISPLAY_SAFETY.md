@@ -59,9 +59,22 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   stalled while holding the journal lock cannot also trap the timeout caller. If storage stalls,
   the failure write may remain outstanding; the already-persisted pending markers protect
   interrupted mutations and live cases.
-- Display identities remain randomized. Persistent identity churn is a plausible contributor
-  to ColorSync work, but blindly restoring stable IDs reintroduces a documented stale-display
-  failure. The creation budget and existing pool reuse reduce exposure without that regression.
+- Display identities come from a bounded set (RA-057). macOS keeps a ColorSync device
+  registration, a factory profile and WindowServer display mappings for every identity it has
+  seen and never removes them; ColorSync re-reads that registry for every display request, so the
+  former random serial per attachment slowed every display change on the Mac, a little more each
+  time. A display's identity is now its geometry, a slot and a generation; its serial is derived
+  from them and recorded with every other issued serial in
+  `~/Library/Application Support/SpaceO/display-identities.json`, so two identities never share a
+  serial. A slot is reused once no online display and no live display object holds it, so repeated
+  creation of one geometry reuses one identity. A geometry has 32 slots and the record at most
+  1,024 identities; creation refuses rather than mint more. An existing record that cannot be read
+  or validated refuses creation instead of reissuing identities it may have retired; move it aside
+  only when no SpaceO display is online. The random serial existed because a reused identity once restored a saved
+  configuration that left the display online but inactive, without its own Space. Publication
+  still rejects such a display, and that identity's slot advances to a new generation in the same
+  record, so it is not offered again; if that cannot be saved, the creation error says so.
+  A display whose mode settings are refused is retained and rejected, not released implicitly.
 - The daemon keeps at most one idle display after a 15-second grace, reusing it for later tasks.
   Exact width and height must match an exclusive request. Idle displays still consume framebuffer
   memory and appear in macOS display settings. Explicit `spaceo pool trim --operator` (or MCP
@@ -111,6 +124,39 @@ These bounds are application containment. They cannot cancel a call already insi
 internal backlog. Process exit still releases its virtual displays. General diagnostic queries
 outside Stage's lifecycle are not all covered by its worker deadline.
 
+## Display identity residue
+
+SpaceO 1.0.8 and earlier gave every display a new identity, so a Mac that ran many sessions
+holds hundreds of SpaceO ColorSync registrations and display profiles. `spaceo doctor` reports
+them under `display identities` (JSON `displayIdentityResidue`), counting profiles by their
+make-and-model tag. Above 64 it asks for cleanup. Bounded identities stop the growth but cannot
+remove what is already there:
+
+```sh
+spaceo safety clean-display-identities --operator              # list; changes nothing
+sudo spaceo safety clean-display-identities --apply --operator  # back up, then remove
+```
+
+Stop every SpaceO daemon, Viewer and MCP client first, then run it with `sudo` from the account
+that uses SpaceO. It holds that account's display-lifecycle lock, which every SpaceO display
+creator needs, from its first check until the last profile is removed. It refuses while any other
+`spaceo` process or the Viewer runs, while a SpaceO display is online, when it sees no display at
+all (run it from a Terminal in the logged-in session, not over SSH), when ColorSync's registry
+file is missing, and when ColorSync or the profile directory lists more than it examines. If a
+SpaceO display still appears while it works, it removes no profile, and a profile it cannot
+remove is reported as a partial cleanup. It copies ColorSync's device registry and each SpaceO profile into
+`/Library/Application Support/SpaceO/ColorSync backups/colorsync-<time>/`, unregisters only
+devices whose factory profile names SpaceO's vendor and product (physical displays, Sidecar,
+other virtual-display tools and displays a person assigned a SpaceO profile are untouched), lists the registry again and removes only SpaceO profiles
+that no remaining registration references. ColorSync reports success to a normal account while removing nothing, so
+root is required and the second listing, not the return value, decides the outcome. Listing
+the registry can take tens of seconds on an affected Mac; a listing that has not finished after
+three minutes refuses before any change, or reports the cleanup as unconfirmed after it. Log out and back in afterwards:
+until WindowServer restarts it keeps asking ColorSync about every display attached since login,
+about two requests every five seconds per attachment, even after the display is gone.
+Do not delete WindowServer's display preferences; that resets the arrangement of physical
+displays and is not needed.
+
 ## Live testing
 
 Use a reserved host and follow [LIVE_TESTS.md](LIVE_TESTS.md). `SPACEO_LIVE_TESTS=1` is required
@@ -133,11 +179,24 @@ or skipped run is never release evidence. Direct `swift test` invocations do not
 
 When the operator explicitly designates this Mac for diagnostic testing, set both
 `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the source CLI and test commands.
-This bypasses host-health admission, including historical WindowServer reports, CPU settling,
-pressure, swap and unavailable samples. Native health reports carry `testingOverride: true`
-and `testing_override`, with no invented CPU measurements. The independent helper still
-samples and retains its actual reasons and counters as `observedAdmitted`; it marks admission
-as overridden. One flag alone has no effect.
+This bypasses host-health admission, including historical WindowServer reports, memory
+pressure, swap, unavailable samples and sticky health faults. It does **not** bypass measured
+ColorSync load: every display attachment leaves macOS polling ColorSync until logout (RA-057), and
+diagnostic runs that ignored that load saturated ColorSync until WindowServer's watchdog ended
+the login session. The sampler keeps running. A display change waits (up to its normal
+deadline) for combined ColorSync CPU below 25%: two measured intervals at process start or after
+a busy interval, and one interval measured entirely after each earlier change. Saturation makes intervals
+unmeasurable, so once a process has measured one, an unmeasurable interval never counts as quiet;
+only a sampler that has never produced a measurement keeps the override's former admission. A
+capture delivered more than three seconds late is not counted, and quiet evidence older than ten
+seconds no longer admits a change. A
+process therefore takes about ten seconds before its first display change, and five to ten
+between changes. The live-test preflight and per-case health checks keep the normal 50%
+ColorSync limit; a case that finds ColorSync at or above it after cleanup stops live work, and
+recovery is the operator archive below. Native health reports carry `testingOverride: true`,
+`testing_override` and the measured `colorsyncCPUPercent`, never an invented one. The
+independent helper still samples and retains its actual reasons and counters as
+`observedAdmitted`; it marks admission as overridden. One flag alone has no effect.
 
 In this mode explicit `safety clear-host-health --operator` may archive any idle host-health
 latch, including a diagnostic/timeout latch. It still requires the existing exclusive journal

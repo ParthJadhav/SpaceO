@@ -379,6 +379,7 @@ func runDoctor() -> Never {
         focusLine: AttentionMitigation.focusStatusLine(focusActive: nil))
     report.logging = LoggingSettings.load()
     report.displaySafety = Stage.displaySafetyStatus()
+    report.displayIdentityResidue = DisplayIdentityResidue.scan()
     let doctorOK = effectiveCanDrive && (!daemonIsRunning || daemonMatchesCLI == true)
         && !daemonUnresponsive
         && report.effectiveDisplaySafety?.allowsCreation == true
@@ -521,6 +522,9 @@ func doctorPayload(report: DoctorReport, ok: Bool, capabilities: Capabilities,
         "ok": ok,
         "readiness": readinessPayload,
         "displaySafety": safetyPayload,
+        "displayIdentityResidue": report.displayIdentityResidue.flatMap {
+            try? JSONSerialization.jsonObject(with: Wire.encoder.encode($0))
+        } ?? NSNull(),
         "readinessBlockers": report.blockers.map { ["code": $0.code, "sentence": $0.sentence, "next": $0.next] },
         "scope": "host-health; readiness additionally requires the daemon",
         "macOS": report.macOS,
@@ -684,4 +688,67 @@ func runDaemonRestart() -> Never {
     }
     fail(result.message, exit: .daemonUnavailable, code: "daemon_restart_incomplete",
          next: args.bool("now") ? "spaceo doctor" : "spaceo daemon restart --operator --now")
+}
+
+/// RA-057 residue: dry run by default; `--apply` must run as root because ColorSync silently
+/// ignores unregistration from a normal account.
+func runCleanDisplayIdentities(apply: Bool) -> Never {
+    if !apply {
+        let plan: DisplayIdentityCleanup.Plan
+        do { plan = try DisplayIdentityCleanup.plan() }
+        catch { fail(error.localizedDescription, exit: .failure, code: "display_identity_cleanup_refused") }
+        if args.hasJSON {
+            print(CLIJSON.object([
+                "ok": true, "applied": false,
+                "registrations": plan.registrations.count, "profiles": plan.profilePaths.count,
+                "unattributedWithoutProfile": plan.unattributedWithoutProfile,
+            ]))
+        } else {
+            print("SpaceO ColorSync registrations: \(plan.registrations.count)")
+            print("SpaceO display profiles:        \(plan.profilePaths.count)")
+            if plan.unattributedWithoutProfile > 0 {
+                print("registrations without a readable profile (left alone): \(plan.unattributedWithoutProfile)")
+            }
+            print(plan.registrations.isEmpty && plan.profilePaths.isEmpty
+                ? "nothing to clean"
+                : "to remove them, stop every SpaceO daemon and Viewer, then run:\n"
+                    + "  sudo spaceo safety clean-display-identities --apply --operator\n"
+                    + "then log out and back in: until then WindowServer keeps asking ColorSync about "
+                    + "every display attached since login")
+        }
+        exit(0)
+    }
+    do {
+        let outcome = try DisplayIdentityCleanup.apply(
+            backupRoot: "/Library/Application Support/SpaceO/ColorSync backups")
+        if args.hasJSON {
+            print(CLIJSON.object([
+                "ok": outcome.confirmed, "applied": true, "backup": outcome.backup,
+                "unregistered": outcome.unregistered, "remainingRegistrations": outcome.remainingRegistrations,
+                "removedProfiles": outcome.movedProfiles, "profileRemovalSkipped": outcome.profileRemovalSkipped,
+                "failedProfiles": outcome.failedProfiles.count, "verificationFailed": outcome.verificationFailed,
+            ]))
+        } else {
+            print("backup: \(outcome.backup)")
+            print("unregistered \(outcome.unregistered) of \(outcome.plan.registrations.count) SpaceO registrations; "
+                + "removed \(outcome.movedProfiles) of \(outcome.plan.profilePaths.count) profiles")
+            if outcome.verificationFailed {
+                print("ColorSync could not be listed again, so the unregistration is unconfirmed and no profile was "
+                    + "removed; the backup above holds the registry from before; rerun the command")
+            } else if outcome.profileRemovalSkipped {
+                print("a SpaceO process or display appeared during cleanup, so no profile was removed; stop it and rerun")
+            } else if outcome.remainingRegistrations > 0 {
+                print("\(outcome.remainingRegistrations) registrations are still listed; their profiles were kept")
+            } else if !outcome.failedProfiles.isEmpty {
+                print("\(outcome.failedProfiles.count) SpaceO profiles could not be removed; rerun after checking "
+                    + DisplayIdentityResidue.profilesDirectory)
+            } else {
+                print("log out and back in (or restart): until then WindowServer keeps asking ColorSync about "
+                    + "every display attached since login")
+            }
+        }
+        exit(outcome.confirmed ? 0 : 1)
+    } catch {
+        fail(error.localizedDescription, exit: .failure, code: "display_identity_cleanup_refused")
+    }
 }

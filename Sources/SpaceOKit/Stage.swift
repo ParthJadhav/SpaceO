@@ -147,6 +147,9 @@ public final class Stage: @unchecked Sendable {
         DaemonLog.shared.event("display.query.slow", ["deadlineSeconds": String(seconds)])
     })
     private static let ownership = OwnershipState()
+    private static let identities = DisplayIdentityAllocator.shared
+    private static let identityNotRetired =
+        "; its display identity could not be retired in display-identities.json and may be offered again after a restart"
     private static let hostHealth = DisplayHostHealth(onFailure: { reason in lifecycle.trip(reason) })
 
     /// Status reads never start sampling or touch the display server.
@@ -315,6 +318,22 @@ public final class Stage: @unchecked Sendable {
                     .filter { id in !Self.ownership.lock.withLock { Self.ownership.displayIDs.contains(id) } }) {
                 throw SpaceOError.stageCreationFailed(failure)
             }
+            // A bounded identity, never a fresh one per attachment (RA-057). Every slot busy means
+            // 32 live displays of this geometry; refuse rather than mint an unbounded identity.
+            let onlineSerials = Set(online.map { CGDisplaySerialNumber($0) })
+            let claimed: DisplayIdentityAllocator.Identity?
+            do {
+                claimed = try Self.identities.claim(width: width, height: height, hiDPI: hiDPI,
+                                                    onlineSerials: onlineSerials)
+            } catch {
+                throw SpaceOError.stageCreationFailed(error.localizedDescription)
+            }
+            guard let identity = claimed else {
+                throw SpaceOError.stageCreationFailed(
+                    "every display identity for \(width)x\(height) is in use; release a display first")
+            }
+            // Releases the claim unless a display bound it (binding ends the pending state).
+            defer { Self.identities.abandon(identity) }
             try operation.check()
             do { try Self.hostHealth.requireStillSettledForReconfiguration() }
             catch let refusal as DisplayHostHealth.ReconfigurationSettlingRefusal { throw refusal.underlyingError }
@@ -338,14 +357,19 @@ public final class Stage: @unchecked Sendable {
                     Self.lifecycle.trip("display creation did not complete safely")
                 }
             }
-            guard let display = SPOVirtualDisplay(name: name, width: width,
-                                                  height: height, hiDPI: hiDPI) else {
+            guard let display = SPOVirtualDisplay(name: name, width: width, height: height,
+                                                  hiDPI: hiDPI, serial: identity.serial) else {
                 Self.lifecycle.trip("CGVirtualDisplay creation failed; attachment state is unknown")
                 throw SpaceOError.stageCreationFailed("CGVirtualDisplay refused \(width)x\(height)")
             }
             attachedDisplay = display
+            Self.identities.bind(identity, to: display)
             operation.retain(display)
             Self.hostHealth.resetReconfigurationSettling()
+            guard display.settingsApplied else {
+                try Self.rejectPublication(display, reason: "the display refused its mode settings",
+                                           coordinator: Self.lifecycle)
+            }
             try operation.check()
 
             let deadline = ContinuousClock.now + .seconds(3)
@@ -358,16 +382,23 @@ public final class Stage: @unchecked Sendable {
                 usleep(200_000)
             } while ContinuousClock.now < deadline
             guard publicationFailure == nil else {
+                // macOS may have restored this identity into a saved state it cannot leave
+                // (mirrored, inactive, sharing a Space). Never offer that identity again.
+                let retired = Self.identities.rotate(identity)
                 // Attachment reset the settling fence. Immediate rollback cannot safely pass
                 // it; retain the owner and preserve the actual publication failure for recovery.
-                try Self.rejectPublication(display, reason: publicationFailure ?? "unsafe display publication",
+                try Self.rejectPublication(display, reason: (publicationFailure ?? "unsafe display publication")
+                                               + (retired ? "" : Self.identityNotRetired),
                                            coordinator: Self.lifecycle)
             }
             try operation.check()
             let spaces = (SPOSpacesForDisplay(display.displayID) ?? []).map { $0.uint64Value }
             try operation.check()
             guard !spaces.isEmpty else {
-                throw SpaceOError.stageCreationFailed("published display has no verified managed Space")
+                let retired = Self.identities.rotate(identity)
+                try Self.rejectPublication(display, reason: "published display has no verified managed Space"
+                                               + (retired ? "" : Self.identityNotRetired),
+                                           coordinator: Self.lifecycle)
             }
             let bounds = display.bounds
             let scale: Double? = display.pixelWidth.flatMap { pixels in

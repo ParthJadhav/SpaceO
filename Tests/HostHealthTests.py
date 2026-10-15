@@ -103,6 +103,29 @@ class HostHealthTests(unittest.TestCase):
             self.assertEqual(report['reasons'], ['host_health_unknown'])
             self.assertNotIn('private command output', output.getvalue())
 
+    def test_testing_override_keeps_measured_colorsync_load_when_a_later_input_fails(self):
+        failure = OSError('private command output must stay private')
+        before, after = self.samples()
+        busy = dict(schemaVersion=1, admitted=False, reasons=['colorsync_busy'], colorsyncCPUPercent=80.0)
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {'SPACEO_LIVE_TESTS': '1', 'SPACEO_TESTING_HOST': '1'}, clear=True), \
+                mock.patch.object(health.sys, 'platform', 'darwin'), \
+                mock.patch.object(health.sys, 'argv', ['host-health.py']), \
+                mock.patch.object(health.time, 'time', return_value=200000), \
+                mock.patch.object(health.time, 'monotonic', return_value=100), \
+                mock.patch.object(health.time, 'sleep'), \
+                mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
+                mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
+                mock.patch.object(health, 'snapshot', side_effect=[before, after]), \
+                mock.patch.object(health, 'assess', return_value=busy), \
+                mock.patch.object(health, 'windowserver_timeouts', side_effect=failure), \
+                mock.patch.object(health.sys, 'stdout', output):
+            self.assertEqual(health.main(), 2)
+        report = json.loads(output.getvalue())
+        self.assertFalse(report['admitted'])
+        self.assertTrue(report['testingOverride'])
+        self.assertEqual(report['reasons'], ['host_health_unknown', 'colorsync_busy'])
+
     def test_testing_override_requires_both_flags_and_preserves_observed_refusal(self):
         for env in [{}, {'SPACEO_LIVE_TESTS': '1'}, {'SPACEO_TESTING_HOST': '1'},
                     {'SPACEO_LIVE_TESTS': '0', 'SPACEO_TESTING_HOST': '1'}]:
@@ -113,6 +136,15 @@ class HostHealthTests(unittest.TestCase):
             self.assertFalse(report['observedAdmitted'])
             self.assertTrue(report['testingOverride'])
             self.assertEqual(report['reasons'], ['recent_windowserver_diagnostic'])
+            quiet = health.apply_testing_override(dict(admitted=False, reasons=['swap_activity'],
+                                                       colorsyncCPUPercent=49.9))
+            self.assertTrue(quiet['admitted'])
+            # RA-057: measured ColorSync load is never waived; the override keeps the normal limit.
+            busy = health.apply_testing_override(dict(admitted=False, reasons=['colorsync_busy', 'swap_activity'],
+                                                      colorsyncCPUPercent=50.0))
+            self.assertFalse(busy['admitted'])
+            self.assertFalse(busy['observedAdmitted'])
+            self.assertEqual(busy['reasons'], ['colorsync_busy', 'swap_activity'])
             with mock.patch.object(health.sys, 'platform', 'unsupported'), \
                     mock.patch('sys.stdout', new_callable=io.StringIO) as output:
                 self.assertEqual(health.main(), 0)

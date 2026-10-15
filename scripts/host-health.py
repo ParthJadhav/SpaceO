@@ -333,16 +333,20 @@ def testing_override(environment=None):
     return environment.get("SPACEO_LIVE_TESTS") == "1" and environment.get("SPACEO_TESTING_HOST") == "1"
 
 
+# The override never waives measured ColorSync load (RA-057): every display attachment leaves
+# macOS polling ColorSync until logout, and runs that ignored it ended the login session. It
+# applies the normal 50% limit here; display changes separately wait for ColorSync below 25%.
 def apply_testing_override(report):
     if testing_override():
         report["observedAdmitted"] = report["admitted"]
         report["testingOverride"] = True
-        report["admitted"] = True
+        report["admitted"] = "colorsync_busy" not in report["reasons"]
     return report
 
 
 def main():
     unavailable_input = "platform"
+    measured_busy = False
     try:
         if sys.platform != "darwin":
             raise ValueError("requires macOS")
@@ -369,6 +373,7 @@ def main():
         reports = max(reports, windowserver_diagnostics(roots, cutoff))
         unavailable_input = "assessment"
         report = assess(before, after, reports)
+        measured_busy = "colorsync_busy" in report["reasons"]
         unavailable_input = "system_timeout_log"
         report["systemServiceTimeouts"] = windowserver_timeouts(since, time.time())
         if report["systemServiceTimeouts"]:
@@ -376,8 +381,10 @@ def main():
             report["admitted"] = False
     except (OSError, ValueError, subprocess.SubprocessError):
         # Do not print command output, process identities, or arbitrary exception content.
+        # A later input failing does not unmeasure ColorSync load already observed.
         report = apply_testing_override(dict(schemaVersion=1, admitted=False,
-            reasons=["host_health_unknown"], unavailableInput=unavailable_input))
+            reasons=["host_health_unknown"] + (["colorsync_busy"] if measured_busy else []),
+            unavailableInput=unavailable_input))
         report["consoleSessionDiagnostic"] = console_diagnostic()
         print(json.dumps(report))
         return 0 if report["admitted"] else 2

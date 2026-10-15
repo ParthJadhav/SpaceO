@@ -352,6 +352,8 @@ spaceo — give each agent its own screen, and leave the user's alone.
   spaceo safety <subcommand>             local operator recovery
   spaceo safety clear-host-health --operator
                                          recover an idle unknown-health, pressure or swap latch after stopping owners
+  spaceo safety clean-display-identities [--apply] --operator
+                                         list (or, with sudo, remove) ColorSync state left by older display identities
   spaceo doctor --fix [--yes]            apply the safe remediations doctor found
   spaceo clean [--dry-run] --operator    remove orphaned browser profiles and control roots
   spaceo events [--follow] [--since-seq N]  daemon event stream (agent actions, pauses, verdicts)
@@ -853,7 +855,16 @@ case "setup":
 
 case "safety":
     validateFlags("safety")
-    guard args.positional == ["clear-host-health"] else { fail("use safety clear-host-health --operator") }
+    if args.positional == ["clean-display-identities"] {
+        validateFlags("safety.clean-display-identities")
+        guard args.bool("operator") else {
+            fail("cleaning ColorSync display identities requires --operator; stop all SpaceO owners first")
+        }
+        runCleanDisplayIdentities(apply: args.bool("apply"))
+    }
+    guard args.positional == ["clear-host-health"] else {
+        fail("use safety clear-host-health --operator or safety clean-display-identities --operator")
+    }
     validateFlags("safety.clear-host-health")
     guard args.bool("operator") else { fail("clearing a host-health latch requires --operator; stop all SpaceO owners first") }
     do {
