@@ -6,6 +6,14 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+- A WindowServer crash or watchdog report from earlier in the boot no longer blocks display
+  creation until the Mac restarts. With display identities bounded and ColorSync residue removable
+  (RA-057), the owner retired that admission check: neither the daemon nor the live-test
+  preflight reads DiagnosticReports, and host-health reports drop `windowServerDiagnosticReports`
+  and the `recent_windowserver_diagnostic` reason. Current ColorSync load, memory pressure, swap
+  and creation budgets still refuse. A `recent_windowserver_diagnostic` latch recorded by 1.0.9
+  or earlier can be cleared with `spaceo safety clear-host-health --operator`.
+
 ## [1.0.9] - 2026-10-16
 
 - Stop growing macOS's display state with every virtual display (RA-057). SpaceO gave each
