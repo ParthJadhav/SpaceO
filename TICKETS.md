@@ -39,6 +39,9 @@ Status definitions:
   registry and left no polling behind.
   Version 1.0.9 ships the fix; see the
   [preparation record](docs/validation/2026-10-16-release-1.0.9.md).
+- Published 1.0.9 as latest from tag object `a963b58` (run 38881841629). The candidate and all five
+  public downloads passed independent verification; see the
+  [publication record](docs/validation/2026-10-16-publication-1.0.9.md).
 - Open: a normal-admission live run on the cleaned host. Normal admission refuses for the rest of
   this boot because of the 01:13 WindowServer watchdog report, so it needs a restart. See the
   [investigation record](docs/validation/2026-10-16-colorsync-display-identities.md).
