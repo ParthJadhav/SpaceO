@@ -15,7 +15,7 @@ unrestricted display-creation and live-testing posture after the September 25 in
 
 | ID | Severity | Status | Finding |
 |---|---:|---|---|
-| RA-057 | Critical | Root cause established; bounded identities in 1.0.9; host cleanup applied and verified; normal-admission live run pending a host restart | Repeated WindowServer/ColorSync stalls preceded a forced restart; current-counter preflight and passing XCTest assertions missed system degradation |
+| RA-057 | Critical | Fixed in 1.0.9 (bounded identities, residue cleanup); host cleanup and a normal-admission run verified on the development Mac | Repeated WindowServer/ColorSync stalls preceded a forced restart; current-counter preflight and passing XCTest assertions missed system degradation |
 | RA-056 | Medium | Prevention and 1.0.1 provenance migration verified; third-party historical copies remain outside repository control | Release examples and routine output repeated signing identity; live CI could publish raw host diagnostics and reports |
 | RA-055 | Critical | Containment implemented; 1.0.1 physical-display scope qualified; Apple defect unresolved | Virtual-display churn preceded ColorSync/WindowServer starvation and a repeatable Apple display-driver panic; cleanup deadline did not bound synchronous IPC |
 | RA-001 | Critical | Fixed; live regression coverage enabled | Local displays and input can freeze after repeated MCP/integration runs |
@@ -106,6 +106,18 @@ current boot. That refusal is intended and was not bypassed. The owner asked not
 version 1.0.9 ships the fix under a release-specific
 [qualification exception](docs/validation/2026-10-16-release-1.0.9.md). RA-057 stays open until a
 normal-admission live run on the cleaned host is retained after a restart.
+
+The owner then retired the WindowServer-report admission check
+([#62](https://github.com/ParthJadhav/SpaceO/pull/62)) and asked for a normal run without a
+restart. With the current boot's reports still on disk, a normal-admission CLI session was
+created on slot 0's existing identity with an `intact` isolation verdict. It pressed a button,
+and the session was destroyed. An MCP session followed, also `intact` across all six checks.
+Neither attachment wrote the ColorSync registry, and ColorSync answered only two requests per
+attachment or removal; see the
+[normal-admission runs](docs/validation/2026-10-16-colorsync-display-identities.md#normal-admission-runs-after-the-report-gate-was-retired).
+This meets RA-057's closing condition. Both daemons then latched `swap_activity` on this
+memory-constrained Mac and needed operator recovery. That gate is unchanged and is tracked
+separately.
 
 October 4 continued investigation measured approximately 31% combined ColorSync CPU with
 no SpaceO daemon, Viewer or virtual displays. Profile metadata stayed unchanged; ten guarded
