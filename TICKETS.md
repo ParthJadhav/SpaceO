@@ -35,6 +35,8 @@ Status definitions:
   `safety clean-display-identities`. The override now keeps the measured ColorSync gate.
 - Done: the root cleanup ran on this Mac with the owner's administrator access. It removed 525
   registrations and 763 profiles, and ColorSync's display requests stopped without a logout.
+  Two override lifecycles on the release source then reused one identity without writing the
+  registry and left no polling behind.
   Version 1.0.9 ships the fix; see the
   [preparation record](docs/validation/2026-10-16-release-1.0.9.md).
 - Open: a normal-admission live run on the cleaned host. Normal admission refuses for the rest of

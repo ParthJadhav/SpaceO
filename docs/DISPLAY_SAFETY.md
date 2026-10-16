@@ -151,9 +151,12 @@ other virtual-display tools and displays a person assigned a SpaceO profile are 
 that no remaining registration references. ColorSync reports success to a normal account while removing nothing, so
 root is required and the second listing, not the return value, decides the outcome. Listing
 the registry can take tens of seconds on an affected Mac; a listing that has not finished after
-three minutes refuses before any change, or reports the cleanup as unconfirmed after it. Log out and back in afterwards:
-until WindowServer restarts it keeps asking ColorSync about every display attached since login,
-about two requests every five seconds per attachment, even after the display is gone.
+three minutes refuses before any change, or reports the cleanup as unconfirmed after it. Log out and back in afterwards.
+With the stale registrations present, WindowServer kept asking ColorSync about every display
+attached since login, about two requests every five seconds per attachment, even after the
+display was gone. On the one Mac measured, those requests stopped as soon as the cleanup finished
+and a later attachment left none behind, but that is a single observation, so logging out
+remains the procedure.
 Do not delete WindowServer's display preferences; that resets the arrangement of physical
 displays and is not needed.
 

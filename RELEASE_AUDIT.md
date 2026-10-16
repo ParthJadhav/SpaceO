@@ -82,8 +82,10 @@ by live testing under the testing-host override, which then waived ColorSync loa
 - **Registry growth.** Every random per-attachment serial left a permanent ColorSync registration,
   profile and WindowServer mapping. ColorSync re-parses that registry for each display request,
   so every request got more expensive.
-- **Polls that persist until logout.** WindowServer keeps two requests every 5.05 seconds for
-  every display attached since login.
+- **Polls that persist until logout.** With the stale registrations present, WindowServer kept two
+  requests every 5.05 seconds for every display attached since login. After the cleanup on this
+  host they stopped without a logout, and a new attachment left none; that is a single-host
+  observation, and logging out remains the documented procedure.
 
 Display serials now come from a bounded, deterministic per-geometry set. A poisoned identity is
 retired by a persisted generation. Doctor reports leftover identities, and an owner-run root

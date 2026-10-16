@@ -35,8 +35,9 @@ against a simulated ColorSync and then applied on the development Mac (Apple Sil
 - Before cleanup ColorSync served about two display requests a second at about 95 ms of CPU
   each (19% of a core). Right after it, the requests stopped and both ColorSync processes
   stayed at 0% CPU, without logging out.
-- A controlled live experiment confirmed that re-creating a display reuses its identity with no
-  new registration, profile or WindowServer mapping.
+- Two live session lifecycles on the release source, under the testing-host override, passed.
+  The second display reused the first one's identity without writing the ColorSync registry.
+  Each produced three ColorSync requests (attach, session, removal) and left no polling behind.
 
 This is an owner-directed maintenance release with a qualification exception. After the fix
 merged, the owner instructed: "do everything which is needed" and "do not log out though". The
