@@ -162,6 +162,14 @@ run. It does not relabel them as passed or approve a runtime safety bypass. See 
 unauthenticated public downloads passed provenance and distribution verification through the
 normal protected approvals; see the [publication record](validation/2026-10-16-publication-1.0.9.md).
 
+After publication, by owner direction, [#62](https://github.com/ParthJadhav/SpaceO/pull/62) retired
+the WindowServer-report admission check in source; 1.0.9 still has it. A normal-admission run on
+the cleaned development Mac then met RA-057's closing condition, recorded in the
+[normal-admission runs](validation/2026-10-16-colorsync-display-identities.md#normal-admission-runs-after-the-report-gate-was-retired).
+That run used a source build, not the signed 1.0.9 artifact. It does not close 1.0.9's other
+gaps: the full live suite, the computer-use matrix and signed-artifact behavior qualification
+remain missing.
+
 Version `1.0.8` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.8)
 as an **owner-directed maintenance release with a qualification exception**. On October 15, 2026, after the open issues and pull requests were handled and two
 newly found issues were filed, the owner instructed: **"Fix the issues which came up as well and
