@@ -54,12 +54,13 @@ final class DoctorReportTests: XCTestCase {
 
     func testOnlyEligibleHealthLatchesOfferOperatorRecovery() {
         for reason in ["host health: host_health_unknown", "host health: swap_activity",
-                       "host health: memory_pressure,swap_activity"] {
+                       "host health: memory_pressure,swap_activity", "host health: recent_windowserver_diagnostic",
+                       "host health: swap_activity,recent_windowserver_diagnostic"] {
             var report = Self.report(daemon: .notRunning)
             report.displaySafety = .init(state: .blocked, reason: reason)
             XCTAssertTrue(report.blockers.contains { $0.next.contains("safety clear-host-health") }, reason)
         }
-        for reason in ["host health: swap_activity,recent_windowserver_diagnostic", "host health: colorsync_busy",
+        for reason in ["host health: recent_windowserver_diagnostic,colorsync_busy", "host health: colorsync_busy",
                        "a display operation exceeded its deadline"] {
             var report = Self.report(daemon: .notRunning)
             report.displaySafety = .init(state: .blocked, reason: reason)

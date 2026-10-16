@@ -66,7 +66,6 @@ class HostHealthTests(unittest.TestCase):
                     mock.patch.object(health.time, 'monotonic', return_value=100), \
                     mock.patch.object(health.time, 'sleep'), \
                     mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
-                    mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
                     mock.patch.object(health, 'snapshot', side_effect=self.samples()), \
                     mock.patch.object(health, 'windowserver_timeouts', return_value=0), \
                     mock.patch.object(health, 'console_diagnostic', return_value=diagnostic), \
@@ -78,7 +77,7 @@ class HostHealthTests(unittest.TestCase):
             self.assertEqual(report['consoleSessionDiagnostic'], diagnostic)
 
     def test_unknown_observation_identifies_only_fixed_input_stage(self):
-        for stage in ['boot_time', 'sample_before', 'sample_after', 'system_timeout_log']:
+        for stage in ['sample_before', 'sample_after', 'system_timeout_log']:
             output = io.StringIO()
             failure = OSError('private command output must stay private')
             before, after = self.samples()
@@ -90,9 +89,7 @@ class HostHealthTests(unittest.TestCase):
                     mock.patch.object(health.time, 'time', return_value=200000), \
                     mock.patch.object(health.time, 'monotonic', return_value=100), \
                     mock.patch.object(health.time, 'sleep'), \
-                    mock.patch.object(health, 'read_command', side_effect=failure if stage == 'boot_time' else None,
-                                      return_value='{ sec = 1, usec = 0 }'), \
-                    mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
+                    mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
                     mock.patch.object(health, 'snapshot', side_effect=samples), \
                     mock.patch.object(health, 'windowserver_timeouts', side_effect=failure), \
                     mock.patch.object(health.sys, 'stdout', output):
@@ -115,7 +112,6 @@ class HostHealthTests(unittest.TestCase):
                 mock.patch.object(health.time, 'monotonic', return_value=100), \
                 mock.patch.object(health.time, 'sleep'), \
                 mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
-                mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
                 mock.patch.object(health, 'snapshot', side_effect=[before, after]), \
                 mock.patch.object(health, 'assess', return_value=busy), \
                 mock.patch.object(health, 'windowserver_timeouts', side_effect=failure), \
@@ -131,11 +127,11 @@ class HostHealthTests(unittest.TestCase):
                     {'SPACEO_LIVE_TESTS': '0', 'SPACEO_TESTING_HOST': '1'}]:
             self.assertFalse(health.testing_override(env))
         with mock.patch.dict(os.environ, {'SPACEO_LIVE_TESTS': '1', 'SPACEO_TESTING_HOST': '1'}):
-            report = health.apply_testing_override(dict(admitted=False, reasons=['recent_windowserver_diagnostic']))
+            report = health.apply_testing_override(dict(admitted=False, reasons=['memory_pressure']))
             self.assertTrue(report['admitted'])
             self.assertFalse(report['observedAdmitted'])
             self.assertTrue(report['testingOverride'])
-            self.assertEqual(report['reasons'], ['recent_windowserver_diagnostic'])
+            self.assertEqual(report['reasons'], ['memory_pressure'])
             quiet = health.apply_testing_override(dict(admitted=False, reasons=['swap_activity'],
                                                        colorsyncCPUPercent=49.9))
             self.assertTrue(quiet['admitted'])
@@ -175,51 +171,13 @@ class HostHealthTests(unittest.TestCase):
     def test_quiet_host_with_old_swap_is_admitted(self):
         self.assertTrue(health.assess(*self.samples())['admitted'])
 
-    def test_windowserver_report_refuses_even_when_current_counters_are_quiet(self):
-        report = health.assess(*self.samples(), diagnostic_reports=2)
-        self.assertFalse(report['admitted'])
-        self.assertEqual(report['reasons'], ['recent_windowserver_diagnostic'])
-        self.assertEqual(report['windowServerDiagnosticReports'], 2)
-
-    def test_incident_window_includes_this_boot_and_at_least_one_day(self):
-        now = 200000
-        self.assertEqual(health.diagnostic_cutoff('{ sec = 199900, usec = 0 }', now), now - 86400)
-        self.assertEqual(health.diagnostic_cutoff('{ sec = 100, usec = 0 }', now), 100)
-        for value in ['', 'sec = 0', 'sec = 200001', 'sec = 1 sec = 2']:
-            with self.assertRaises(ValueError): health.diagnostic_cutoff(value, now)
-
-    def test_post_boot_report_never_ages_out_in_the_same_boot(self):
-        boot, report = 1_000_000, 1_003_600
-        for hours in [2, 14, 23, 24, 25, 48, 720]:
-            cutoff = health.diagnostic_cutoff(f'{{ sec = {boot}, usec = 0 }}', boot + hours * 3600)
-            self.assertGreaterEqual(report, cutoff)
-
-    def test_metadata_scan_includes_retired_reports_without_reading_contents(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / 'Retired').mkdir()
-            for name, modified in [('WindowServer-new.ips', 101), ('WindowServer-old.crash', 99),
-                                   ('Retired/WindowServer_new.userspace_watchdog_timeout.spin', 100),
-                                   ('Unrelated-new.ips', 101)]:
-                path = root / name
-                path.write_bytes(b'not parsed or published')
-                os.utime(path, (modified, modified))
-            self.assertEqual(health.windowserver_diagnostics([(root, True), (root/'absent', False)], 100), 2)
-            with self.assertRaises(ValueError):
-                health.windowserver_diagnostics([(root/'absent', True)], 100)
-            (root / 'WindowServer-linked.ips').symlink_to(root/'WindowServer-new.ips')
-            with self.assertRaises(ValueError): health.windowserver_diagnostics([(root, True)], 100)
-
-    def test_unknown_or_over_budget_history_cannot_admit(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root/'unrelated').touch()
-            with mock.patch.object(health, 'MAX_DIAGNOSTIC_ENTRIES', 0):
-                with self.assertRaises(ValueError): health.windowserver_diagnostics([(root, True)], 0)
-            with mock.patch.object(health.os, 'scandir', side_effect=PermissionError):
-                with self.assertRaises(OSError): health.windowserver_diagnostics([(root, True)], 0)
-            with mock.patch.object(health.time, 'monotonic', side_effect=[0, 4]):
-                with self.assertRaises(ValueError): health.windowserver_diagnostics([(root, True)], 0)
+    def test_past_windowserver_reports_are_not_an_admission_input(self):
+        # A WindowServer report from earlier in the boot no longer refuses a quiet host.
+        report = health.assess(*self.samples())
+        self.assertTrue(report['admitted'])
+        self.assertNotIn('windowServerDiagnosticReports', report)
+        for name in ['windowserver_diagnostics', 'diagnostic_cutoff', 'MAX_DIAGNOSTIC_ENTRIES']:
+            self.assertFalse(hasattr(health, name), name)
 
     def test_cpu_counter_formats_and_service_filtering(self):
         for value, expected in [('403:18.33', 24198.33), ('01:02:03.5', 3723.5), ('2-01:02:03', 176523)]:
@@ -445,7 +403,6 @@ class HostHealthTests(unittest.TestCase):
                 mock.patch.object(health.time, 'time', return_value=200000), \
                 mock.patch.object(health.time, 'sleep', side_effect=sleep), \
                 mock.patch.object(health, 'read_command', return_value='{ sec = 1, usec = 0 }'), \
-                mock.patch.object(health, 'windowserver_diagnostics', return_value=0), \
                 mock.patch.object(health, 'windowserver_timeouts', return_value=0), \
                 mock.patch.object(health, 'snapshot', side_effect=snapshot), \
                 mock.patch.object(health.sys, 'stdout', output):

@@ -4,11 +4,9 @@ import json
 from datetime import datetime, timezone
 import math
 import os
-from pathlib import Path
 import plistlib
 import re
 import selectors
-import stat
 import subprocess
 import sys
 import time
@@ -16,7 +14,6 @@ from xml.parsers.expat import ExpatError
 
 SERVICES = ("/usr/libexec/colorsync.displayservices", "/usr/libexec/colorsyncd")
 MAX_OUTPUT = 1024 * 1024
-MAX_DIAGNOSTIC_ENTRIES = 10000
 # Whole snapshot budget, mirroring the native sampler; each helper gets only what remains.
 SNAPSHOT_BUDGET = 2.5
 IDLE_EXIT = "JETSAM_REASON_MEMORY_IDLE_EXIT"
@@ -206,47 +203,6 @@ def service_sample(until):
     return at, result
 
 
-def diagnostic_cutoff(boot_text, now):
-    values = re.findall(r"\bsec\s*=\s*(\d+)\b", boot_text)
-    if len(values) != 1 or not math.isfinite(now) or not 0 < int(values[0]) <= now:
-        raise ValueError("boot time unavailable")
-    # A restart must not immediately erase the admission warning. Keep the whole current
-    # boot, or the last 24 hours when that is longer. This is not an automatic recovery gate.
-    return min(int(values[0]), now - 24 * 3600)
-
-
-def windowserver_diagnostics(roots, since):
-    """Count recent report metadata only; never read or emit diagnostic contents/names."""
-    count = scanned = 0
-    deadline = time.monotonic() + 3
-    for root, required in roots:
-        for directory, must_exist in ((root, required), (root / "Retired", False)):
-            try:
-                info = directory.lstat()
-            except FileNotFoundError:
-                if must_exist:
-                    raise ValueError("diagnostic directory unavailable")
-                continue
-            if not stat.S_ISDIR(info.st_mode):
-                raise ValueError("diagnostic directory is not a directory")
-            with os.scandir(directory) as entries:
-                for entry in entries:
-                    scanned += 1
-                    if scanned > MAX_DIAGNOSTIC_ENTRIES or time.monotonic() > deadline:
-                        raise ValueError("diagnostic scan exceeded budget")
-                    if not (entry.name.startswith(("WindowServer-", "WindowServer_"))
-                            and entry.name.endswith((".ips", ".spin", ".crash", ".diag", ".hang"))):
-                        continue
-                    info = entry.stat(follow_symlinks=False)
-                    if not stat.S_ISREG(info.st_mode) or not math.isfinite(info.st_mtime):
-                        raise ValueError("diagnostic metadata unavailable")
-                    if info.st_mtime >= since:
-                        count += 1
-    if time.monotonic() > deadline:
-        raise ValueError("diagnostic scan exceeded budget")
-    return count
-
-
 def snapshot():
     until = time.monotonic() + SNAPSHOT_BUDGET
     pressure = read_command(["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"], until).strip()
@@ -282,7 +238,7 @@ def windowserver_timeouts(since, now):
     return len(rows)
 
 
-def assess(before, after, diagnostic_reports=0):
+def assess(before, after):
     elapsed = after["at"] - before["at"]
     if not math.isfinite(elapsed) or not 4 <= elapsed <= 10:
         raise ValueError("insufficient sampling interval")
@@ -319,13 +275,10 @@ def assess(before, after, diagnostic_reports=0):
         reasons.append("colorsync_busy")
     if any(swap.values()):
         reasons.append("swap_activity")
-    if diagnostic_reports:
-        reasons.append("recent_windowserver_diagnostic")
     return dict(schemaVersion=1, admitted=not reasons, reasons=reasons,
                 intervalSeconds=round(elapsed, 3), colorsyncCPUPercent=round(cpu, 2),
                 memoryPressureBefore=before["pressure"], memoryPressureAfter=after["pressure"],
-                swapinsDelta=swap["Swapins"], swapoutsDelta=swap["Swapouts"],
-                windowServerDiagnosticReports=diagnostic_reports)
+                swapinsDelta=swap["Swapins"], swapoutsDelta=swap["Swapouts"])
 
 
 def testing_override(environment=None):
@@ -357,22 +310,14 @@ def main():
             since = float(sys.argv[2])
         else:
             raise ValueError("expected optional --since epoch-seconds")
-        unavailable_input = "boot_time"
-        cutoff = diagnostic_cutoff(read_command(["/usr/sbin/sysctl", "-n", "kern.boottime"]), time.time())
-        roots = [(Path("/Library/Logs/DiagnosticReports"), True),
-                 (Path.home() / "Library/Logs/DiagnosticReports", False)]
-        unavailable_input = "diagnostic_metadata"
-        reports = windowserver_diagnostics(roots, cutoff)
         unavailable_input = "sample_before"
         before = snapshot()
         # Final launchd validation may already have consumed part of the spacing interval.
         time.sleep(max(0, before["at"] + 5 - time.monotonic()))
         unavailable_input = "sample_after"
         after = snapshot()
-        unavailable_input = "diagnostic_metadata"
-        reports = max(reports, windowserver_diagnostics(roots, cutoff))
         unavailable_input = "assessment"
-        report = assess(before, after, reports)
+        report = assess(before, after)
         measured_busy = "colorsync_busy" in report["reasons"]
         unavailable_input = "system_timeout_log"
         report["systemServiceTimeouts"] = windowserver_timeouts(since, time.time())

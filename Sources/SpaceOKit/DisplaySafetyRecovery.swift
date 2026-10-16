@@ -1,7 +1,8 @@
 import Foundation
 
-/// Local operator recovery for an idle unknown-health, pressure or swap latch. This never
-/// resets a pending display mutation, a system incident, or a journal locked by a display owner.
+/// Local operator recovery for an idle unknown-health, pressure, swap or older WindowServer-report
+/// latch. This never resets a pending display mutation, a system incident, or a journal locked by a
+/// display owner.
 public enum DisplaySafetyRecovery {
     private static let worker = DisplayLifecycleCoordinator()
     /// One abort at a time: a stalled abort cannot grow a thread pool; later aborts report unknown.

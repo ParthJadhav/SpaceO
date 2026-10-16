@@ -491,7 +491,8 @@ command surface offline with `spaceo schema --json` or any subcommand's `--help`
 ### Recover an idle host-health latch
 
 `spaceo safety clear-host-health --operator` is local operator recovery for an idle
-unknown-health, memory-pressure or swap latch, after upgrading and stopping all display owners.
+unknown-health, memory-pressure or swap latch, or a WindowServer-report latch recorded by SpaceO
+1.0.9 or earlier, after upgrading and stopping all display owners.
 Current health must be ready and settled. It preserves creation budgets and refuses incident
 or timeout faults, pending work, online SpaceO displays, or unhealthy observations. Follow [DISPLAY_SAFETY.md](DISPLAY_SAFETY.md) first.
 

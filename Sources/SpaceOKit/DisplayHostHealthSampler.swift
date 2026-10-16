@@ -49,12 +49,6 @@ enum DisplayHostHealthSampler {
         var pressureSize = MemoryLayout.size(ofValue: pressure)
         guard sysctlbyname("kern.memorystatus_vm_pressure_level", &pressure, &pressureSize, nil, 0) == 0,
               pressureSize == MemoryLayout.size(ofValue: pressure) else { throw Unknown("memory_pressure_unreadable") }
-        var boot = timeval()
-        var bootSize = MemoryLayout.size(ofValue: boot)
-        guard sysctlbyname("kern.boottime", &boot, &bootSize, nil, 0) == 0,
-              bootSize == MemoryLayout.size(ofValue: boot) else { throw Unknown("boot_time") }
-        let now = Date().timeIntervalSince1970
-        guard boot.tv_sec > 0, Double(boot.tv_sec) <= now else { throw Unknown("boot_time") }
 
         var vm = vm_statistics64_data_t()
         var count = mach_msg_type_number_t(MemoryLayout.size(ofValue: vm) / MemoryLayout<integer_t>.size)
@@ -67,27 +61,10 @@ enum DisplayHostHealthSampler {
             }
         }
         guard result == KERN_SUCCESS, count == expectedCount else { throw Unknown("vm_statistics") }
-        let reports: Int
-        let cutoff = try diagnosticCutoff(boot: Double(boot.tv_sec), now: now)
-        let metadataTimeout = try deadline.remaining(atMost: 1)
-        do { reports = try diagnosticReports(
-            roots: [("/Library/Logs/DiagnosticReports", true),
-                    (FileManager.default.homeDirectoryForCurrentUser
-                        .appendingPathComponent("Library/Logs/DiagnosticReports").path, false)],
-            since: cutoff, timeout: metadataTimeout)
-        } catch { throw Unknown("windowserver_diagnostic_metadata") }
         let counters = try serviceSample(deadline: deadline)
         _ = try deadline.remaining()
         return .init(uptime: counters.uptime, pressure: pressure,
-                     swapins: vm.swapins, swapouts: vm.swapouts, services: counters.services,
-                     diagnosticReports: reports)
-    }
-
-    static func diagnosticCutoff(boot: TimeInterval, now: TimeInterval) throws -> TimeInterval {
-        guard boot.isFinite, now.isFinite, boot > 0, boot <= now else { throw Unknown("boot_time") }
-        // A report written during this boot stays relevant for the entire boot, even after
-        // twenty-four hours. Passing time alone must not turn an incident into recovery.
-        return min(boot, now - 86_400)
+                     swapins: vm.swapins, swapouts: vm.swapouts, services: counters.services)
     }
 
     static func launchdLabel(_ service: String) -> String {
@@ -242,45 +219,6 @@ enum DisplayHostHealthSampler {
         // A successful full listing may contain neither on-demand service; launchd evidence
         // in serviceSample decides whether an absent service is a verified idle state.
         return counters
-    }
-
-    static func diagnosticReports(roots: [(String, Bool)], since: TimeInterval,
-                                  maximumEntries: Int = 10_000, timeout: TimeInterval = 1) throws -> Int {
-        guard since.isFinite else { throw Unknown() }
-        let deadline = ProcessInfo.processInfo.systemUptime + timeout
-        var scanned = 0, reports = 0
-        for (root, required) in roots {
-            for (path, mustExist) in [(root, required), (root + "/Retired", false)] {
-                var info = stat()
-                if lstat(path, &info) != 0 {
-                    if errno == ENOENT && !mustExist { continue }
-                    throw Unknown()
-                }
-                guard info.st_mode & S_IFMT == S_IFDIR, let directory = opendir(path) else { throw Unknown() }
-                defer { closedir(directory) }
-                while true {
-                    errno = 0
-                    guard let entry = readdir(directory) else {
-                        guard errno == 0 else { throw Unknown() }
-                        break
-                    }
-                    scanned += 1
-                    guard scanned <= maximumEntries, ProcessInfo.processInfo.systemUptime < deadline else { throw Unknown() }
-                    let name = withUnsafeBytes(of: entry.pointee.d_name) {
-                        String(decoding: $0.prefix(Int(entry.pointee.d_namlen)), as: UTF8.self)
-                    }
-                    guard name.hasPrefix("WindowServer-") || name.hasPrefix("WindowServer_") else { continue }
-                    guard [".ips", ".spin", ".crash", ".diag", ".hang"].contains(where: name.hasSuffix) else { continue }
-                    guard fstatat(dirfd(directory), name, &info, AT_SYMLINK_NOFOLLOW) == 0,
-                          info.st_mode & S_IFMT == S_IFREG else { throw Unknown() }
-                    if Double(info.st_mtimespec.tv_sec) + Double(info.st_mtimespec.tv_nsec) / 1e9 >= since {
-                        reports += 1
-                    }
-                }
-            }
-        }
-        guard ProcessInfo.processInfo.systemUptime < deadline else { throw Unknown() }
-        return reports
     }
 
     // Injectable command only inside the module, for inert process/pipe regression fixtures.
