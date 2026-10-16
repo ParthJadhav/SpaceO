@@ -97,15 +97,10 @@ A cold monitor or a recent graph change needs three fresh raw samples to establi
 intervals; creation may refuse within its 15-second budget. Retrying after the monitor settles
 does not require resetting a real health fault.
 
-Admission also checks bounded WindowServer report metadata in system/user diagnostic directories
-and their `Retired` directories. A report modified in the current boot or last 24 hours,
-whichever is longer, refuses admission; unreadable or over-budget metadata refuses as unknown.
-In particular, a report written after boot remains relevant for that entire boot; waiting
-24 hours alone cannot clear it.
-No report contents are read. This conservative check survives a restart but is not proof of
-recovery when the interval expires. XCTest checks again after each 90-second pacing interval,
-before display work, and after verified cleanup. Its wrapper provides the required helper and
-requires a final passing health sample even if all case assertions pass. A health refusal after
+Admission does not read WindowServer diagnostic reports: a report from earlier in the boot no
+longer refuses until the Mac restarts. XCTest checks health again after each 90-second pacing
+interval, before display work, and after verified cleanup. Its wrapper provides the required
+helper and requires a final passing health sample even if all case assertions pass. A health refusal after
 verified cleanup fails the run without suspending a safely retired display owner.
 
 All three harnesses require a final passing health check. The helper also counts WindowServer

@@ -151,7 +151,7 @@ public enum CLIHelp {
         "completions": "Print a shell completion script generated from the command table.",
         "setup": "Guided first run: permission grants, daemon, self-test, and MCP registration.",
         "safety": "Operator recovery for a false host-health admission latch, and cleanup of ColorSync state left by older display identities.",
-        "safety.clear-host-health": "Clear an idle unknown-health, memory-pressure or swap latch only after verified owner exclusion and settled healthy host observations.",
+        "safety.clear-host-health": "Clear an idle unknown-health, memory-pressure, swap or older WindowServer-report latch only after verified owner exclusion and settled healthy host observations.",
         "safety.clean-display-identities": "List the ColorSync device registrations and display profiles that SpaceO 1.0.8 and earlier left behind; with --apply under sudo, back them up and remove them.",
         "doctor": "Check host capabilities, permissions, the daemon, MCP clients, the Viewer, and disk use.",
         "skill": "Print the SKILL.md playbook for agents.",

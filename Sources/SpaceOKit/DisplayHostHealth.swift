@@ -8,7 +8,6 @@ public struct DisplayHostHealthReport: Codable, Sendable, Equatable {
     public var memoryPressure: UInt32?
     public var swapinsDelta: UInt64?
     public var swapoutsDelta: UInt64?
-    public var windowServerDiagnosticReports: Int?
     public var unavailableInput: String?
     /// Explicit reserved-host diagnostic run; ready is overridden, not sampled health.
     public var testingOverride: Bool? = nil
@@ -41,14 +40,12 @@ struct DisplayHostHealthSample: Sendable {
     let swapins: UInt64
     let swapouts: UInt64
     let services: [String: Service]
-    let diagnosticReports: Int
 
     static func assess(_ before: Self, _ after: Self) throws -> DisplayHostHealthReport {
         let elapsed = after.uptime - before.uptime
         guard elapsed.isFinite, (4...10).contains(elapsed),
               [1, 2, 4].contains(before.pressure), [1, 2, 4].contains(after.pressure),
               before.swapins <= after.swapins, before.swapouts <= after.swapouts,
-              before.diagnosticReports >= 0, after.diagnosticReports >= 0,
               Set(before.services.keys) == Set(DisplayHostHealthSampler.services),
               Set(after.services.keys) == Set(DisplayHostHealthSampler.services) else { throw Unknown("sampling_interval_or_counters") }
         var cpu = 0.0
@@ -76,16 +73,13 @@ struct DisplayHostHealthSample: Sendable {
         }
         guard cpu.isFinite else { throw Unknown() }
         let swapins = after.swapins - before.swapins, swapouts = after.swapouts - before.swapouts
-        let reports = max(before.diagnosticReports, after.diagnosticReports)
         var reasons: [String] = []
         if before.pressure != 1 || after.pressure != 1 { reasons.append("memory_pressure") }
         if cpu >= 50 { reasons.append("colorsync_busy") }
         if swapins > 0 || swapouts > 0 { reasons.append("swap_activity") }
-        if reports > 0 { reasons.append("recent_windowserver_diagnostic") }
         return .init(state: reasons.isEmpty ? .ready : .blocked, reasons: reasons,
                      colorsyncCPUPercent: cpu, memoryPressure: after.pressure,
-                     swapinsDelta: swapins, swapoutsDelta: swapouts,
-                     windowServerDiagnosticReports: reports)
+                     swapinsDelta: swapins, swapoutsDelta: swapouts)
     }
 
     struct Unknown: Error {
@@ -331,16 +325,15 @@ final class DisplayHostHealth: @unchecked Sendable {
             guard current.state != .blocked else { return }
             inFlightSince = nil
             guard next.uptime.isFinite, abs(now() - next.uptime) <= 3,
-                  next.diagnosticReports >= 0, [1, 2, 4].contains(next.pressure) else {
+                  [1, 2, 4].contains(next.pressure) else {
                 failed = "host_health_unknown"; return
             }
             // Pace from the CPU observation, rather than trailing validation completion.
             // Each next observation is at least five seconds later without adding both
             // captures' helper budgets to the policy's maximum sampling interval.
             lastAttempt = next.uptime
-            // A known incident/pressure does not need another five seconds to refuse admission.
-            if next.diagnosticReports > 0 { failed = "recent_windowserver_diagnostic" }
-            else if next.pressure != 1 { failed = "memory_pressure" }
+            // Known pressure does not need another five seconds to refuse admission.
+            if next.pressure != 1 { failed = "memory_pressure" }
             else if let previous {
                 do {
                     let assessment = try DisplayHostHealthSample.assess(previous, next)
@@ -362,16 +355,12 @@ final class DisplayHostHealth: @unchecked Sendable {
                 } catch { failed = "host_health_unknown" }
             }
             self.previous = next
-            if failed != nil {
-                current.memoryPressure = next.pressure
-                current.windowServerDiagnosticReports = next.diagnosticReports
-            }
+            if failed != nil { current.memoryPressure = next.pressure }
         }
         if let failed { fail(failed) }
     }
 
-    /// The reserved-testing override waives memory pressure, swap, WindowServer diagnostics and
-    /// sticky faults, but not measured ColorSync load (RA-057): every display attachment leaves
+    /// The reserved-testing override waives memory pressure, swap and sticky faults, but not measured ColorSync load (RA-057): every display attachment leaves
     /// macOS polling ColorSync until logout, and diagnostic runs that ignored this load saturated
     /// ColorSync until WindowServer's watchdog ended the login session. A graph change needs a quiet
     /// interval measured entirely after the previous change, and a busy interval needs two quiet ones.

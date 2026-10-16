@@ -24,10 +24,10 @@ final class DisplayHostHealthTests: XCTestCase {
         let clock = Clock()
         let health = DisplayHostHealth(testingOverride: true, sample: { throw DisplayHostHealthSample.Unknown() },
                                        now: { clock.value })
-        // Pressure, swap and WindowServer diagnostics are waived; quiet intervals settle.
-        feed(health, clock, sample(100, cpu: 10, pressure: 4, swap: 50, reports: 3))
-        feed(health, clock, sample(105, cpu: 10.5, pressure: 4, swap: 90, reports: 3))
-        feed(health, clock, sample(110, cpu: 11, pressure: 4, swap: 120, reports: 3))
+        // Pressure and swap are waived; quiet intervals settle.
+        feed(health, clock, sample(100, cpu: 10, pressure: 4, swap: 50))
+        feed(health, clock, sample(105, cpu: 10.5, pressure: 4, swap: 90))
+        feed(health, clock, sample(110, cpu: 11, pressure: 4, swap: 120))
         try health.requireStillSettledForReconfiguration()
         XCTAssertEqual(health.report.state, .ready)
         XCTAssertEqual(health.report.reasons, ["testing_override"])
@@ -144,18 +144,17 @@ final class DisplayHostHealthTests: XCTestCase {
     }
 
     private func sample(_ time: Double = 100, cpu: Double = 10, pressure: UInt32 = 1,
-                        swap: UInt64 = 50, reports: Int = 0, pid: Int32 = 1,
+                        swap: UInt64 = 50, pid: Int32 = 1,
                         start: String = "start", launches: UInt64 = 1) -> DisplayHostHealthSample {
         .init(uptime: time, pressure: pressure, swapins: swap, swapouts: 100,
               services: Dictionary(uniqueKeysWithValues: DisplayHostHealthSampler.services.enumerated().map {
                   ($0.element, .running(pid: pid + Int32($0.offset), start: start, cpuSeconds: cpu, launches: launches))
-              }), diagnosticReports: reports)
+              }))
     }
 
     private func sample(_ time: Double, _ services: [DisplayHostHealthSample.Service]) -> DisplayHostHealthSample {
         .init(uptime: time, pressure: 1, swapins: 50, swapouts: 100,
-              services: Dictionary(uniqueKeysWithValues: zip(DisplayHostHealthSampler.services, services)),
-              diagnosticReports: 0)
+              services: Dictionary(uniqueKeysWithValues: zip(DisplayHostHealthSampler.services, services)))
     }
 
     private func assertUnknown<T>(_ expression: @autoclosure () throws -> T, _ reason: String,
@@ -185,12 +184,11 @@ final class DisplayHostHealthTests: XCTestCase {
                 "last exit code = (never exited)", "job state = running"], service: service)
     }
 
-    func testPolicyRejectsPressureSwapBusyColorSyncAndIncidentReports() throws {
+    func testPolicyRejectsPressureSwapAndBusyColorSync() throws {
         XCTAssertEqual(try DisplayHostHealthSample.assess(sample(), sample(105)).state, .ready)
         for (after, reason) in [(sample(105, cpu: 11.25), "colorsync_busy"),
                                 (sample(105, pressure: 2), "memory_pressure"),
-                                (sample(105, swap: 51), "swap_activity"),
-                                (sample(105, reports: 1), "recent_windowserver_diagnostic")] {
+                                (sample(105, swap: 51), "swap_activity")] {
             let report = try DisplayHostHealthSample.assess(sample(), after)
             XCTAssertEqual(report.state, .blocked)
             XCTAssertTrue(report.reasons.contains(reason))
@@ -252,12 +250,22 @@ final class DisplayHostHealthTests: XCTestCase {
         XCTAssertEqual(monitor.report.state, .blocked)
     }
 
-    func testIncidentRefusesWithoutWaitingForSecondSample() {
+    func testPressureRefusesWithoutWaitingForSecondSample() {
         let clock = Clock()
         let monitor = DisplayHostHealth(now: { clock.value })
-        monitor.accept(sample(reports: 1))
-        XCTAssertEqual(monitor.report.reasons, ["recent_windowserver_diagnostic"])
+        monitor.accept(sample(pressure: 2))
+        XCTAssertEqual(monitor.report.reasons, ["memory_pressure"])
         XCTAssertThrowsError(try monitor.requireHealthy())
+    }
+
+    func testPastWindowServerReportsAreNotAnAdmissionInput() throws {
+        // Owner direction (October 16, 2026): a WindowServer report from earlier in the boot no
+        // longer refuses display creation; current ColorSync, pressure and swap still do.
+        let report = try DisplayHostHealthSample.assess(sample(), sample(105))
+        XCTAssertEqual(report.state, .ready)
+        let encoded = String(decoding: try JSONEncoder().encode(report), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("windowServerDiagnosticReports"))
+        XCTAssertFalse(encoded.contains("recent_windowserver_diagnostic"))
     }
 
     func testSamplerDoesNotStartBeforeFiveSecondsAfterObservation() {
@@ -285,7 +293,7 @@ final class DisplayHostHealthTests: XCTestCase {
             sampled.fulfill()
             return .init(uptime: clock.value, pressure: first.pressure,
                          swapins: first.swapins, swapouts: first.swapouts,
-                         services: first.services, diagnosticReports: first.diagnosticReports)
+                         services: first.services)
         }, now: { clock.value })
         monitor.accept(first)
         // A one-second timer can land almost a second after the five-second spacing.
@@ -506,7 +514,7 @@ final class DisplayHostHealthTests: XCTestCase {
                     : self.record(Self.neverStartedFields, service: names[1])
             }
             return .init(uptime: observation.uptime, pressure: 1, swapins: 0, swapouts: 0,
-                         services: observation.services, diagnosticReports: 0)
+                         services: observation.services)
         }
         let before = try observe()
         XCTAssertEqual(before.uptime, 100.1, accuracy: 0.0001)
@@ -569,18 +577,6 @@ final class DisplayHostHealthTests: XCTestCase {
         wait(for: [failed], timeout: 1)
         XCTAssertEqual(monitor.report.reasons, ["host_health_unknown"])
         XCTAssertEqual(monitor.report.unavailableInput, "vm_statistics")
-    }
-
-    func testMetadataScanIsBoundedAndRejectsSymlinks() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let report = root.appendingPathComponent("WindowServer-example.ips")
-        try Data("unread report content".utf8).write(to: report)
-        XCTAssertEqual(try DisplayHostHealthSampler.diagnosticReports(roots: [(root.path, true)], since: 0), 1)
-        XCTAssertThrowsError(try DisplayHostHealthSampler.diagnosticReports(roots: [(root.path, true)], since: 0, maximumEntries: 0))
-        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("WindowServer-link.ips"), withDestinationURL: report)
-        XCTAssertThrowsError(try DisplayHostHealthSampler.diagnosticReports(roots: [(root.path, true)], since: 0))
     }
 
     func testReadOnlyHelperDeadlineAndOutputLimit() throws {

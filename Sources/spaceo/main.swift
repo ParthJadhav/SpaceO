@@ -351,7 +351,7 @@ spaceo — give each agent its own screen, and leave the user's alone.
                                          write the MCP registration for that client
   spaceo safety <subcommand>             local operator recovery
   spaceo safety clear-host-health --operator
-                                         recover an idle unknown-health, pressure or swap latch after stopping owners
+                                         recover an idle unknown-health, pressure, swap or WindowServer-report latch after stopping owners
   spaceo safety clean-display-identities [--apply] --operator
                                          list (or, with sudo, remove) ColorSync state left by older display identities
   spaceo doctor --fix [--yes]            apply the safe remediations doctor found

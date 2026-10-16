@@ -204,7 +204,8 @@ final class DisplayLifecycleLease: @unchecked Sendable {
                         throw refused("host-health recovery refused: a display mutation or live case is pending")
                     }
                     throw refused("host-health recovery refused: the recorded failure is not an eligible idle health latch; "
-                        + "only host_health_unknown, memory_pressure or swap_activity can be recovered; inspect docs/DISPLAY_SAFETY.md")
+                        + "only host_health_unknown, memory_pressure, swap_activity or recent_windowserver_diagnostic can be recovered; "
+                        + "inspect docs/DISPLAY_SAFETY.md")
                 }
             } else {
                 try requireHealthy()
@@ -263,8 +264,9 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         return isRecoverableHostHealthFailure(failure)
     }
 
-    /// Only reversible resource refusals and the old false-unknown latch are eligible. A
-    /// diagnostic, ColorSync incident, timeout or mixed/unknown reason must retain its latch.
+    /// Only reversible resource refusals, the old false-unknown latch and the retired
+    /// WindowServer-report refusal (`recent_windowserver_diagnostic`, no longer an admission
+    /// criterion) are eligible. A ColorSync incident, timeout or unknown reason keeps its latch.
     static func isRecoverableHostHealthFailure(_ failure: String,
                                               testingOverride: Bool = DisplayTestingPolicy.enabled()) -> Bool {
         if testingOverride, failure.hasPrefix("host health: ") { return true }
@@ -273,7 +275,9 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         }
         guard failure.hasPrefix("host health: ") else { return false }
         let reasons = failure.dropFirst("host health: ".count).split(separator: ",", omittingEmptySubsequences: false)
-        return !reasons.isEmpty && reasons.allSatisfy { $0 == "memory_pressure" || $0 == "swap_activity" }
+        return !reasons.isEmpty && reasons.allSatisfy {
+            $0 == "memory_pressure" || $0 == "swap_activity" || $0 == "recent_windowserver_diagnostic"
+        }
     }
 
     /// Steps whose filesystem calls can stall past a recovery deadline. Tests interpose here.

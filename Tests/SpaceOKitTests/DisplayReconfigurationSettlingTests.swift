@@ -55,11 +55,11 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
     }
 
     private func observation(_ time: Double, cpu: Double, swap: UInt64 = 0,
-                             pressure: UInt32 = 1, reports: Int = 0) -> DisplayHostHealthSample {
+                             pressure: UInt32 = 1) -> DisplayHostHealthSample {
         let services = DisplayHostHealthSampler.services
         return .init(uptime: time, pressure: pressure, swapins: swap, swapouts: 0,
                      services: [services[0]: .running(pid: 1, start: "inert", cpuSeconds: cpu, launches: 1),
-                                services[1]: .idle(launches: 0)], diagnosticReports: reports)
+                                services[1]: .idle(launches: 0)])
     }
 
     private func monitor(_ clock: Clock) -> DisplayHostHealth {
@@ -344,11 +344,11 @@ final class DisplayReconfigurationSettlingTests: XCTestCase {
             refused.fulfill()
         }
         wait(for: [entered], timeout: 1)
-        // Same CPU clock: diagnostics are immediately authoritative. The injected sampler
+        // Same CPU clock: memory pressure is immediately authoritative. The injected sampler
         // stays idle while the existing signal wakes or precedes the waiter safely.
-        health.accept(observation(105, cpu: 11.5, reports: 1))
+        health.accept(observation(105, cpu: 11.5, pressure: 2))
         wait(for: [refused], timeout: 1)
-        XCTAssertEqual(health.report.reasons, ["recent_windowserver_diagnostic"])
+        XCTAssertEqual(health.report.reasons, ["memory_pressure"])
         XCTAssertFalse(health.isSettledForReconfiguration)
     }
 

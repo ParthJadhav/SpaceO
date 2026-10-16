@@ -215,7 +215,8 @@ final class DisplaySafetyRecoveryTests: XCTestCase {
     }
 
     func testRecoveredResourceLatchesPreserveBudgetsAndRequireHostValidation() throws {
-        for reason in ["swap_activity", "memory_pressure", "memory_pressure,swap_activity"] {
+        for reason in ["swap_activity", "memory_pressure", "memory_pressure,swap_activity",
+                       "recent_windowserver_diagnostic", "swap_activity,recent_windowserver_diagnostic"] {
             var resource = unknown
             resource["failure"] = "host health: " + reason
             try fixture(resource) { path in
@@ -235,7 +236,7 @@ final class DisplaySafetyRecoveryTests: XCTestCase {
     }
 
     func testResourceRecoveryRefusesPendingWorkOwnersAndMixedIncidentReasons() throws {
-        for reason in ["swap_activity,recent_windowserver_diagnostic", "memory_pressure,colorsync_busy",
+        for reason in ["recent_windowserver_diagnostic,colorsync_busy", "memory_pressure,colorsync_busy",
                        "host_health_timeout", "host_health_stale", "swap_activity,", "swap_activity,unknown"] {
             var resource = unknown; resource["failure"] = "host health: " + reason
             try fixture(resource) { path in

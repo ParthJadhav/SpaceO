@@ -81,9 +81,11 @@ graph, how long a caller waits, and what happens when a change cannot be verifie
   `spaceo_pool_trim` with `operator: true`) retires only idle displays under the allocation lock;
   full shutdown retires every display when health and cleanup can be verified.
 - Production Stage use starts a native read-only health monitor before its first display creation.
-  It requires two observations about five seconds apart, normal memory pressure, no new swap,
-  combined ColorSync CPU below 50%, and no recent WindowServer diagnostic reports (this boot or
-  at least 24 hours). These are conservative admission thresholds, not macOS diagnostic criteria.
+  It requires two observations about five seconds apart, normal memory pressure, no new swap and
+  combined ColorSync CPU below 50%. These are conservative admission thresholds, not macOS
+  diagnostic criteria. Earlier WindowServer diagnostic reports are not an input: by owner
+  direction after the RA-057 fix, a past WindowServer crash or watchdog report no longer blocks
+  display creation until the Mac restarts.
   On-demand ColorSync services contribute zero CPU only with verified launchd idle/never-started
   state and unchanged launch counts, reconciled with the process list. A single verified new
   launch contributes its whole lifetime CPU; hidden relaunches, exits, restarts and malformed
@@ -182,8 +184,8 @@ or skipped run is never release evidence. Direct `swift test` invocations do not
 
 When the operator explicitly designates this Mac for diagnostic testing, set both
 `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the source CLI and test commands.
-This bypasses host-health admission, including historical WindowServer reports, memory
-pressure, swap, unavailable samples and sticky health faults. It does **not** bypass measured
+This bypasses host-health admission, including memory pressure, swap, unavailable samples and
+sticky health faults. It does **not** bypass measured
 ColorSync load: display attachments can leave macOS polling ColorSync long after the display is
 gone (RA-057), and
 diagnostic runs that ignored that load saturated ColorSync until WindowServer's watchdog ended
@@ -228,7 +230,8 @@ file would defeat cross-process exclusion.
 An idle `host health: host_health_unknown`, `host health: memory_pressure` or
 `host health: swap_activity` latch can be recovered after the underlying condition resolves.
 This includes the false unknown latch produced by 1.0.5 when on-demand ColorSync services
-were absent. Upgrade to a CLI containing this recovery support, stop **all** SpaceO owners
+were absent, and a `host health: recent_windowserver_diagnostic` latch recorded by 1.0.9 or
+earlier, whose WindowServer-report check is no longer an admission input. Upgrade to a CLI containing this recovery support, stop **all** SpaceO owners
 (including Viewer, MCP clients and the supervised LaunchAgent), then run:
 
 ```sh
@@ -238,9 +241,9 @@ spaceo safety clear-host-health --operator
 This local operator command locks the existing journal, refuses a pending mutation/live case
 or any other failure class, requires no online SpaceO display and two consecutive healthy
 ColorSync intervals below 25%, and archives the old journal before clearing only its failure.
-A combined memory-pressure/swap latch is eligible; any combination containing another reason
-is refused. ColorSync incidents, system diagnostics, sampler timeouts and stale-health faults
-remain outside this recovery path. It preserves creation budgets
+Any combination of memory pressure, swap and the old WindowServer-report reason is eligible; a
+combination containing another reason is refused. ColorSync incidents, sampler timeouts and
+stale-health faults remain outside this recovery path. It preserves creation budgets
 and the locked file's identity. An owner that relaunches or still holds the file lock prevents
 recovery; stop its supervision first. Doctor remains read-only. Current memory pressure, swap
 activity, incidents and unknown/stale health still refuse; this command neither qualifies the
