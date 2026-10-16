@@ -160,7 +160,42 @@ Check 2 was first refused twice:
 With no session and no SpaceO display, that daemon was stopped and the journal archived again
 through the operator procedure. A normal daemon still refuses until the Mac restarts.
 
+### Normal-admission runs after the report gate was retired
+
+The owner then asked for the WindowServer-report admission check to be removed and for a normal
+run on this Mac without a restart. [#62](https://github.com/ParthJadhav/SpaceO/pull/62) removed it.
+Its build (`1172b8a`, installed binary SHA-256 beginning `f5f3bc92f677af2b`) ran without the
+testing override. Three WindowServer reports from this boot, including the 01:13 watchdog
+report, were still on disk and no longer refused anything.
+
+Memory was the remaining constraint. About 7 GB of swap was in use, with a VM, T3 Code and
+several agent sessions resident. Pressure moved between normal and warning, and a few pages were
+swapped in every 10–15 seconds. Those gates are unchanged, so each run started in a quiet
+window after `spaceo safety clear-host-health --operator` had cleared the previous pressure or
+swap latch.
+
+| Run | Created | Serial | Isolation | Action | End |
+| --- | --- | --- | --- | --- | --- |
+| CLI, 16:58:26 | 16:58:39, in 13 s | 2787227682 (slot 0) | `intact` | `7` pressed (`ok: true`) | Session destroyed, display kept idle |
+| MCP, 17:05:31 | 17:05:47 | slot 0 | `intact`, 6/6 checks covered | 25 elements read | Swap latch before the first click |
+
+- Both runs went through normal admission on the user's default daemon socket, the second through
+  this session's MCP server.
+- **Registry.** The ColorSync registry stayed at 7,174 bytes, last written at 14:23:50, and the
+  identity record held one serial. Neither attachment added a registration or profile.
+- **ColorSync.** It answered two requests at each attachment or removal (16:58:38–43,
+  17:02:03–08, 17:05:45 and 17:06:09) and none in between.
+- **Swap latches.** Each run's daemon latched `host health: swap_activity` within seconds,
+  while its display was in use: 4 seconds after the CLI session ended, and before the MCP
+  session's first click. A tripped daemon then refused input, destroy and stop and kept its
+  display, as designed. Operator recovery quit Calculator first, so no window could reach the
+  physical display, then ended the idle daemon, which released its display. Only the built-in
+  display remained afterwards.
+
 ## Status
 
-The cleanup is applied and verified on this Mac. RA-057 remains open until a normal-admission
-live run on the cleaned host is retained, which needs the Mac to restart first.
+The cleanup is applied and verified on this Mac, and a normal-admission session ran to completion
+on the cleaned host. RA-057's closing condition is met.
+
+On this memory-constrained Mac the unchanged swap and pressure gates trip during ordinary display
+use. A tripped daemon then needs operator recovery. That is tracked separately in TICKETS.

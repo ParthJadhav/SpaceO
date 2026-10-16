@@ -42,9 +42,16 @@ Status definitions:
 - Published 1.0.9 as latest from tag object `a963b58` (run 38881841629). The candidate and all five
   public downloads passed independent verification; see the
   [publication record](docs/validation/2026-10-16-publication-1.0.9.md).
-- Open: a normal-admission live run on the cleaned host. Normal admission refuses for the rest of
-  this boot because of the 01:13 WindowServer watchdog report, so it needs a restart. See the
-  [investigation record](docs/validation/2026-10-16-colorsync-display-identities.md).
+- Done: by owner direction, past WindowServer reports no longer refuse admission (#62).
+- Done: a normal-admission run on the cleaned host without a restart, with CLI and MCP sessions
+  `intact`, no registry growth, and two ColorSync requests per attachment or removal. RA-057's
+  closing condition is met. See the
+  [investigation record](docs/validation/2026-10-16-colorsync-display-identities.md#normal-admission-runs-after-the-report-gate-was-retired).
+- Open: on a memory-constrained Mac (about 7 GB of swap, pressure moving between normal and
+  warning), the swap and pressure gates trip during ordinary display use. A tripped daemon then
+  refuses input, destroy and stop until operator recovery (quit the agent apps, end the idle
+  daemon, `safety clear-host-health`). The policy is the owner's decision; the gates are
+  unchanged.
 
 ### October 15–16 maintenance release 1.0.8
 
