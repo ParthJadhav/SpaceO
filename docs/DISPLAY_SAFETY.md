@@ -181,7 +181,8 @@ When the operator explicitly designates this Mac for diagnostic testing, set bot
 `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the source CLI and test commands.
 This bypasses host-health admission, including historical WindowServer reports, memory
 pressure, swap, unavailable samples and sticky health faults. It does **not** bypass measured
-ColorSync load: every display attachment leaves macOS polling ColorSync until logout (RA-057), and
+ColorSync load: display attachments can leave macOS polling ColorSync long after the display is
+gone (RA-057), and
 diagnostic runs that ignored that load saturated ColorSync until WindowServer's watchdog ended
 the login session. The sampler keeps running. A display change waits (up to its normal
 deadline) for combined ColorSync CPU below 25%: two measured intervals at process start or after

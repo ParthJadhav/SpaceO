@@ -64,8 +64,7 @@ Conclusions:
 
 The read-only `spaceo safety clean-display-identities --operator` listed 525 SpaceO registrations
 (the earlier 524 plus this experiment's one) and 763 SpaceO profiles in 24 seconds. Applying it
-needs the owner's `sudo`. It was not run here, so the effect of removal on this Mac is not yet
-measured.
+needs the owner's `sudo`; see [host cleanup](#host-cleanup) for the result.
 
 ## Prior art
 
@@ -75,7 +74,45 @@ Other virtual-display projects report the same per-identity leak and the same fi
 - unregistering dead ColorSync devices as root, because a non-root `ColorSyncUnregisterDevice`
   reports success without removing anything.
 
+## Host cleanup
+
+Later on October 16 the owner granted administrator access and asked for the cleanup without
+logging out. Every SpaceO process was stopped (four MCP servers and the installed 1.0.7 daemon,
+with no session or display open), and the `20c507d` build was installed.
+
+`sudo spaceo safety clean-display-identities --apply --operator --json` ran from the logged-in
+session at 14:07:35 and finished at 14:08:19:
+
+| Field | Result |
+| --- | --- |
+| `ok` / `verificationFailed` | true / false |
+| Unregistered / remaining registrations | 525 / 0 |
+| Removed / failed profiles | 763 / 0 |
+| Backup | 764 files, 4.1 MB, readable only by root |
+
+The registry shrank from 1,211,227 to 4,975 bytes, and the profile directory from 767 to 4
+profiles: two for the external monitor, the built-in display's and Sidecar's, all untouched. A
+second read-only listing found nothing and took 0.02 seconds instead of 24. Doctor reports
+"0 of 4 display profiles are SpaceO's; ColorSync registry 4 KB; bounded".
+
+ColorSync load over five-minute windows, from the unified log and process CPU time:
+
+| Window | Requests | Units | displayservices | colorsyncd |
+| --- | --- | --- | --- | --- |
+| 14:01:59–14:06:59, before cleanup | 595 | 5.01 | 10.7% CPU, 54 ms/request | 8.0% CPU, 41 ms/request |
+| 14:08:32–14:13:32, after cleanup | 0 | 0 | 0.0% | 0.0% |
+
+The last requests came in a burst at 14:08:19 as the cleanup finished. The trains then stopped
+entirely, including the one attributed to the built-in display, without a logout. So the polls
+that persisted until logout depend on the stale registrations, and removing them ended the
+polls in this session; logging out remains the fallback if ColorSync stays busy.
+
+Normal admission then refused display creation with `recent_windowserver_diagnostic`: the 01:13
+watchdog report was written during the current boot, which blocks normal admission until the
+Mac restarts. The refusal latched the safety journal without creating a display; it was archived
+through the documented operator procedure once no SpaceO process or display remained.
+
 ## Status
 
-RA-057 remains open until the owner applies the cleanup, logs back in, and a normal-admission live
-run on the cleaned host is retained.
+The cleanup is applied and verified on this Mac. RA-057 remains open until a normal-admission
+live run on the cleaned host is retained, which needs the Mac to restart first.
