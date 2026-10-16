@@ -151,9 +151,12 @@ other virtual-display tools and displays a person assigned a SpaceO profile are 
 that no remaining registration references. ColorSync reports success to a normal account while removing nothing, so
 root is required and the second listing, not the return value, decides the outcome. Listing
 the registry can take tens of seconds on an affected Mac; a listing that has not finished after
-three minutes refuses before any change, or reports the cleanup as unconfirmed after it. Log out and back in afterwards:
-until WindowServer restarts it keeps asking ColorSync about every display attached since login,
-about two requests every five seconds per attachment, even after the display is gone.
+three minutes refuses before any change, or reports the cleanup as unconfirmed after it. Log out and back in afterwards.
+With the stale registrations present, WindowServer kept asking ColorSync about every display
+attached since login, about two requests every five seconds per attachment, even after the
+display was gone. On the one Mac measured, those requests stopped as soon as the cleanup finished
+and a later attachment left none behind, but that is a single observation, so logging out
+remains the procedure.
 Do not delete WindowServer's display preferences; that resets the arrangement of physical
 displays and is not needed.
 
@@ -181,7 +184,8 @@ When the operator explicitly designates this Mac for diagnostic testing, set bot
 `SPACEO_LIVE_TESTS=1` and `SPACEO_TESTING_HOST=1` on the source CLI and test commands.
 This bypasses host-health admission, including historical WindowServer reports, memory
 pressure, swap, unavailable samples and sticky health faults. It does **not** bypass measured
-ColorSync load: every display attachment leaves macOS polling ColorSync until logout (RA-057), and
+ColorSync load: display attachments can leave macOS polling ColorSync long after the display is
+gone (RA-057), and
 diagnostic runs that ignored that load saturated ColorSync until WindowServer's watchdog ended
 the login session. The sampler keeps running. A display change waits (up to its normal
 deadline) for combined ColorSync CPU below 25%: two measured intervals at process start or after

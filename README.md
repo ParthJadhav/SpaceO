@@ -147,12 +147,13 @@ lifecycle waits and creation limits. See [display safety](docs/DISPLAY_SAFETY.md
 The current source monitors host health during display use and keeps one idle display for
 reuse. Explicit `spaceo pool trim --operator` retires idle displays without ending active
 sessions. New display creation is capped at 4/minute, 12/ten minutes and 32/rolling day.
-The 1.0.8 maintenance update returns focus to you when an agent app takes it, keeps
-`session.list` working through incomplete window discovery, and stops a slow display read from
-latching the safety circuit. It is owner-directed with an explicit qualification exception: the
-full live suite stopped early under sustained ColorSync load, and signed-artifact behavior
-qualification remains incomplete. The WindowServer/ColorSync freeze remains unresolved. Version
-1.0.4 remains unpublished; see the [1.0.8 release notes](docs/RELEASE_NOTES_1.0.8.md).
+The 1.0.9 maintenance update addresses the WindowServer/ColorSync freeze (RA-057): display
+identities are now bounded, so SpaceO stops growing macOS's ColorSync registry with every
+display, and `sudo spaceo safety clean-display-identities --apply --operator` removes what
+earlier versions left. Run `spaceo doctor` after updating; it says when cleanup is needed. It is
+owner-directed with an explicit qualification exception: the live checks ran under the
+testing-host override, and signed-artifact behavior qualification remains incomplete. Version
+1.0.4 remains unpublished; see the [1.0.9 release notes](docs/RELEASE_NOTES_1.0.9.md).
 
 **Or drive an app yourself from the CLI**
 

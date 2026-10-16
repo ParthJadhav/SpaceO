@@ -146,7 +146,21 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.8` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.8)
+Version `1.0.9` is prepared as an **owner-directed maintenance release with a qualification
+exception**. On October 16, 2026, after the RA-057 fix merged and the owner was told that no
+release contained it and that the host cleanup had not been run, the owner granted
+administrator access on this Mac and instructed: **"do everything which is needed"** and
+**"do not log out though"**. This is recorded as GO to apply the cleanup on this Mac and to
+construct and publish 1.0.9, conditional on passing source, CI, signing, notarization,
+immutable-candidate and distribution checks. The exception covers live checks that ran under the
+testing-host override because normal admission refused display creation for the rest of the boot
+after the 01:13 WindowServer watchdog report, the missing full live suite and computer-use matrix,
+missing signed-artifact behavior qualification, and RA-057 remaining open until a normal-admission
+run. It does not relabel them as passed or approve a runtime safety bypass. See the
+[1.0.9 notes](RELEASE_NOTES_1.0.9.md) and
+[preparation record](validation/2026-10-16-release-1.0.9.md).
+
+Version `1.0.8` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.8)
 as an **owner-directed maintenance release with a qualification exception**. On October 15, 2026, after the open issues and pull requests were handled and two
 newly found issues were filed, the owner instructed: **"Fix the issues which came up as well and
 release the new version. Do everything autonomously"**. This is recorded as GO to construct and

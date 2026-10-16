@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.9] - 2026-10-16
+
 - Stop growing macOS's display state with every virtual display (RA-057). SpaceO gave each
   attachment a new random serial, and macOS keeps a ColorSync device registration, a display
   profile and WindowServer mappings for every serial it sees. ColorSync re-reads that registry
@@ -16,14 +18,21 @@ All notable user-visible changes are recorded here. SpaceO follows
 - `spaceo doctor` reports leftover SpaceO display identities, and the new
   `spaceo safety clean-display-identities --operator` lists them;
   `sudo spaceo safety clean-display-identities --apply --operator` backs up and removes only
-  SpaceO's ColorSync registrations and profiles. Log out and back in afterwards.
+  SpaceO's ColorSync registrations and profiles. Log out and back in afterwards. On the
+  development Mac it removed 525 registrations and 763 profiles, and ColorSync's display requests
+  stopped as soon as it finished.
 - The reserved testing-host override (`SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1`) no longer
   waives measured ColorSync load. Display changes wait for ColorSync below 25%, measured after
-  the previous change, and the live-test preflight refuses at 50% as in normal mode; every
-  attachment leaves macOS polling ColorSync until logout, and runs that ignored that load ended
-  the login session.
+  the previous change, and the live-test preflight refuses at 50% as in normal mode. Display
+  attachments can leave macOS polling ColorSync long after the display is gone, and runs that
+  ignored that load ended the login session.
 - A display whose mode settings macOS refuses is now kept and rejected instead of being released
   implicitly.
+
+Owner-directed maintenance release with a qualification exception: normal admission correctly
+refused display creation on the only test host for the rest of its boot after a WindowServer
+watchdog report, so the live checks ran under the testing-host override, and signed-artifact
+behavior qualification remains incomplete. See the [release notes](docs/RELEASE_NOTES_1.0.9.md).
 
 ## [1.0.8] - 2026-10-16
 

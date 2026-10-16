@@ -64,8 +64,7 @@ Conclusions:
 
 The read-only `spaceo safety clean-display-identities --operator` listed 525 SpaceO registrations
 (the earlier 524 plus this experiment's one) and 763 SpaceO profiles in 24 seconds. Applying it
-needs the owner's `sudo`. It was not run here, so the effect of removal on this Mac is not yet
-measured.
+needs the owner's `sudo`; see [host cleanup](#host-cleanup) for the result.
 
 ## Prior art
 
@@ -75,7 +74,93 @@ Other virtual-display projects report the same per-identity leak and the same fi
 - unregistering dead ColorSync devices as root, because a non-root `ColorSyncUnregisterDevice`
   reports success without removing anything.
 
+## Host cleanup
+
+Later on October 16 the owner granted administrator access and asked for the cleanup without
+logging out. Every SpaceO process was stopped (four MCP servers and the installed 1.0.7 daemon,
+with no session or display open), and the `20c507d` build was installed.
+
+`sudo spaceo safety clean-display-identities --apply --operator --json` ran from the logged-in
+session at 14:07:35 and finished at 14:08:19:
+
+| Field | Result |
+| --- | --- |
+| `ok` / `verificationFailed` | true / false |
+| Unregistered / remaining registrations | 525 / 0 |
+| Removed / failed profiles | 763 / 0 |
+| Backup | 764 files, 4.1 MB, readable only by root |
+
+The registry shrank from 1,211,227 to 4,975 bytes, and the profile directory from 767 to 4
+profiles: two for the external monitor, the built-in display's and Sidecar's, all untouched. A
+second read-only listing found nothing and took 0.02 seconds instead of 24. Doctor reports
+"0 of 4 display profiles are SpaceO's; ColorSync registry 4 KB; bounded".
+
+ColorSync load over five-minute windows, from the unified log and process CPU time:
+
+| Window | Requests | Units | displayservices | colorsyncd |
+| --- | --- | --- | --- | --- |
+| 14:01:59–14:06:59, before cleanup | 595 | 5.01 | 10.7% CPU, 54 ms/request | 8.0% CPU, 41 ms/request |
+| 14:08:32–14:13:32, after cleanup | 0 | 0 | 0.0% | 0.0% |
+
+The last requests came in a burst at 14:08:19 as the cleanup finished. The trains then stopped
+entirely, including the one attributed to the built-in display, without a logout. On this Mac,
+then, the polls that had persisted since login depended on the stale registrations. This is a
+single-host observation: the documented procedure still says to log out and back in after the
+cleanup, and nothing here changes when SpaceO admits display work.
+
+Normal admission then refused display creation with `recent_windowserver_diagnostic`: the 01:13
+watchdog report was written during the current boot, which blocks normal admission until the
+Mac restarts. The refusal latched the safety journal without creating a display; it was archived
+through the documented operator procedure once no SpaceO process or display remained.
+
+### Live checks on the release source
+
+The installed binary was built with `make release` from `20c507d`, whose tree is identical to
+#59's reviewed head; the 1.0.9 preparation changes only the version string and documentation.
+Its SHA-256 begins `be811d0363571f10`. Both checks ran under the testing-host override
+(`SPACEO_LIVE_TESTS=1 SPACEO_TESTING_HOST=1`) on a throwaway daemon at a `/tmp` socket, with the
+real per-user safety journal and identity record, after nobody had used the Mac for two minutes.
+Each one ran:
+
+```sh
+eval "$(spaceo session create --app Calculator --title "RA-057 check" --export)"
+spaceo windows --json; spaceo verify --json
+spaceo session destroy --json; spaceo pool trim --operator --json
+spaceo daemon stop --operator
+```
+
+It then confirmed that only the built-in display remained. Results:
+
+| Check | Start | Create | Serial | Registry after | Profiles | Requests during the check |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 14:23:37 | 13 s | 2787227682 (slot 0) | 7,174 bytes, written 14:23:50 | 5 | 3 |
+| 2 | 14:45:59 | 13 s | 2787227682 (slot 0) | 7,174 bytes, unchanged since 14:23:50 | 5 | 3 |
+
+- Each creation took 13 seconds, including the ColorSync gate's two measured intervals at
+  daemon start.
+- Each check had one Calculator window. `verify` returned a `partial` verdict: the key and text
+  input routes were `unknown` because the Accessibility focused-application proxy was
+  unavailable, and every other check passed.
+- Destroy and trim succeeded, Calculator did not keep running, and only the built-in display
+  remained.
+- The identity record holds one serial, `1920x1080@2/0/0` → 2787227682, at generation 0. The
+  first check registered slot 0 again because the cleanup had removed it. The second reused it
+  and wrote nothing to the registry.
+- Each check produced three display requests: at attachment, during the session, and at
+  removal. None followed: 0 requests from 14:24:10 to 14:32:10 after check 1, and only the
+  removal request in 14:46:24–14:51:24 after check 2. Both ColorSync services then exited as
+  idle.
+
+Check 2 was first refused twice:
+1. At 14:32 an MCP client in another agent session started a normal daemon, which held the
+   display lifecycle.
+2. That daemon refused the agent's `session.create` with `recent_windowserver_diagnostic` and
+   latched the journal.
+
+With no session and no SpaceO display, that daemon was stopped and the journal archived again
+through the operator procedure. A normal daemon still refuses until the Mac restarts.
+
 ## Status
 
-RA-057 remains open until the owner applies the cleanup, logs back in, and a normal-admission live
-run on the cleaned host is retained.
+The cleanup is applied and verified on this Mac. RA-057 remains open until a normal-admission
+live run on the cleaned host is retained, which needs the Mac to restart first.
