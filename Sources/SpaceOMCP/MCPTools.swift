@@ -125,8 +125,8 @@ struct MCPTool {
     private static func reviewFieldSchema(_ key: String) -> [String: Any] {
         switch key {
         case "pid": return ["type": "integer", "minimum": 1, "maximum": Int32.max, "description": "Only windows of this session-owned process."]
-        case "label": return ["type": "string", "maxLength": 480, "description": "Press the one element with this exact accessible label."]
-        case "match": return ["type": "string", "enum": ["exact", "contains"], "description": "With label: exact (default) or contains."]
+        case "label": return ["type": "string", "maxLength": AXLabelMatcher.maximumTextBytes, "description": "Press the one element with this exact accessible label."]
+        case "match": return ["type": "string", "enum": labelMatchModes, "description": "With label: exact (default) or contains."]
         case "role": return ["type": "string", "maxLength": 64, "description": "With label: only this role, e.g. Button."]
         case "require_isolation": return ["type": "array", "minItems": 1, "maxItems": IsolationDimension.allCases.count, "items": ["type": "string", "enum": IsolationDimension.allCases.map(\.rawValue)],
                                           "description": "Fail unless these checks are observable."]
@@ -142,6 +142,14 @@ struct MCPTool {
     }
 
     // Shared argument schemas.
+
+    static let labelMatchModes = AXLabelMatcher.Mode.allCases.map(\.rawValue)
+
+    static let modifierNames = ["cmd", "shift", "alt", "ctrl", "fn"]
+
+    private static let ttlRange = SessionReclamationPolicy.clientTTLRange
+
+    private static let graceRange = SessionReclamationPolicy.orphanGraceRange
 
     private static let sessionArg: [String: Any] = [
         "type": "string",
@@ -162,13 +170,13 @@ struct MCPTool {
 
     private static let modifiersArg: [String: Any] = [
         "type": "array",
-        "maxItems": 5,
-        "items": ["type": "string", "enum": ["cmd", "shift", "alt", "ctrl", "fn"]],
+        "maxItems": modifierNames.count,
+        "items": ["type": "string", "enum": modifierNames],
         "description": "Keys held during the action.",
     ]
 
     private static let buttonArg: [String: Any] = [
-        "type": "string", "enum": ["left", "right", "middle"],
+        "type": "string", "enum": MouseButton.allCases.map(\.rawValue),
         "description": "Mouse button (default left).",
     ]
 }
@@ -299,15 +307,15 @@ struct MCPToolCall {
     }
     func validatePointerButton(_ raw: String?) throws {
         guard let raw else { return }
-        guard ["left", "right", "middle"].contains(raw) else {
+        guard MouseButton(rawValue: raw) != nil else {
             throw MCPInputError.invalid("'button' must be 'left', 'right', or 'middle'")
         }
     }
     func modifiers() throws -> [String]? {
         guard let value = supplied("modifiers") else { return nil }
-        guard let list = value as? [Any], list.count <= 5 else {
+        guard let list = value as? [Any], list.count <= MCPTool.modifierNames.count else {
             throw MCPInputError.invalid(
-                "'modifiers' must be an array of at most 5 modifier names")
+                "'modifiers' must be an array of at most \(MCPTool.modifierNames.count) modifier names")
         }
         return try list.map { item in
             guard let name = item as? String, name.count <= 16 else {
@@ -415,7 +423,7 @@ extension MCPTool {
             Park this session and refuse agent input. Give a reason when you need a person \
             ("needs 2FA code"); the Viewer shows it with a Take Control button.
             """, ["session": sessionArg,
-                  "reason": ["type": "string", "maxLength": 240, "description": "Why the agent stopped; shown to the human."]],
+                  "reason": ["type": "string", "maxLength": AgentSession.maximumPauseReasonCharacters, "description": "Why the agent stopped; shown to the human."]],
         advertisesVerbose: false
     ) { try $0.sessionControl() }
 }
@@ -434,7 +442,7 @@ extension MCPToolCall {
     mutating func sessionControl() throws {
         request.cmd = "session.control"
         request.paused = name == "spaceo_session_pause"
-        request.reason = try str("reason", max: 240)
+        request.reason = try str("reason", max: AgentSession.maximumPauseReasonCharacters)
     }
 }
 
@@ -448,21 +456,21 @@ extension MCPTool {
             use it.
             """, [
                 "name": ["type": "string", "description": "Session id; generated when omitted."],
-                "ttl_seconds": ["type": "number", "minimum": 30, "maximum": 3_600,
+                "ttl_seconds": ["type": "number", "minimum": Int(ttlRange.lowerBound), "maximum": Int(ttlRange.upperBound),
                                 "description": "Lease lifetime; renewed automatically while connected."],
                 "app": ["type": "string", "maxLength": 4_096,
                         "description": "Also launch this app (as spaceo_open_app)."],
                 "files": ["type": "array", "maxItems": 256, "items": ["type": "string", "maxLength": 4_096],
                           "description": "Files for the launched app to open."],
-                "preset": ["type": "string", "enum": ["shared", "exclusive", "exclusive_1080p", "exclusive_1440p"],
+                "preset": ["type": "string", "enum": DisplayPool.presets,
                            "description": "shared (default) takes a tile; exclusive* a whole display."],
-                "title": ["type": "string", "maxLength": 120,
+                "title": ["type": "string", "maxLength": AgentSession.maximumTitleCharacters,
                           "description": "Task title shown in the Viewer."],
-                "record": ["type": "string", "enum": ["actions", "actions+frames"],
+                "record": ["type": "string", "enum": RecordingMode.allCases.map(\.rawValue),
                            "description": "Record receipts; +frames adds images that may show typed text."],
                 "mute_audio": ["type": "boolean", "description": "Launch a managed Chromium muted."],
-                "orphan_grace_seconds": ["type": "number", "minimum": 30, "maximum": 1_800,
-                                         "description": "If this connection ends, seconds the session keeps its apps for spaceo_session_claim. Default 120."],
+                "orphan_grace_seconds": ["type": "number", "minimum": Int(graceRange.lowerBound), "maximum": Int(graceRange.upperBound),
+                                         "description": "If this connection ends, seconds the session keeps its apps for spaceo_session_claim. Default \(Int(MCPServer.defaultOrphanGraceSeconds))."],
             ],
         compatibilityArguments: ["session", "controller_id", "controller_label", "controller_kind"]
     ) { try $0.sessionCreate() }
@@ -499,9 +507,10 @@ extension MCPToolCall {
                 "controller identity overrides require an MCP controller context")
         }
         request.controllerTTLSeconds = try dbl("ttl_seconds")
-        if let ttl = request.controllerTTLSeconds, !(30...3_600).contains(ttl) {
+        let ttlRange = SessionReclamationPolicy.clientTTLRange
+        if let ttl = request.controllerTTLSeconds, !ttlRange.contains(ttl) {
             throw MCPInputError.invalid(
-                "'ttl_seconds' must be from 30 through 3600")
+                "'ttl_seconds' must be from \(Int(ttlRange.lowerBound)) through \(Int(ttlRange.upperBound))")
         }
         request.app = try str("app")
         request.files = try files()
@@ -509,18 +518,19 @@ extension MCPToolCall {
             throw MCPInputError.invalid("'files' needs 'app'")
         }
         request.preset = try str("preset", max: 32)
-        if let preset = request.preset, !["shared", "exclusive", "exclusive_1080p", "exclusive_1440p"].contains(preset) {
-            throw MCPInputError.invalid("'preset' must be shared, exclusive, exclusive_1080p or exclusive_1440p")
+        if let preset = request.preset, !DisplayPool.presets.contains(preset) {
+            throw MCPInputError.invalid("'preset' must be " + alternatives(DisplayPool.presets))
         }
-        request.title = try str("title", max: 120)
+        request.title = try str("title", max: AgentSession.maximumTitleCharacters)
         request.record = try str("record", max: 16)
-        if let record = request.record, !["actions", "actions+frames"].contains(record) {
-            throw MCPInputError.invalid("'record' must be actions or actions+frames")
+        if let record = request.record, RecordingMode(rawValue: record) == nil {
+            throw MCPInputError.invalid("'record' must be " + alternatives(RecordingMode.allCases.map(\.rawValue)))
         }
         request.muteAudio = try flag("mute_audio")
         request.orphanGraceSeconds = try dbl("orphan_grace_seconds") ?? MCPServer.defaultOrphanGraceSeconds
-        if let grace = request.orphanGraceSeconds, !(30...1_800).contains(grace) {
-            throw MCPInputError.invalid("'orphan_grace_seconds' must be from 30 through 1800")
+        let graceRange = SessionReclamationPolicy.orphanGraceRange
+        if let grace = request.orphanGraceSeconds, !graceRange.contains(grace) {
+            throw MCPInputError.invalid("'orphan_grace_seconds' must be from \(Int(graceRange.lowerBound)) through \(Int(graceRange.upperBound))")
         }
     }
 }
@@ -686,8 +696,8 @@ extension MCPTool {
             (index, title, snapshot id). A timeout is a normal outcome.
             """, ["condition": ["type": "string", "enum": WaitCondition.knownKinds,
                                 "description": "What to wait for."],
-                  "value": ["type": "string", "maxLength": 480, "description": "The label, title fragment, selector, or millisecond count. Omit for session_resumed."],
-                  "match": ["type": "string", "enum": ["exact", "contains"], "description": "Label matching: exact (default) or contains."],
+                  "value": ["type": "string", "maxLength": WaitCondition.maximumValueBytes, "description": "The label, title fragment, selector, or millisecond count. Omit for session_resumed."],
+                  "match": ["type": "string", "enum": labelMatchModes, "description": "Label matching: exact (default) or contains."],
                   "role": ["type": "string", "maxLength": 64, "description": "Only elements of this role, e.g. TextField."],
                   "timeout": ["type": "number", "minimum": 0.5, "maximum": 60, "description": "Budget in seconds, queueing included (default 15)."],
                   "session": sessionArg,
@@ -701,7 +711,7 @@ extension MCPToolCall {
     mutating func waitFor() throws {
         request.cmd = "wait"
         request.waitCondition = try str("condition", max: 32)
-        request.waitValue = try str("value", max: 480)
+        request.waitValue = try str("value", max: WaitCondition.maximumValueBytes)
         request.match = try str("match", max: 16)
         request.role = try str("role", max: 64)
         guard let condition = request.waitCondition,
@@ -711,8 +721,8 @@ extension MCPToolCall {
         if request.waitValue == nil, condition != "session_resumed" {
             throw MCPInputError.invalid("'value' is required for condition '\(condition)'")
         }
-        if let match = request.match, !["exact", "contains"].contains(match) {
-            throw MCPInputError.invalid("'match' must be exact or contains")
+        if let match = request.match, AXLabelMatcher.Mode(rawValue: match) == nil {
+            throw MCPInputError.invalid("'match' must be " + alternatives(MCPTool.labelMatchModes))
         }
     }
 }
@@ -772,7 +782,7 @@ extension MCPTool {
             Search the window's accessibility tree (and a managed browser's page) for \
             elements whose label, value or role contains query. Returns up to 25 native and \
             25 page hits with usable indices. A truncated search cannot prove absence.
-            """, ["query": ["type": "string", "maxLength": 480, "description": "Case-insensitive text to find."],
+            """, ["query": ["type": "string", "maxLength": AXLabelMatcher.maximumTextBytes, "description": "Case-insensitive text to find."],
                   "role": ["type": "string", "maxLength": 64, "description": "Native role filter, e.g. Button; skips page search."],
                   "session": sessionArg,
                   "window": windowArg],
@@ -784,7 +794,7 @@ extension MCPTool {
 extension MCPToolCall {
     mutating func find() throws {
         request.cmd = "ax.find"
-        request.query = try str("query", max: 480)
+        request.query = try str("query", max: AXLabelMatcher.maximumTextBytes)
         request.role = try str("role", max: 64)
         guard let query = request.query, !query.isEmpty else { throw MCPInputError.invalid("'query' is required") }
     }
@@ -799,7 +809,7 @@ extension MCPTool {
             the current selection, without a screenshot; element reads one element's value. \
             Reports truncated and source.
             """, ["element": ["type": "string", "maxLength": 32, "description": "Native element index from spaceo_read_screen."],
-                  "max_chars": ["type": "integer", "minimum": 1, "maximum": 20_000, "description": "Character limit (default 20000)."],
+                  "max_chars": ["type": "integer", "minimum": AXTree.textCharacterRange.lowerBound, "maximum": AXTree.textCharacterRange.upperBound, "description": "Character limit (default \(AXTree.textCharacterRange.upperBound))."],
                   "session": sessionArg,
                   "window": windowArg]
     ) { try $0.readText() }
@@ -810,8 +820,9 @@ extension MCPToolCall {
         request.cmd = "ax.text"
         request.element = try str("element", max: 32)
         request.maxChars = try int("max_chars")
-        if let limit = request.maxChars, !(1...20_000).contains(limit) {
-            throw MCPInputError.invalid("'max_chars' must be from 1 through 20000")
+        let range = AXTree.textCharacterRange
+        if let limit = request.maxChars, !range.contains(limit) {
+            throw MCPInputError.invalid("'max_chars' must be from \(range.lowerBound) through \(range.upperBound)")
         }
     }
 }
@@ -922,7 +933,7 @@ extension MCPTool {
         "spaceo_session_set_title", """
             Name the task this session is doing ("Booking flight to SFO") so the human can \
             tell sessions apart in the Viewer.
-            """, ["title": ["type": "string", "maxLength": 120, "description": "Short task title."], "session": sessionArg],
+            """, ["title": ["type": "string", "maxLength": AgentSession.maximumTitleCharacters, "description": "Short task title."], "session": sessionArg],
              required: ["title"],
         advertisesVerbose: false
     ) { try $0.sessionSetTitle() }
@@ -931,7 +942,7 @@ extension MCPTool {
 extension MCPToolCall {
     mutating func sessionSetTitle() throws {
         request.cmd = "session.annotate"
-        request.title = try str("title", max: 120)
+        request.title = try str("title", max: AgentSession.maximumTitleCharacters)
         guard request.title != nil else { throw MCPInputError.invalid("'title' is required") }
     }
 }
@@ -1376,8 +1387,8 @@ extension MCPTool {
             action down/up sends one half (released after 10 s). cmd+c/x/v use the session's \
             private clipboard, never the user's pasteboard.
             """, ["key": ["type": "string", "maxLength": 64, "description": "Key combination."],
-                  "hold_ms": ["type": "integer", "minimum": 0, "maximum": 5_000, "description": "Hold before release, in ms."],
-                  "action": ["type": "string", "enum": ["tap", "down", "up"], "description": "tap (default), or only down / up."],
+                  "hold_ms": ["type": "integer", "minimum": KeyCombo.holdMillisecondsRange.lowerBound, "maximum": KeyCombo.holdMillisecondsRange.upperBound, "description": "Hold before release, in ms."],
+                  "action": ["type": "string", "enum": KeyCombo.actions, "description": "tap (default), or only down / up."],
                   "web": ["type": "boolean", "description": "Send the key to page content."],
                   "session": sessionArg,
                   "window": windowArg],
@@ -1395,11 +1406,12 @@ extension MCPToolCall {
         request.web = try flag("web")
         request.holdMs = try int("hold_ms")
         request.keyAction = try str("action", max: 8)
-        if let hold = request.holdMs, !(0...5_000).contains(hold) {
-            throw MCPInputError.invalid("'hold_ms' must be from 0 through 5000")
+        let holdRange = KeyCombo.holdMillisecondsRange
+        if let hold = request.holdMs, !holdRange.contains(hold) {
+            throw MCPInputError.invalid("'hold_ms' must be from \(holdRange.lowerBound) through \(holdRange.upperBound)")
         }
-        if let action = request.keyAction, !["tap", "down", "up"].contains(action) {
-            throw MCPInputError.invalid("'action' must be tap, down or up")
+        if let action = request.keyAction, !KeyCombo.actions.contains(action) {
+            throw MCPInputError.invalid("'action' must be " + alternatives(KeyCombo.actions))
         }
         guard let key = request.key, !key.isEmpty else {
             throw MCPInputError.invalid("'key' is required")
