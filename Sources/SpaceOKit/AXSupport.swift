@@ -390,8 +390,9 @@ public enum AX {
         for attr in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
                      kAXHelpAttribute, kAXPlaceholderValueAttribute] {
             if let s = string(element, attr as String), !s.isEmpty {
-                return s.utf8.count > 480
-                    ? String(decoding: s.utf8.prefix(480), as: UTF8.self) + "…"
+                let limit = AXLabelMatcher.maximumTextBytes
+                return s.utf8.count > limit
+                    ? String(decoding: s.utf8.prefix(limit), as: UTF8.self) + "…"
                     : s
             }
         }

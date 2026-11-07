@@ -757,11 +757,19 @@ func leaseArgument(required: Bool = false) -> UUID? {
 
 /// `--orphan-grace`: how long an abandoned session keeps its apps waiting for `session claim`.
 func orphanGraceArgument() -> Double? {
-    let grace = doubleArgument("orphan-grace")
-    if let grace, !(30...1_800).contains(grace) {
-        fail("--orphan-grace must be from 30 through 1800 seconds")
+    secondsArgument("orphan-grace", within: SessionReclamationPolicy.orphanGraceRange)
+}
+
+func controllerTTLArgument() -> Double? {
+    secondsArgument("controller-ttl", within: SessionReclamationPolicy.clientTTLRange)
+}
+
+func secondsArgument(_ name: String, within range: ClosedRange<Double>) -> Double? {
+    let value = doubleArgument(name)
+    if let value, !range.contains(value) {
+        fail("--\(name) must be from \(Int(range.lowerBound)) through \(Int(range.upperBound)) seconds")
     }
-    return grace
+    return value
 }
 
 func controllerOwnerArgument() -> DurableSessionOwner {
@@ -1228,10 +1236,7 @@ case "session":
     case "create":
         validateFlags("session.create")
         let owner = controllerOwnerArgument()
-        let ttl = doubleArgument("controller-ttl")
-        if let ttl, !(30...3_600).contains(ttl) {
-            fail("--controller-ttl must be from 30 through 3600 seconds")
-        }
+        let ttl = controllerTTLArgument()
         let requestedLease = leaseArgument()
         let orphanGrace = orphanGraceArgument()
         if args.bool("export") {
@@ -1278,10 +1283,7 @@ case "session":
             fail("session claim needs --session ID; it never picks a session for you")
         }
         let owner = controllerOwnerArgument()
-        let ttl = doubleArgument("controller-ttl")
-        if let ttl, !(30...3_600).contains(ttl) {
-            fail("--controller-ttl must be from 30 through 3600 seconds")
-        }
+        let ttl = controllerTTLArgument()
         let orphanGrace = orphanGraceArgument()
         remote { request in
             request.cmd = "session.claim"

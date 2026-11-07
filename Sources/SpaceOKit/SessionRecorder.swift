@@ -11,7 +11,7 @@ import Darwin
 // stores text/key payloads in receipts. Opt-in frames can contain visible typed text.
 
 /// What a session recording captures. Parsed from the `record` argument of session creation.
-public enum RecordingMode: String, Codable, Sendable {
+public enum RecordingMode: String, Codable, Sendable, CaseIterable {
     /// One receipt per action, no pixels.
     case actions
     /// Receipts plus a downscaled frame before and after each action.

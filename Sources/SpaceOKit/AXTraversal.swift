@@ -352,7 +352,7 @@ enum AXTraversal {
     private static let maximumActionCount = 128
     private static let maximumActionBytes = 256
     private static let maximumRoleBytes = 256
-    static let maximumLabelBytes = 480
+    static let maximumLabelBytes = AXLabelMatcher.maximumTextBytes
 
     static func boundedCall<P: AXTraversalProviding, T>(
         _ element: P.Element,

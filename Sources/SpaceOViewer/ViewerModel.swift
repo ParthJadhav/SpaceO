@@ -1784,7 +1784,7 @@ final class ViewerModel {
         let trimmed = handoffNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         resumeAgentInput(
             for: Set(pending.sessionIDs),
-            handoffNote: trimmed.isEmpty ? nil : String(trimmed.prefix(480)))
+            handoffNote: trimmed.isEmpty ? nil : String(trimmed.prefix(AgentSession.maximumHandoffNoteCharacters)))
     }
 
     /// Take Control of a particular session, from anywhere: its tile, its pause banner, the menu

@@ -49,6 +49,10 @@ public struct AXNode: Sendable {
 /// the tree. Matching the whole rendered `name · value: …` string meant `element_label "Name"`
 /// never matched the field it names; the accessible name is what an agent reads and repeats.
 public struct AXLabelMatcher: Equatable, Sendable {
+    /// Longest accessible label, label query, or label-like wait value, in UTF-8 bytes. Reads
+    /// clip labels to it, so nothing can be asked for that a read could not show.
+    public static let maximumTextBytes = 480
+
     public enum Mode: String, Sendable, CaseIterable {
         /// The name (or, for a nameless node, the label) equals the text exactly.
         case exact
@@ -72,7 +76,7 @@ public struct AXLabelMatcher: Equatable, Sendable {
         var mode = Mode.exact
         if let match {
             guard let parsed = Mode(rawValue: match) else {
-                throw SpaceOError.badRequest("match must be exact or contains")
+                throw SpaceOError.badRequest("match must be " + alternatives(Mode.allCases.map(\.rawValue)))
             }
             mode = parsed
         }
@@ -405,13 +409,16 @@ public enum AXTree {
     /// Reading-order text of a whole window: every text-bearing node's value, joined by newlines,
     /// bounded to `maxChars`. Unlike `text(in:)` this does not stop at the first hit, so a
     /// document body, a terminal pane, or a settings page reads as a whole.
+    /// Characters a whole-window text read may return.
+    public static let textCharacterRange = 1...20_000
+
     public static func allText(
         in window: WindowRef,
         maxChars: Int,
         maxDepth: Int = 22
     ) throws -> (text: String, truncated: Bool) {
-        guard (1...20_000).contains(maxChars) else {
-            throw SpaceOError.badRequest("text character limit must be from 1 through 20000")
+        guard textCharacterRange.contains(maxChars) else {
+            throw SpaceOError.badRequest("text character limit must be from \(textCharacterRange.lowerBound) through \(textCharacterRange.upperBound)")
         }
         guard AX.isTrusted else { throw SpaceOError.accessibilityDenied }
         let limits = AXTraversalLimits(maxDepth: maxDepth, maxNodes: 4_000)

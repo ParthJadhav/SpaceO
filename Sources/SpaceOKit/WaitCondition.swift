@@ -25,9 +25,8 @@ public enum WaitCondition: Equatable, Sendable {
     /// Control (or for the agent's own pause to be lifted) without polling session_list.
     case sessionResumed
 
-    /// Longest string payload accepted, in UTF-8 bytes. Matches the label budget used by the
-    /// accessibility reader so a wait can never name something a read could not show.
-    public static let maximumValueBytes = 480
+    /// Longest string payload accepted, in UTF-8 bytes: the label budget.
+    public static let maximumValueBytes = AXLabelMatcher.maximumTextBytes
     /// `stable_ms` below this is noise: a single capture interval cannot prove stability.
     public static let stableRange = 100...60_000
     public static let msRange = 1...60_000

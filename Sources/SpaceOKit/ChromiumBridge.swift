@@ -1090,7 +1090,7 @@ public actor ChromiumBridge {
     /// establish absence. wN indices remain live DOM order, not native snapshot handles.
     public func findElementsReport(query: String, limit: Int = 25) async throws
         -> (outline: String, truncation: TruncationReport, scanned: Int) {
-        guard query.utf8.count <= 480 else { throw SpaceOError.badRequest("query exceeds 480 bytes") }
+        guard query.utf8.count <= AXLabelMatcher.maximumTextBytes else { throw SpaceOError.badRequest("query exceeds \(AXLabelMatcher.maximumTextBytes) bytes") }
         guard (1...200).contains(limit) else { throw SpaceOError.badRequest("limit must be 1 through 200") }
         let value = try await evaluate(ChromiumObservation.find(query: query, limit: limit))
         let report = try ChromiumObservation.decode(ChromiumObservation.Search.self, from: value)
@@ -1104,7 +1104,7 @@ public actor ChromiumBridge {
     }
 
     func selectorExists(_ selector: String, budget: DevToolsDeadline?) async throws -> Bool {
-        guard selector.utf8.count <= 480 else { throw SpaceOError.badRequest("selector exceeds 480 bytes") }
+        guard selector.utf8.count <= WaitCondition.maximumValueBytes else { throw SpaceOError.badRequest("selector exceeds \(WaitCondition.maximumValueBytes) bytes") }
         let literal = String(decoding: try JSONSerialization.data(withJSONObject: [selector]), as: UTF8.self)
         let value = try await evaluate("(() => { try { return document.querySelector(\(literal)[0]) ? 'yes' : 'no'; } catch (e) { return 'bad'; } })()", binding: commandBinding, budget: budget)
         switch value {

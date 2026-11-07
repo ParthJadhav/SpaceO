@@ -82,6 +82,11 @@ public struct KeyCombo: Sendable, Equatable {
     public let keyCode: CGKeyCode
     public let flags: CGEventFlags
 
+    /// `key` actions: a whole press, or only its down or up half.
+    public static let actions = ["tap", "down", "up"]
+    /// How long a tap may hold its key before releasing it.
+    public static let holdMillisecondsRange = 0...5_000
+
     /// Command-C and Command-X can replace the shared pasteboard; Command-V can disclose it.
     /// Extra modifiers do not make them safe: applications are free to bind variants such as
     /// Command-Shift-C to another kind of copy.

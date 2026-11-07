@@ -195,6 +195,9 @@ public final class DisplayPool {
         return Slot(stage: stage, index: 0, capacity: 1)
     }
 
+    /// Session presets, in the order help and schemas list them.
+    public static let presets = ["shared", "exclusive", "exclusive_1080p", "exclusive_1440p"]
+
     /// The display geometry a session preset asks for. `shared` is the pool default (nil).
     public static func presetSize(_ preset: String) throws -> CGSize?? {
         switch preset {
@@ -203,8 +206,7 @@ public final class DisplayPool {
         case "exclusive_1080p": return .some(CGSize(width: 1920, height: 1080))
         case "exclusive_1440p": return .some(CGSize(width: 2560, height: 1440))
         default:
-            throw SpaceOError.badRequest(
-                "preset must be shared, exclusive, exclusive_1080p or exclusive_1440p")
+            throw SpaceOError.badRequest("preset must be " + alternatives(presets))
         }
     }
 

@@ -93,12 +93,12 @@ let liveWindowWatcherFactory: WindowWatcherFactory = { pid, region in
 ///
 /// The clock and liveness probe are injectable so expiry, PID reuse, and grace periods can be
 /// tested without sleeping or launching a controller process.
-struct SessionReclamationPolicy: Sendable {
-    static let clientTTLRange: ClosedRange<TimeInterval> = 30...3_600
+public struct SessionReclamationPolicy: Sendable {
+    public static let clientTTLRange: ClosedRange<TimeInterval> = 30...3_600
     /// Client-requested orphan grace (`orphanGraceSeconds`). The floor keeps today's 30 s
     /// behaviour reachable; the ceiling bounds how long an unowned session can hold a tile and
     /// keep its apps alive after its controller has gone.
-    static let orphanGraceRange: ClosedRange<TimeInterval> = 30...1_800
+    public static let orphanGraceRange: ClosedRange<TimeInterval> = 30...1_800
 
     let defaultTTL: TimeInterval
     let gracePeriod: TimeInterval
@@ -835,7 +835,7 @@ public final class AgentSession: @unchecked Sendable {
                         operatorControlWindowIDs = Set(windows.map(\.windowID))
                     }
                 } else if let reason {
-                    agentPauseReason = String(reason.prefix(240))
+                    agentPauseReason = String(reason.prefix(Self.maximumPauseReasonCharacters))
                 }
                 return
             }
@@ -847,13 +847,13 @@ public final class AgentSession: @unchecked Sendable {
             if byOperator, let since = operatorControlSince {
                 let current = Set(windows.map(\.windowID))
                 pendingOperatorHandoff = OperatorHandoff(
-                    note: handoffNote.map { String($0.prefix(480)) },
+                    note: handoffNote.map { String($0.prefix(Self.maximumHandoffNoteCharacters)) },
                     controlDurationSeconds: max(0, now.timeIntervalSince(since)),
                     windowsChanged: current != operatorControlWindowIDs,
                     releasedAt: now)
             } else if byOperator, let handoffNote, !handoffNote.isEmpty {
                 pendingOperatorHandoff = OperatorHandoff(
-                    note: String(handoffNote.prefix(480)),
+                    note: String(handoffNote.prefix(Self.maximumHandoffNoteCharacters)),
                     controlDurationSeconds: 0,
                     windowsChanged: false,
                     releasedAt: now)
@@ -936,13 +936,18 @@ public final class AgentSession: @unchecked Sendable {
     }
 
     public static let colorTags: Set<String> = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
+    public static let maximumTitleCharacters = 120
+    /// The agent's reason for pausing, shown to the operator.
+    public static let maximumPauseReasonCharacters = 240
+    /// The operator's note handed back to the agent on resume.
+    public static let maximumHandoffNoteCharacters = 480
 
     /// Rename or colour-tag the session. Empty strings clear the field; nil leaves it alone.
     public func annotate(title: String?, colorTag: String?) throws {
         if let title {
-            guard title.count <= 120, title.utf8.count <= 480,
+            guard title.count <= Self.maximumTitleCharacters, title.utf8.count <= Self.maximumTitleCharacters * 4,
                   title.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
-                throw SpaceOError.badRequest("title must be at most 120 control-free characters")
+                throw SpaceOError.badRequest("title must be at most \(Self.maximumTitleCharacters) control-free characters")
             }
         }
         if let colorTag, !colorTag.isEmpty, colorTag != "none", !Self.colorTags.contains(colorTag) {

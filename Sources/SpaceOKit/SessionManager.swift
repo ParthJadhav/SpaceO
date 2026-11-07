@@ -2382,10 +2382,10 @@ public actor SessionManager {
 
         case "click":
             if let label = request.label {
-                guard !label.isEmpty, label.utf8.count <= 480,
+                guard !label.isEmpty, label.utf8.count <= AXLabelMatcher.maximumTextBytes,
                       request.element == nil, request.x == nil, request.y == nil,
                       request.web != true, request.snapshotID == nil else {
-                    throw SpaceOError.badRequest("label must be an exact accessible name, at most 480 bytes, used without element, snapshot, web or coordinates")
+                    throw SpaceOError.badRequest("label must be an exact accessible name, at most \(AXLabelMatcher.maximumTextBytes) bytes, used without element, snapshot, web or coordinates")
                 }
             } else if request.match != nil {
                 throw SpaceOError.badRequest("match applies to click by label")
@@ -2874,12 +2874,12 @@ public actor SessionManager {
             // keeps Command-C/X recognition identical on both guarded production routes.
             let parsedCombo = try KeyCombo.parse(combo)
             let keyAction = request.keyAction ?? "tap"
-            guard ["tap", "down", "up"].contains(keyAction) else {
-                throw SpaceOError.badRequest("key action must be tap, down or up")
+            guard KeyCombo.actions.contains(keyAction) else {
+                throw SpaceOError.badRequest("key action must be " + alternatives(KeyCombo.actions))
             }
             let holdMs = request.holdMs ?? 0
-            guard (0...5_000).contains(holdMs) else {
-                throw SpaceOError.badRequest("hold_ms must be from 0 through 5000")
+            guard KeyCombo.holdMillisecondsRange.contains(holdMs) else {
+                throw SpaceOError.badRequest("hold_ms must be from \(KeyCombo.holdMillisecondsRange.lowerBound) through \(KeyCombo.holdMillisecondsRange.upperBound)")
             }
             guard keyAction == "tap" || holdMs == 0 else {
                 throw SpaceOError.badRequest("hold_ms applies to a tap; use action down/up for an open-ended hold")

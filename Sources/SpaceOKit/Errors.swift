@@ -67,6 +67,12 @@ public enum ResourceLimitKind: String, Codable, Sendable, Equatable {
     case creationRate = "creation_rate"
 }
 
+/// "a, b or c": how refusals name the values a field accepts.
+public func alternatives(_ values: [String]) -> String {
+    guard let last = values.last, values.count > 1 else { return values.first ?? "" }
+    return values.dropLast().joined(separator: ", ") + " or " + last
+}
+
 public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatable {
     /// A private symbol or class this OS build no longer provides.
     case applicationExited(String)
