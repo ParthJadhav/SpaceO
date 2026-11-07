@@ -1,7 +1,6 @@
 import Foundation
 import ApplicationServices
 import CoreGraphics
-import SpaceOPrivate
 
 /// Hard limits for one accessibility-tree request.
 ///
@@ -200,7 +199,7 @@ struct SystemAXTraversalProvider: AXTraversalProviding {
     }
 
     func windowID(_ element: AXUIElement) -> CGWindowID {
-        SPOWindowIDForAXElement(element)
+        AX.windowID(element)
     }
 
     func element(_ element: AXUIElement, attribute: String) -> AXUIElement? {
