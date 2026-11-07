@@ -117,8 +117,4 @@ extension ViewerModel {
                     detail: formatted.detail, sessionID: event.session,
                     isAgentAction: formatted.isAgentAction)
     }
-
-    static func eventTitle(_ kind: String) -> String {
-        ViewerEventFormatter.title(forKind: kind)
-    }
 }

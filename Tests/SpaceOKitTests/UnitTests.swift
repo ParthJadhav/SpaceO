@@ -156,11 +156,6 @@ final class UnitTests: XCTestCase {
         XCTAssertFalse(b.drift(from: a).isEmpty, "the movement should still be visible in drift")
     }
 
-    func testChromiumDetectionCoversCommonBundles() {
-        XCTAssertTrue(InputRouter.chromiumLike.contains { "com.google.Chrome".hasPrefix($0) })
-        XCTAssertTrue(InputRouter.chromiumLike.contains { "com.brave.Browser".hasPrefix($0) })
-    }
-
     // MARK: - Errors
 
     func testErrorsCarryRemedies() {

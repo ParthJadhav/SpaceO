@@ -494,11 +494,6 @@ public final class Stage: @unchecked Sendable {
         bounds.contains(CGPoint(x: rect.midX, y: rect.midY))
     }
 
-    /// A sensible default frame for a window placed here: inset from the edges.
-    public func defaultWindowFrame(inset: CGFloat = 60) -> CGRect {
-        bounds.insetBy(dx: inset, dy: inset)
-    }
-
     /// Refuse publishing a slot after any lifecycle failure. Allocation uses publication-time
     /// Space IDs, so claiming it never introduces another synchronous display query.
     func requireAllocationReady() throws {
@@ -896,12 +891,6 @@ public final class Stage: @unchecked Sendable {
     /// displays that survived their owner unexpectedly.
     public static func spaceODisplayIDs() -> [CGDirectDisplayID] {
         onlineDisplayIDs().filter(isSpaceODisplay)
-    }
-
-    /// SpaceO displays attached to the login session but not owned by this process.
-    public static func orphanedSpaceODisplayIDs() -> [CGDirectDisplayID] {
-        let owned = ownership.lock.withLock { ownership.displayIDs }
-        return spaceODisplayIDs().filter { !owned.contains($0) }
     }
 
     private static func recordOwned(_ id: CGDirectDisplayID) {

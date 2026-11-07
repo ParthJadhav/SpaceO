@@ -206,7 +206,6 @@ public final class AgentFocusGuard: @unchecked Sendable {
                 // must have left the agent too before this counts.
                 if environment.isolationIntact() {
                     guard current.pid == target.pid else { return .notNeeded }
-                    AgentActivity.recordFocusRestore()
                     return .restored(app: target.name, agentPID: front.pid, agentName: front.name, session: session)
                 }
                 frontmostAgain = frontmostAgain || current.pid == target.pid

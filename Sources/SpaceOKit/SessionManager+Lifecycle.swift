@@ -215,11 +215,6 @@ extension SessionManager {
         displayEnvironmentObserver = observer
     }
 
-    public func stopDisplayEnvironmentObservation() {
-        displayEnvironmentObserver?.stop()
-        displayEnvironmentObserver = nil
-    }
-
     /// Re-check every live session's display after wake or reconfiguration.
     ///
     /// A virtual display can vanish across sleep; nothing else would notice until an agent's

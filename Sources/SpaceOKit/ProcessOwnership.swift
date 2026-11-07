@@ -129,15 +129,6 @@ public enum ProcessOwnership {
         }
     }
 
-    /// Any live owner of this PID, whatever its start time. Used to answer "is this number
-    /// spoken for?" before an identity has been established.
-    public static func ownerOfPID(_ pid: pid_t) -> String? {
-        state.lock.withLock {
-            pruneLocked()
-            return state.owners.first { $0.key.pid == pid }?.value
-        }
-    }
-
     /// Forget claims whose process has exited. Without this, a long-lived daemon accumulates
     /// dead identities and eventually refuses adoption of a recycled PID for no reason.
     private static func pruneLocked() {

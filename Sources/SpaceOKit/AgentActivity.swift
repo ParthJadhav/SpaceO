@@ -1,6 +1,6 @@
 import Foundation
 
-/// Counts the things SpaceO itself did that could disturb the user.
+/// The applications and Spaces that belong to agents.
 ///
 /// Needed because an isolation check that only diffs before/after state cannot tell
 /// "the agent grabbed the pointer" from "the user moved their mouse while the command ran".
@@ -13,29 +13,11 @@ public enum AgentActivity {
     /// declaring each mutable static independently concurrency-safe.
     private final class State: @unchecked Sendable {
         let lock = NSLock()
-        var focusFlips = 0
-        var focusRestores = 0
         var agentPIDs: Set<pid_t> = []
         var agentSpaces: Set<UInt64> = []
     }
 
     private static let state = State()
-
-    /// How many times SpaceO has flipped input routing to a background app.
-    public static var focusFlipCount: Int {
-        state.lock.withLock { state.focusFlips }
-    }
-    /// How many times SpaceO explicitly handed input routing back to the user's app.
-    public static var focusRestoreCount: Int {
-        state.lock.withLock { state.focusRestores }
-    }
-
-    public static func recordFocusFlip() {
-        state.lock.withLock { state.focusFlips += 1 }
-    }
-    public static func recordFocusRestore() {
-        state.lock.withLock { state.focusRestores += 1 }
-    }
 
     // MARK: - What belongs to an agent
     //
@@ -66,8 +48,6 @@ public enum AgentActivity {
     /// Test seam.
     static func reset() {
         state.lock.withLock {
-            state.focusFlips = 0
-            state.focusRestores = 0
             state.agentPIDs = []
             state.agentSpaces = []
         }

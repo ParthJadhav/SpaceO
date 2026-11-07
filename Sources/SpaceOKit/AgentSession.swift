@@ -960,14 +960,6 @@ public final class AgentSession: @unchecked Sendable {
         }
     }
 
-    /// Restore annotation from a durable record on recovery.
-    func restoreAnnotation(title: String?, colorTag: String?) {
-        agentInputLock.withLock {
-            sessionTitle = title
-            sessionColorTag = colorTag
-        }
-    }
-
     public func setRecordingMode(_ mode: String?) {
         agentInputLock.withLock { recordingMode = mode }
     }

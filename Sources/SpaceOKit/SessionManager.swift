@@ -477,8 +477,6 @@ public actor SessionManager {
         try pool.setSessionsPerDisplay(value)
     }
 
-    public func poolReport() -> [DisplayPool.DisplayReport] { pool.report() }
-
     // MARK: - Lifecycle
 
     @discardableResult

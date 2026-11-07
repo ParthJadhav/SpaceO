@@ -74,31 +74,6 @@ public struct Capabilities: Sendable {
         ["virtual-display", "space-query", "per-pid-events", "ax-window-id", "accessibility"]
     }
 
-    /// Throws the most useful error for whatever is missing, or returns.
-    public func requireDriving() throws {
-        if !builtWithARC {
-            throw SpaceOError.unavailable(
-                capability: "Objective-C ARC (required for virtual-display teardown)")
-        }
-        for name in required where name != "accessibility" {
-            if let item = items.first(where: { $0.name == name }), !item.available {
-                let capability = item.unavailableReason.map {
-                    "\(name): \($0)"
-                } ?? name
-                throw SpaceOError.unavailable(capability: capability)
-            }
-        }
-        if items.first(where: { $0.name == "accessibility" })?.available != true {
-            throw SpaceOError.accessibilityDenied
-        }
-    }
-
-    public func requireCapture() throws {
-        if items.first(where: { $0.name == "screen-recording" })?.available != true {
-            throw SpaceOError.screenRecordingDenied
-        }
-    }
-
     /// Whether the private-API shim was built with ARC. If this is ever false, virtual
     /// display teardown leaks a phantom monitor, so it belongs in the report rather than
     /// in a comment.
