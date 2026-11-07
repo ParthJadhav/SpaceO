@@ -38,6 +38,7 @@ public enum Capture {
         let frame: CGRect
     }
 
+    /// Maximum allocation requested from native capture (256 MiB at four bytes per pixel).
     static let maximumPixelCount = 64 * 1_024 * 1_024
 
     public static func display(_ stage: Stage) async throws -> CGImage {
