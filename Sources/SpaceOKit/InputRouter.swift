@@ -368,7 +368,6 @@ public enum InputRouter {
         return route
     }
 
-    /// Restore a route returned by `beginPointerInput`.
     public static func endPointerInput(_ route: UserInputRoute?) {
         guard let route else { return }
         _ = restoreUserInputRoute(route)

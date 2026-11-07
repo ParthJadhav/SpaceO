@@ -77,7 +77,6 @@ final class MCPConnectionMemory: @unchecked Sendable {
         return snapshots[session]?[windowID]
     }
 
-    /// Drop everything remembered about a session that ended or was released.
     func forget(session: String) {
         lock.lock()
         defer { lock.unlock() }
@@ -132,7 +131,6 @@ final class MCPConnectionMemory: @unchecked Sendable {
         return driftDaemonInstance != instance
     }
 
-    /// A drift warning that the next tool result would deliver.
     var hasUndeliveredDaemonDrift: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -146,7 +144,6 @@ final class MCPConnectionMemory: @unchecked Sendable {
         return driftWarning
     }
 
-    /// Everything queued for the next tool result, cleared as it is returned.
     func drainNotes() -> [String] {
         lock.lock()
         defer { lock.unlock() }

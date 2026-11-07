@@ -4,8 +4,6 @@ import SpaceOKit
 /// What one session is doing, in the words every surface of the console uses: the sidebar row,
 /// the window subtitle, the canvas footer and the inspector. One precedence, decided here, so
 /// two places cannot describe the same session differently.
-///
-/// Pure, with the clock passed in.
 struct ViewerSessionStatus: Equatable, Sendable {
     enum Kind: Int, Equatable, Comparable, Sendable {
         case idle

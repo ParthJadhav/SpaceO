@@ -711,7 +711,6 @@ extension SessionManager {
         guard remaining >= (step.cmd == "wait" ? 0.5 : 0.001) else { throw BatchDeadlineExceeded() }
         if step.cmd == "wait" {
             try preflightEvidence(step)
-            // Validate the requested deadline before shortening it to the batch's remainder.
             _ = try WaitPolicy(deadline: step.timeout ?? 15)
             step.timeout = min(step.timeout ?? 15, remaining)
             gate.finish()

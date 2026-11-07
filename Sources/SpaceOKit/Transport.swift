@@ -979,7 +979,6 @@ public enum Transport {
         }
     }
 
-    /// Open, start, and return an event subscription in one call.
     public static func subscribe(
         to path: String,
         sinceSeq: UInt64,
@@ -1360,7 +1359,6 @@ public enum Transport {
         }
     }
 
-    /// Is a daemon alive on this socket?
     public static func ping(_ path: String) -> Bool {
         pingResponse(path)?.ok == true
     }

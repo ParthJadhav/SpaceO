@@ -38,10 +38,8 @@ public enum Capture {
         let frame: CGRect
     }
 
-    /// Maximum allocation requested from native capture (256 MiB at four bytes per pixel).
     static let maximumPixelCount = 64 * 1_024 * 1_024
 
-    /// Everything on the agent's screen.
     public static func display(_ stage: Stage) async throws -> CGImage {
         guard CGPreflightScreenCaptureAccess() else { throw SpaceOError.screenRecordingDenied }
         let content = try await shareableContent()
@@ -69,7 +67,6 @@ public enum Capture {
     /// field in the response it could have used to tell the difference.
     public static let defaultScale: Double = 1
 
-    /// Validate an agent-requested capture scale.
     public static func validatedScale(_ requested: Int?) throws -> Double {
         guard let requested else { return defaultScale }
         guard (1...4).contains(requested) else {
@@ -182,7 +179,6 @@ public enum Capture {
             originY: captured.minY))
     }
 
-    /// A single window, wherever it lives.
     public static func window(
         _ window: WindowRef,
         scale: Double = defaultScale
@@ -386,7 +382,6 @@ public enum Capture {
         var offset = 0
         var counted = 0
         while offset + 2 < length {
-            // Luminance-ish: average of the first three channels at this pixel.
             let luma = (Int(bytes[offset]) + Int(bytes[offset + 1]) + Int(bytes[offset + 2])) / 3
             histogram[luma] += 1
             counted += 1
@@ -399,10 +394,9 @@ public enum Capture {
             let p = Double(count) / Double(counted)
             entropy -= p * log2(p)
         }
-        return entropy / 8.0     // normalise against the 8-bit maximum
+        return entropy / 8.0
     }
 
-    /// True when the image plausibly contains rendered UI rather than a blank surface.
     public static func looksRendered(_ image: CGImage) -> Bool {
         image.width > 8 && image.height > 8 && visualEntropy(image) > 0.02
     }

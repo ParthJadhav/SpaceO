@@ -12,7 +12,6 @@ public struct LoggingSettings: Codable, Sendable, Equatable {
 
     /// How much the MCP agent journal keeps per tool call.
     public enum JournalLevel: String, Codable, Sendable, CaseIterable {
-        /// No journal.
         case off
         /// Tool, redacted arguments, outcome, error code and recovery, timing, result size and
         /// the first line of the result — enough to rank friction without screen content.

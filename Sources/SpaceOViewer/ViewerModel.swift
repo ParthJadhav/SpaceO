@@ -328,7 +328,6 @@ final class ViewerModel {
     var viewportZoom: CGFloat = 1
     var viewportPan: CGPoint = .zero
     var zoomMode: ViewerZoomMode = .fit
-    /// The console surface's current size, reported by the view so Actual Size can be resolved.
     var surfaceSize: CGSize = .zero
     var inspectorSection: ViewerInspectorSection = .overview {
         didSet { if oldValue != inspectorSection { updatePreferences { $0.inspectorSection = inspectorSection } } }
@@ -472,7 +471,6 @@ final class ViewerModel {
 
     let preferencesStore: ViewerPreferencesStore?
     @ObservationIgnored var preferencesSaveTask: Task<Void, Never>?
-    /// Set once the first control-plane read has let the saved selection be re-applied.
     @ObservationIgnored var selectionRestored = false
 
     private let streamEngine: any ViewerDisplayStreaming
@@ -589,7 +587,6 @@ final class ViewerModel {
         selectedSession?.inputPaused == true
     }
 
-    /// One line per action for the event feed: what, verdict, and the element it addressed.
     nonisolated static func agentActionDetail(_ session: SessionInfo) -> String {
         var parts = [session.lastAgentAction ?? "action"]
         if let outcome = session.lastAgentActionOutcome, !outcome.isEmpty {
@@ -807,7 +804,6 @@ final class ViewerModel {
         pendingConfirmation = nil
     }
 
-    /// Title for a confirmation dialog: the session's title when it is still listed.
     func confirmationTitle(for action: ViewerHealthAction) -> String {
         if case let .removeDisplay(displayID) = action {
             let name = displays.first { $0.id == displayID }
@@ -1394,7 +1390,6 @@ final class ViewerModel {
         applyZoomMode()
     }
 
-    /// An explicit zoom value is a custom mode; `1` returns to Fit.
     func setZoom(_ value: CGFloat) {
         let clamped = ViewerZoom.clamp(Double(value))
         setZoomMode(clamped <= 1 ? .fit : .custom(clamped))
@@ -2139,7 +2134,6 @@ final class ViewerModel {
         lastSampleAt = Date()
     }
 
-    /// Whether the canvas is current (see `ViewerStreamHealth`).
     func streamHealth(now: Date = Date()) -> ViewerStreamHealth {
         ViewerStreamHealth.evaluate(
             state: streamState,

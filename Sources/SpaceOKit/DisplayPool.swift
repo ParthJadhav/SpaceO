@@ -19,7 +19,6 @@ public final class DisplayPool {
         public var frame: CGRect {
             TileLayout.rect(in: stage.bounds, capacity: capacity, index: index) ?? stage.bounds
         }
-        /// True when this slot is the display's only tenant, i.e. it has the screen to itself.
         public var isExclusive: Bool { capacity == 1 }
     }
 
@@ -103,12 +102,10 @@ public final class DisplayPool {
     public var sessionCount: Int { lock.withLock { displays.reduce(0) { $0 + $1.taken.count } } }
     public var stages: [Stage] { lock.withLock { displays.map(\.stage) } }
 
-    /// Change the packing density for displays created from now on.
     public func setSessionsPerDisplay(_ value: Int) throws {
         guard value > 0 else {
             throw SpaceOError.badRequest("sessions per display must be a positive integer")
         }
-        // Validate technical layout bounds before applying the new density.
         _ = try budget.validateDisplaySize(displaySize, capacity: value)
         lock.withLock { sessionsPerDisplay = value }
     }
@@ -212,7 +209,6 @@ public final class DisplayPool {
 
     // MARK: - Budget accounting
 
-    /// What the pool is currently holding. Read by `pool` and `doctor`.
     public func usage() -> ResourceBudget.Usage {
         lock.withLock {
             pruneCreationWindowLocked()
@@ -230,7 +226,6 @@ public final class DisplayPool {
             creationsInLastMinute: recentCreations.count)
     }
 
-    /// Seconds until the oldest creation in the rolling minute ages out and frees a slot.
     private func rateWindowClearsInLocked() -> Double? {
         recentCreations.min().map { max(0, $0.addingTimeInterval(60).timeIntervalSinceNow) }
     }
@@ -240,8 +235,6 @@ public final class DisplayPool {
         recentCreations.removeAll { $0 < cutoff }
     }
 
-    /// Give a tile back.
-    ///
     /// With `retainEmpty`, an empty display remains fenced and available for immediate reuse
     /// until `retireEmptyDisplays()` or `releaseAll()` is called.
     @discardableResult
@@ -270,7 +263,6 @@ public final class DisplayPool {
         return true
     }
 
-    /// Retire empty displays, optionally preserving the most recently emptied valid standbys.
     @discardableResult
     public func retireEmptyDisplays(keeping retainedCount: Int = 0) -> [CGDirectDisplayID] {
         lock.lock()

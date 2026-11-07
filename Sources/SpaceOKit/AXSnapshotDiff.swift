@@ -53,7 +53,6 @@ public extension AXNode {
     }
 }
 
-/// One rendered outline line together with the key it belongs to.
 public struct SnapshotDiffLine: Equatable, Sendable {
     public var key: String
     public var line: String
@@ -124,7 +123,6 @@ public enum AXSnapshotDiff {
             baseMissing: false)
     }
 
-    /// True when nothing was added, removed, or changed.
     public static func isEmpty(_ diff: ScreenDiff) -> Bool {
         diff.added.isEmpty && diff.removed.isEmpty && diff.changed.isEmpty
     }
@@ -229,7 +227,6 @@ public final class AXSnapshotHistory: @unchecked Sendable {
     /// Remember a snapshot. Re-remembering an existing ID replaces it and moves it to newest.
     public func remember(snapshotID: String, windowID: UInt32, nodes: [AXNode]) {
         let key = Self.normalize(snapshotID)
-        // Ordinary snapshots can share their immutable array storage with the live cache.
         let bounded = nodes.count <= Self.maximumNodes ? nodes : Array(nodes.prefix(Self.maximumNodes))
         let bytes = payloadBytes(bounded, snapshotID: key)
         lock.lock()
@@ -252,7 +249,6 @@ public final class AXSnapshotHistory: @unchecked Sendable {
         }?.nodes
     }
 
-    /// Drop every snapshot taken of one window (it closed or was replaced).
     public func forget(windowID: UInt32) {
         lock.lock()
         defer { lock.unlock() }

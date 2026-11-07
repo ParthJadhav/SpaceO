@@ -13,9 +13,7 @@ struct MCPRenderContext {
     /// The daemon command the response answers. Nil (direct test calls) keeps geometry on
     /// non-action responses, the pre-compaction behaviour.
     var command: String?
-    /// The session the request addressed, for receipts that name it.
     var session: String?
-    /// The connection decided the display target changed since it last rendered one.
     var displayTargetChanged = false
     /// Sessions this connection holds leases for, marked `[yours]` in session listings.
     var ownedSessions: Set<String> = []
@@ -59,7 +57,6 @@ struct MCPCallOptions: Equatable {
     }
 }
 
-/// Pure presentation helpers shared by `MCPServer.render` and `renderFailure`.
 enum MCPPresentation {
 
     // MARK: Isolation
@@ -282,7 +279,6 @@ enum MCPPresentation {
         text.split(whereSeparator: { $0 == " " || $0 == "\t" || $0 == "\n" }).map(String.init)
     }
 
-    /// Match the longest known command prefix and render its flags as tool arguments.
     private static func toolForCLI(_ command: String) -> (tool: String, call: String)? {
         let tokens = words(command)
         var best: (tool: String, length: Int)?
@@ -392,7 +388,6 @@ enum MCPPresentation {
         return best?.name
     }
 
-    /// `sessionId` → `session_id`.
     static func snakeCase(_ key: String) -> String {
         var result = ""
         for character in key {
@@ -402,7 +397,6 @@ enum MCPPresentation {
         return result.replacingOccurrences(of: "-", with: "_")
     }
 
-    /// Levenshtein distance with an early exit once every cell exceeds `limit`.
     static func editDistance(_ lhs: String, _ rhs: String, limit: Int) -> Int {
         let a = Array(lhs.unicodeScalars), b = Array(rhs.unicodeScalars)
         if abs(a.count - b.count) > limit { return limit + 1 }

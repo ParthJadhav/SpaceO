@@ -25,7 +25,6 @@ enum ElectronEffectConfirmation {
         return try? await bridge.state()
     }
 
-    /// A warning to attach when the keystroke produced no observable effect, or nil when it did.
     static func confirm(
         _ bridge: ElectronEditorBridge?,
         before: ElectronEditorBridge.EditorState?,

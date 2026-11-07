@@ -6,7 +6,6 @@ public struct MCPClientRegistration: Equatable, Sendable {
     public var client: MCPClient
     /// `user`, `project <path>`, or `config` for clients with a single file.
     public var scope: String
-    /// The file the entry was read from.
     public var source: String
     /// The command exactly as configured; may be bare (`spaceo`) for PATH resolution.
     public var command: String

@@ -352,7 +352,6 @@ public enum AX {
         return achieved
     }
 
-    /// The scrolled content's extent, taken from the largest child a scroll area contains.
     private static func contentSize(
         of scrollArea: AXUIElement,
         horizontal: Bool
@@ -376,7 +375,6 @@ public enum AX {
 
     // MARK: - Identity
 
-    /// The CGWindowID behind an AX window element.
     public static func windowID(_ element: AXUIElement) -> CGWindowID {
         SPOWindowIDForAXElement(element)
     }
@@ -385,7 +383,6 @@ public enum AX {
         string(element, kAXRoleAttribute as String) ?? "AXUnknown"
     }
 
-    /// Best available human label for an element, in the order a person would look for one.
     public static func label(_ element: AXUIElement) -> String {
         for attr in [kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
                      kAXHelpAttribute, kAXPlaceholderValueAttribute] {

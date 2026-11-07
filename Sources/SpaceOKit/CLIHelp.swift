@@ -313,14 +313,12 @@ public enum CLIHelp {
         return words
     }
 
-    /// Whether usage line `tokens` (starting at `spaceo`) documents `key`.
     static func line(_ tokens: [String], documents key: String) -> Bool {
         guard tokens.count > 1, tokens[0] == "spaceo" else { return false }
         let parts = key.split(separator: ".").map(String.init)
         guard tokens[1] == parts[0] else { return false }
         let words = subcommandWords(after: tokens.dropFirst(2))
         if parts.count == 2 { return words.contains(parts[1]) }
-        // A bare command key: the line must not be one of its subcommand keys' lines.
         guard let first = words.first else { return true }
         return CLISpec.allowedFlags["\(parts[0]).\(first)"] == nil
     }
@@ -472,7 +470,6 @@ extension CLISpec {
         return nil
     }
 
-    /// Every backticked `spaceo …` command in `text`.
     public static func backtickedCommands(in text: String) -> [String] {
         let parts = text.components(separatedBy: "`")
         return stride(from: 1, to: parts.count, by: 2).map { parts[$0] }
@@ -481,7 +478,6 @@ extension CLISpec {
 }
 
 extension CLIArguments {
-    /// Alias pairs the caller supplied both spellings of.
     public var conflictingAliases: [(String, String)] {
         CLISpec.aliasPairs.filter { wasSupplied($0.0) && wasSupplied($0.1) }
     }

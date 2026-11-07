@@ -1,10 +1,5 @@
 import Foundation
 
-/// Every failure mode SpaceO can produce.
-///
-/// Error types in this package conform to LocalizedError so that `localizedDescription` —
-/// which generic code like `Response.failure` reaches for — carries the deliberate message
-/// instead of Foundation's generic "operation couldn't be completed" text.
 /// A recovery step an agent can execute without interpreting prose: the tool to call, the
 /// arguments to pass, and what to do once it returns.
 public struct RecoveryHint: Codable, Sendable, Equatable {
@@ -73,8 +68,12 @@ public func alternatives(_ values: [String]) -> String {
     return values.dropLast().joined(separator: ", ") + " or " + last
 }
 
+/// Every failure mode SpaceO can produce.
+///
+/// Error types in this package conform to LocalizedError so that `localizedDescription` —
+/// which generic code like `Response.failure` reaches for — carries the deliberate message
+/// instead of Foundation's generic "operation couldn't be completed" text.
 public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatable {
-    /// A private symbol or class this OS build no longer provides.
     case applicationExited(String)
     case windowNotReady(String)
     case staleSnapshot(String)
@@ -85,11 +84,11 @@ public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatab
     case waitQueueTimeout(String)
     /// Batch admission/finalization exceeded its queue budget; receipts remain historical.
     case batchQueueTimeout(String)
+    /// A private symbol or class this OS build no longer provides.
     case unavailable(capability: String)
     /// Accessibility permission missing. Carries the exact remedy, naming the responsible app
     /// when the daemon could resolve it.
     case accessibilityDenied
-    /// Screen Recording permission missing.
     case screenRecordingDenied
     /// The daemon is draining ahead of a restart and refuses new sessions only.
     case daemonDraining
@@ -99,13 +98,10 @@ public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatab
     case leaseRequired(String)
     /// A web action needs one bound Chromium target and the browser has several.
     case webTargetAmbiguous(String)
-    /// The virtual display could not be created.
     case stageCreationFailed(String)
-    /// No such session.
     case unknownSession(String)
     /// The app could not be launched or never produced a window.
     case launchFailed(String)
-    /// No window matched.
     case windowNotFound(String)
     /// The target rejected an operation.
     case unsupportedTarget(String)
@@ -113,9 +109,7 @@ public enum SpaceOError: Error, CustomStringConvertible, LocalizedError, Equatab
     /// `unsupportedTarget`: nothing is wrong with the app, the caller just picked a node
     /// that is not a button.
     case elementNotPressable(role: String, actions: [String])
-    /// Capture produced nothing usable.
     case captureFailed(String)
-    /// A malformed request from the CLI.
     case badRequest(String)
     /// Requested cleanup left processes or virtual displays alive.
     case teardownIncomplete(TeardownReport)

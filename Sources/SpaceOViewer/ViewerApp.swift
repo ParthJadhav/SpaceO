@@ -130,7 +130,6 @@ struct SpaceOViewerApp: App {
 }
 
 final class ViewerAppDelegate: NSObject, NSApplicationDelegate {
-    /// Set from the "launch as a menu bar item only" preference at startup.
     private var launchedAsMenuBarItem = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {

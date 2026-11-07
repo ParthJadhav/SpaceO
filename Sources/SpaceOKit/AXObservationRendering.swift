@@ -9,8 +9,6 @@ extension AXNode {
         return line
     }
 
-    /// Append labels directly to the destination so a full outline does not copy them through
-    /// a temporary per-node line string first.
     func appendRenderedLine(to output: inout String, label override: String? = nil, indented: Bool = false) {
         if indented {
             output += String(repeating: "  ", count: min(max(depth, 0), 12))
@@ -18,8 +16,6 @@ extension AXNode {
         if let index {
             output += "[\(index)] "
         }
-        // AX roles normally have one leading prefix. Append that suffix without allocating
-        // a replacement string; retain the previous behavior for unusual embedded prefixes.
         if role.hasPrefix("AX"), !role.dropFirst(2).contains("AX") {
             output.append(contentsOf: role.dropFirst(2))
         } else if role.contains("AX") {

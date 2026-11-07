@@ -66,7 +66,6 @@ struct ViewerStatusAggregate: Equatable, Sendable {
 
     var total: Int { red + needsHuman + amber + green }
 
-    /// The worst dot across sessions; nil with no sessions.
     var worst: ViewerSessionStatusDot? {
         if red > 0 { return .red }
         if needsHuman > 0 { return .needsHuman }

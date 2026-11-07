@@ -211,7 +211,6 @@ public enum LaunchAgentInstaller {
 
     // MARK: - Start advice
 
-    /// The command that restarts the supervised daemon in place.
     public static func kickstartCommand(uid: uid_t = getuid()) -> String {
         "launchctl kickstart -k gui/\(uid)/\(label)"
     }

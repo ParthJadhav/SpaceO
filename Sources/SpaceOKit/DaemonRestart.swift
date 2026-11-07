@@ -42,7 +42,6 @@ public struct DaemonRestart {
     }
 
     public var send: (Request, TimeInterval) throws -> Response
-    /// Whether the old daemon process is still alive.
     public var isAlive: () -> Bool
     public var now: () -> Date
     public var sleep: (TimeInterval) -> Void
@@ -87,7 +86,6 @@ public struct DaemonRestart {
         return stop
     }
 
-    /// Waits until the old process exits, reporting session counts as they change.
     func waitForExit(deadline: Date, reportSessions: Bool) -> Bool {
         var lastCount: Int?
         while isAlive() {
@@ -142,7 +140,6 @@ public struct DaemonRestart {
                              timeout: timeout)
     }
 
-    /// The old daemon cannot drain: wait for zero live sessions, then stop it.
     func legacyRestart(daemonVersion: String?, deadline: Date, timeout: TimeInterval) -> Outcome {
         let described = daemonVersion ?? "an older version"
         progress("the running daemon (\(described)) predates `daemon.drain`, so it cannot refuse new "

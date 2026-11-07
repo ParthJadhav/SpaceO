@@ -86,7 +86,6 @@ public actor ChromiumBridge {
     /// target list.
     private var attachedTargetID: String?
 
-    /// The page this bridge drives, or nil when it is not attached.
     public var boundTargetID: String? { attachedTargetID }
 
     /// How many DevTools sockets this bridge has opened. Re-attaching to the page it is already
@@ -1034,7 +1033,6 @@ public actor ChromiumBridge {
         return (result.text, result.truncated)
     }
 
-    /// The page's current text selection, or nil when nothing is selected.
     public func selectionText() async throws -> String? {
         let limit = SessionClipboard.maximumBytes
         let value = try await evaluate(ChromiumObservation.selection(maximumBytes: limit, requireComplete: true))
@@ -1154,7 +1152,6 @@ public actor ChromiumBridge {
         return CGPoint(x: point.x, y: point.y)
     }
 
-    /// Click the nth element from `interactiveElements`.
     public func clickElement(index: Int, button: MouseButton = .left, clickCount: Int = 1) async throws {
         let binding = commandBinding
         let point = try await elementCenter(index: index, binding: binding)

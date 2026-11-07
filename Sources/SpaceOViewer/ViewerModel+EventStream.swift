@@ -96,7 +96,6 @@ extension ViewerModel {
 
     /// One event into the feed and the notification policy. Redacted events keep their kind
     /// and session so activity still registers without disclosing another controller's detail.
-    /// Wording and severity come from `ViewerEventFormatter`, per kind.
     func ingest(_ event: DaemonEvent) {
         if event.kind == "isolation.verdict", event.redacted != true, let session = event.session {
             switch event.detail["verdict"] {

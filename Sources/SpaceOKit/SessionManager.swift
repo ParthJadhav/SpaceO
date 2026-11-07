@@ -3347,7 +3347,6 @@ public actor SessionManager {
         }.joined()).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// The `pool` message: what is currently allocated.
     static func poolSummary(displays: Int,
                             sessions: Int,
                             perDisplay: Int,

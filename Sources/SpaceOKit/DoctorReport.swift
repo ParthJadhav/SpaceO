@@ -8,7 +8,6 @@ import Foundation
 public struct DoctorReport: Sendable {
     /// What answered on the socket.
     public enum DaemonState: Sendable, Equatable {
-        /// Nothing is listening.
         case notRunning
         /// Something accepts connections but did not answer a request within the probe timeout.
         /// A busy daemon is still a daemon: its displays are not orphaned, and nothing here may

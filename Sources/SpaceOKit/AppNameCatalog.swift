@@ -52,7 +52,6 @@ enum AppNameCatalog {
         return fresh
     }
 
-    /// Every `.app` in `directories` and their immediate non-bundle subfolders, bounded.
     static func entries(in directories: [String] = standardDirectories,
                         fileManager: FileManager = .default) -> [Entry] {
         var found: [Entry] = []
@@ -103,7 +102,6 @@ enum AppNameCatalog {
         return Entry(name: name, url: url, aliases: aliases)
     }
 
-    /// Lowercased, diacritic-folded, whitespace-collapsed, without a trailing `.app`.
     static func normalized(_ text: String) -> String {
         var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.lowercased().hasSuffix(".app") { value.removeLast(4) }
@@ -111,7 +109,6 @@ enum AppNameCatalog {
         return value.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    /// Spelling-insensitive form: "Text Edit", "text-edit" and "TextEdit" compare equal.
     private static func compact(_ text: String) -> String {
         String(normalized(text).unicodeScalars.filter {
             CharacterSet.alphanumerics.contains($0)
@@ -137,8 +134,6 @@ enum AppNameCatalog {
         return spelled.count == 1 ? spelled[0].url : nil
     }
 
-    /// Up to `limit` app names closest to `query`: containment first, then edit distance within
-    /// a third of the name's length. Unrelated names are not suggested at all.
     static func suggestions(for query: String, in entries: [Entry], limit: Int = 3) -> [String] {
         let wanted = normalized(query)
         guard !wanted.isEmpty, wanted.count <= maximumNameCharacters, limit > 0 else { return [] }
@@ -169,7 +164,6 @@ enum AppNameCatalog {
         return names
     }
 
-    /// Levenshtein distance over characters. Inputs are bounded by `maximumNameCharacters`.
     static func editDistance(_ lhs: String, _ rhs: String) -> Int {
         let a = Array(lhs.prefix(maximumNameCharacters))
         let b = Array(rhs.prefix(maximumNameCharacters))

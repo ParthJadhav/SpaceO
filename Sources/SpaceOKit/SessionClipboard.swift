@@ -21,8 +21,6 @@ public final class SessionClipboard: @unchecked Sendable {
 
     public init() {}
 
-    /// Replace the clipboard contents.
-    ///
     /// Refuses text larger than `maximumBytes` and text containing NUL, which no Accessibility
     /// value setter or keystroke route can deliver faithfully.
     public func set(_ text: String) throws {
@@ -40,7 +38,6 @@ public final class SessionClipboard: @unchecked Sendable {
         self.text = text
     }
 
-    /// Current contents, or nil when nothing has been copied (or the clipboard was cleared).
     public func get() -> String? {
         lock.lock()
         defer { lock.unlock() }
@@ -54,7 +51,6 @@ public final class SessionClipboard: @unchecked Sendable {
         text = nil
     }
 
-    /// UTF-8 size of the current contents; 0 when empty.
     public var byteCount: Int {
         lock.lock()
         defer { lock.unlock() }
@@ -115,7 +111,6 @@ public enum ClipboardRoute {
         return "typing"
     }
 
-    /// Explains why a brokered clipboard operation was refused or narrowed to plain text.
     public static func refusalNote(for intercept: Intercept, hasBridge: Bool) -> String {
         let verb: String
         switch intercept {

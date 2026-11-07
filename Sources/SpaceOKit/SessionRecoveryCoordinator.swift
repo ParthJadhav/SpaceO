@@ -223,7 +223,6 @@ public final class SessionRecoveryCoordinator: @unchecked Sendable {
         }
     }
 
-    /// Retry explicit cleanup for one record.
     public func retryCleanup(
         sessionID: String
     ) throws -> SessionRecoveryCoordinatorResult {

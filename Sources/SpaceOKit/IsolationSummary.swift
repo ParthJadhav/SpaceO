@@ -108,7 +108,6 @@ enum IsolationSummaryWording {
         }
     }
 
-    /// Join names with "and" in a way that stays one clause: "a", "a and b", "a, b, and c".
     static func list(_ names: [String]) -> String {
         switch names.count {
         case 0: return "a required check"

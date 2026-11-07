@@ -31,7 +31,6 @@ enum ViewerAgentClient: String, CaseIterable, Identifiable {
         }
     }
 
-    /// The exact text to paste for this client.
     func registrationCommand(spaceoPath: String) -> String {
         switch self {
         case .claudeCode:
@@ -76,7 +75,6 @@ enum ViewerAgentClient: String, CaseIterable, Identifiable {
         return result + "\""
     }
 
-    /// The path the snippets point at.
     static func resolvedSpaceOPath() -> String {
         ViewerDaemonExecutable.resolve()?.path ?? "spaceo"
     }

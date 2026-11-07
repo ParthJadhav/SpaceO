@@ -373,7 +373,6 @@ final class MCPJournal: @unchecked Sendable {
     }()
 }
 
-/// Everything the journal needs about one finished tool call.
 struct MCPJournalCall {
     var tool: String
     var trace: String
@@ -390,7 +389,6 @@ struct MCPJournalCall {
     var releasedSessions: [String]?
 }
 
-/// Argument redaction for the journal. Pure, so the rules are tested without files.
 enum MCPJournalRedaction {
     /// Keys whose string values are what the agent typed or put on a clipboard.
     static let secretKeys: Set<String> = ["text"]

@@ -72,7 +72,6 @@ public enum ElectronEditorPanes {
         return .column(index + 1)
     }
 
-    /// Drop degenerate frames and collapse ones that describe the same pane twice.
     private static func distinctPanes(_ frames: [CGRect]) -> [CGRect] {
         var kept: [CGRect] = []
         for frame in frames {

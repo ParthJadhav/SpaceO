@@ -171,7 +171,6 @@ extension SessionManager {
             profilesRemoved: outcome.profilesRemoved)
     }
 
-    /// Publish and log one completed session ending, and remember it for later questions.
     func announceDestroyed(_ id: String, summary: DestroySummary) {
         emit("session.destroyed", session: id, [
             "complete": "true",

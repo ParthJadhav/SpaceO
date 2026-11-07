@@ -2,7 +2,6 @@ import Foundation
 import ApplicationServices
 import CoreGraphics
 
-/// One node of an application's accessibility tree.
 public struct AXNode: Sendable {
     /// Assigned only to actionable nodes — this is the handle an agent clicks by.
     public let index: Int?
@@ -103,7 +102,6 @@ public struct AXLabelMatcher: Equatable, Sendable {
     }
 }
 
-/// The focused window an application reports, and whether it blocks the rest of the app.
 public struct FocusedWindowObservation: Equatable, Sendable {
     public let windowID: CGWindowID
     public let modal: Bool
@@ -188,7 +186,6 @@ public struct AXSnapshot {
 
     public func node(at index: Int) -> AXNode? { nodes.first { $0.index == index } }
 
-    /// Resolve a unique exact accessible label from this fresh window-scoped snapshot.
     public func uniqueIndex(label: String) throws -> Int {
         try uniqueIndex(matching: AXLabelMatcher(text: label))
     }
@@ -217,7 +214,6 @@ public struct AXSnapshot {
         return index
     }
 
-    /// Actionable nodes whose label contains `text`, case-insensitively.
     public func find(_ text: String) -> [AXNode] {
         find(text, role: nil, limit: Int.max)
     }
@@ -253,8 +249,6 @@ public struct AXSnapshot {
     /// Markdown-ish outline. Actionable nodes carry their index in brackets.
     public func outline(includeNonActionable: Bool = false) -> String {
         var result = ""
-        // Reserve a bounded size estimate, avoiding repeated large string growth/copies.
-        // This only limits the initial reservation; it never clips the returned outline.
         let maximumReservation = 4 * 1_024 * 1_024
         var reservation = 0
         for node in nodes where node.isActionable || includeNonActionable {
@@ -301,7 +295,6 @@ public enum AXTree {
             generation: generation)
     }
 
-    /// Walk with an explicit aggregate safety envelope.
     public static func snapshot(
         pid: pid_t,
         window: WindowRef? = nil,
@@ -406,12 +399,12 @@ public enum AXTree {
         return element
     }
 
-    /// Reading-order text of a whole window: every text-bearing node's value, joined by newlines,
-    /// bounded to `maxChars`. Unlike `text(in:)` this does not stop at the first hit, so a
-    /// document body, a terminal pane, or a settings page reads as a whole.
     /// Characters a whole-window text read may return.
     public static let textCharacterRange = 1...20_000
 
+    /// Reading-order text of a whole window: every text-bearing node's value, joined by newlines,
+    /// bounded to `maxChars`. Unlike `text(in:)` this does not stop at the first hit, so a
+    /// document body, a terminal pane, or a settings page reads as a whole.
     public static func allText(
         in window: WindowRef,
         maxChars: Int,
@@ -480,7 +473,6 @@ public enum AXTree {
     /// Text roles whose AXValue is always a 0/1/2 state rather than readable text.
     static let stateValuedRoles: Set<String> = ["AXCheckBox", "AXRadioButton"]
 
-    /// The element that currently has keyboard focus inside an app, if any.
     public static func focusedElement(pid: pid_t) -> AXUIElement? {
         let app = AX.application(pid)
         AX.setTimeout(app, seconds: 1.5)

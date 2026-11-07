@@ -606,7 +606,6 @@ func remote(_ build: (inout Request) -> Void) -> Never {
     request.duration = doubleArgument("duration")
     request.snapshotID = stringArgument("snapshot")
     request.label = stringArgument("label")
-    // `match`/`role` refine label matching; `validateFlags` admits them only where they apply.
     request.match = stringArgument("match")
     if request.role == nil { request.role = stringArgument("role") }
     request.geometryToken = stringArgument("geometry")
@@ -994,7 +993,6 @@ case "daemon":
         displaySize = TileLayout.displaySize(forCapacity: perDisplay)
     }
 
-    // Validate technical geometry before starting the daemon.
     do {
         _ = try budget.validateDisplaySize(displaySize, capacity: perDisplay)
     } catch {
@@ -1039,7 +1037,6 @@ case "daemon":
         let trace = PerformanceTrace.signposter.beginInterval("Daemon.Request", id: PerformanceTrace.signposter.makeSignpostID())
         defer { PerformanceTrace.signposter.endInterval("Daemon.Request", trace) }
         let started = ContinuousClock.now
-        // Keep baselines for unexpected failures, but an unconfigured logger cannot use one.
         let metricsStarted = DaemonLog.shared.isConfigured ? ProcessMetricsSnapshot.capture() : nil
         var response = await holder.handle(request)
         var runtime = daemonRuntime

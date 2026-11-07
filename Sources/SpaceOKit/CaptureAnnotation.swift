@@ -79,7 +79,6 @@ public enum CaptureAnnotation {
         return (tags, partial)
     }
 
-    /// Draw `tags` onto a copy of `image` and return the copy. The input image is not modified.
     public static func annotate(_ image: CGImage, tags: [AnnotationTag]) throws -> CGImage {
         let width = image.width
         let height = image.height
@@ -146,7 +145,6 @@ public enum CaptureAnnotation {
             let textWidth = CGFloat(CTLineGetTypographicBounds(line, &ascent, &descent, nil))
             let badgeWidth = max(badgeMinimumWidth, ceil(textWidth) + 6)
 
-            // Keep the badge inside the image so an edge-hugging control still gets a legible mark.
             var badgeRect = CGRect(x: frame.minX, y: frame.minY,
                                    width: badgeWidth, height: badgeHeight)
             badgeRect.origin.x = max(0, min(badgeRect.origin.x, canvas.maxX - badgeWidth))

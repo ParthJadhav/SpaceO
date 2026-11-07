@@ -17,7 +17,6 @@ extension ViewerModel {
         schedulePreferencesSave()
     }
 
-    /// Coalesce bursts (a zoom drag, a rapid selection change) into one write.
     private func schedulePreferencesSave() {
         guard let preferencesStore else { return }
         preferencesSaveTask?.cancel()
@@ -101,7 +100,6 @@ extension ViewerModel {
     var canZoomIn: Bool { Double(viewportZoom) < ViewerZoom.maximum && selected != nil }
     var canZoomOut: Bool { viewportZoom > 1 }
 
-    /// The surface reports its size so Actual Size tracks window resizes.
     func reportSurfaceSize(_ size: CGSize) {
         guard size != surfaceSize else { return }
         surfaceSize = size

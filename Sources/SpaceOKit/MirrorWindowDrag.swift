@@ -50,8 +50,6 @@ extension MirrorInput {
     /// Roles that are window chrome rather than content when they are what the pointer hit.
     static let chromeRoles: Set<String> = ["AXWindow", "AXToolbar"]
 
-    /// Whether a hit on `role` near the top of a window starts a window drag. Pure, so the
-    /// decision is testable without a live application.
     public static func startsWindowDrag(hitRole: String, parentRole: String?,
                                         depthBelowTop: CGFloat) -> Bool {
         guard depthBelowTop >= 0, depthBelowTop <= windowChromeDepth else { return false }
@@ -63,8 +61,6 @@ extension MirrorInput {
         return false
     }
 
-    /// A drag handle for `candidate` at `global`, or nil when the point is content (or a
-    /// control) rather than the window's title bar or toolbar background.
     public static func windowDrag(at global: CGPoint, candidate: WindowCandidate) -> WindowDrag? {
         guard AXIsProcessTrusted(),
               let hit = AX.element(at: global, in: candidate.pid, windowID: candidate.windowID)

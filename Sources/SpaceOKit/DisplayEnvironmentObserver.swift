@@ -33,7 +33,6 @@ public final class DisplayEnvironmentObserver: @unchecked Sendable {
     private var callbackTarget: Unmanaged<CallbackTarget>?
     private var deliveredCount = 0
 
-    /// Handler invocations so far; lets a test prove a burst was coalesced.
     var deliveries: Int { lock.withLock { deliveredCount } }
 
     public init(

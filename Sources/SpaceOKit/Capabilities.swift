@@ -64,7 +64,6 @@ public struct Capabilities: Sendable {
             }
     }
 
-    /// True when SpaceO can additionally take screenshots.
     public var canCapture: Bool {
         items.first { $0.name == "virtual-display" }?.available == true
             && items.first { $0.name == "screen-recording" }?.available == true

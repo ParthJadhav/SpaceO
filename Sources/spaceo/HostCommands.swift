@@ -277,10 +277,8 @@ func runGuidedSetup(executable: String) -> Never {
 
 // MARK: - doctor
 
-/// How long doctor waits for the daemon before calling it unresponsive.
 let doctorProbeTimeout: TimeInterval = 2
 
-/// Where the Viewer is looked for, in order.
 func viewerSearchPaths() -> [String] {
     ["/Applications/SpaceO Viewer.app",
      (NSHomeDirectory() as NSString).appendingPathComponent("Applications/SpaceO Viewer.app")]

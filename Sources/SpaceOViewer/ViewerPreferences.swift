@@ -34,7 +34,6 @@ enum ViewerZoomMode: Codable, Equatable, Sendable {
     }
 }
 
-/// Zoom arithmetic shared by the model, the View menu and tests.
 enum ViewerZoom {
     static let minimum: Double = 1
     static let maximum: Double = 8
@@ -58,7 +57,6 @@ enum ViewerZoom {
         return min(maximum, max(minimum, zoom))
     }
 
-    /// Resolve a mode to a concrete zoom for the current geometry.
     static func zoom(for mode: ViewerZoomMode, displayBounds: CGRect, viewSize: CGSize) -> Double {
         switch mode {
         case .fit: return 1

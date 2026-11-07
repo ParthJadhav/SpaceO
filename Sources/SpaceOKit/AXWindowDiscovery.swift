@@ -80,7 +80,6 @@ enum AXWindowDiscovery {
                 if microseconds > 0 { pause(useconds_t(microseconds)) }
             }
         }
-        // The last failed attempt always throws above.
         throw incomplete("provider retries exhausted")
     }
 

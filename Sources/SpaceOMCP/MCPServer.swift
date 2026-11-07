@@ -50,7 +50,6 @@ final class MCPControllerContext: @unchecked Sendable {
     let owner: DurableSessionOwner
     let diagnosticRunID: String?
     let diagnosticMetrics: Bool
-    /// Presentation state for this connection: seen display targets, snapshot bases, notes.
     let memory: MCPConnectionMemory
     /// Per-call agent journal (`spaceo logging enable`); nil outside the stdio server.
     let journal: MCPJournal?
@@ -170,7 +169,6 @@ final class MCPControllerContext: @unchecked Sendable {
         return request
     }
 
-    /// Commands that act on one session and therefore take the implicit connection session.
     static func isSessionAddressed(_ command: String) -> Bool {
         command == "session.destroy"
             || DaemonCommand.ownerScopedMutations.contains(command)
@@ -251,7 +249,6 @@ final class MCPControllerContext: @unchecked Sendable {
         memory.forgetAllSessions()
     }
 
-    /// Session ids this connection holds a lease for.
     var ownedSessions: Set<String> {
         lock.lock()
         defer { lock.unlock() }
@@ -371,7 +368,6 @@ public enum MCPServer {
         }
     }
 
-    /// What the run loop should do with one read of stdin.
     enum InputOutcome {
         case line(MCPInputLine)
         case endOfInput
@@ -793,7 +789,6 @@ public enum MCPServer {
         let trace = UUID().uuidString.lowercased()
         let started = Date()
         var outcome = "invalid"
-        // What the journal needs once the call has been answered.
         var journaled = MCPJournalCall(tool: name, trace: trace, arguments: arguments,
                                        startedAt: started, milliseconds: 0, outcome: outcome)
         defer {
@@ -941,7 +936,6 @@ public enum MCPServer {
         outcome = response.warnings?.isEmpty == false ? "warning" : "ok"
     }
 
-    /// Put one-time notes in front of the first text block of a tool result.
     static func prependingNotes(_ notes: [String], to result: [String: Any]) -> [String: Any] {
         guard !notes.isEmpty, var content = result["content"] as? [[String: Any]] else { return result }
         let prefix = notes.joined(separator: "\n")
@@ -1000,8 +994,6 @@ public enum MCPServer {
     // MARK: - Observe after an action
 
 
-    /// Remember the newest snapshot a read returned, per session window, as the base for the
-    /// next action's `observe: diff`.
     static func rememberSnapshot(_ response: Response, for request: Request, controller: MCPControllerContext) {
         guard response.ok, request.cmd != "steps.run",
               let snapshot = response.snapshotID,
@@ -1018,7 +1010,6 @@ public enum MCPServer {
             || response.action?.route == "chromium-devtools"
     }
 
-    /// The owner-scoped read an action's `observe` issues, or nil with the line to show instead.
     static func observeRequest(
         after request: Request, response: Response, mode: MCPCallOptions.Observe,
         memory: MCPConnectionMemory
@@ -1328,7 +1319,6 @@ public enum MCPServer {
         return lines
     }
 
-    /// Flatten a daemon response into something a model reads well.
     static func render(_ response: Response, context: MCPRenderContext = .default) -> String {
         var lines: [String] = []
         let verbose = context.verbose
@@ -1727,7 +1717,6 @@ final class BoundedLineReader {
     /// Offset of the next unread line. Coalesced requests advance this cursor instead of
     /// shifting the entire remaining read buffer once per line.
     private var consumedBytes = 0
-    /// Offset through which buffer bytes have been checked for the next terminator.
     private var scannedBytes = 0
     private var discardingOversizedLine = false
     private var descriptorFailure: ReaderError?
@@ -1754,8 +1743,6 @@ final class BoundedLineReader {
     private func next<Value>(decode: (Data) throws -> Value) throws -> Value? {
         // A descriptor that failed once fails identically forever; re-reading it only burns CPU.
         if let descriptorFailure { throw descriptorFailure }
-        // Allocate only when reading, and reuse across chunks of this message. Buffered lines
-        // need no scratch allocation and idle readers retain no scratch storage.
         var bytes: [UInt8] = []
         while true {
             if let newline = buffer.dropFirst(scannedBytes).firstIndex(of: 0x0A) {
@@ -1778,8 +1765,6 @@ final class BoundedLineReader {
             }
 
             scannedBytes = buffer.count
-            // All buffered complete lines have been consumed. Compact only the partial tail
-            // before reading more, and keep the scan offset relative to that tail.
             if consumedBytes > 0 {
                 buffer = Data(buffer.dropFirst(consumedBytes))
                 scannedBytes -= consumedBytes

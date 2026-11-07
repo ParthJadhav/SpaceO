@@ -354,7 +354,6 @@ public final class SessionStore: @unchecked Sendable {
             afterReplace: { _ in })
     }
 
-    /// Derive a stable namespace from the daemon socket path.
     public convenience init(socketPath: String, rootDirectory: URL? = nil) throws {
         guard !socketPath.isEmpty, !socketPath.utf8.contains(0) else {
             throw SessionStoreError.invalidNamespace("socket path is empty or contains a NUL byte")

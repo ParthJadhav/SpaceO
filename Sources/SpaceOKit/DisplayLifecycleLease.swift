@@ -397,7 +397,6 @@ final class DisplayLifecycleLease: @unchecked Sendable {
         "host health: host_health_unknown (recovery \(token) has not committed)"
     }
 
-    /// Token of a persisted, still-unresolved recovery marker.
     private static func markedRecovery(_ journal: Journal) -> String? {
         guard let token = journal.recovery, UUID(uuidString: token) != nil,
               journal.failure == recoveryMarker(token) else { return nil }

@@ -191,17 +191,13 @@ public struct IsolationSnapshot: Equatable, Sendable, CustomStringConvertible {
     /// corresponding coverage is not unknown; live capture currently stores zero for both.
     public let keyFocusPID: pid_t
     public let typingFocusPID: pid_t
-    /// Where the user's cursor is.
     public let cursor: CGPoint
-    /// The user's active Space.
     public let activeSpace: UInt64
     /// Agent screen rects at capture time, so we can detect a pointer routed onto one.
     public let stageRects: [CGRect]
     /// Processes belonging to agents, so we can tell whose fault a focus change was.
     public let agentPIDs: Set<pid_t>
-    /// Spaces belonging to agent displays.
     public let agentSpaces: Set<UInt64>
-    /// Whether each field was observed, inferred, or unavailable at capture time.
     public let coverage: IsolationSnapshotCoverage
     /// Whether this process held the Accessibility grant at capture time; nil when unknown
     /// (synthetic snapshots). Carried into reports so their summary can name the real cause.
@@ -470,7 +466,6 @@ public struct IsolationSnapshot: Equatable, Sendable, CustomStringConvertible {
         }
     }
 
-    /// Per-dimension coverage and attributable failures for this comparison.
     public func report(comparedTo other: IsolationSnapshot) -> IsolationReport {
         let checks = IsolationDimension.allCases.map { dimension -> IsolationCheckReport in
             let checkCoverage = coverage(of: dimension, comparedTo: other)
@@ -546,12 +541,10 @@ public struct IsolationSnapshot: Equatable, Sendable, CustomStringConvertible {
         return out
     }
 
-    /// Every observed difference, attributed or not. Useful when debugging.
     public func drift(from other: IsolationSnapshot) -> [String] {
         breaches(from: other) + ambientChanges(from: other)
     }
 
-    /// True only when every required dimension has usable coverage and none detected a breach.
     public func isUndisturbed(comparedTo other: IsolationSnapshot) -> Bool {
         report(comparedTo: other).isFullyIntact
     }

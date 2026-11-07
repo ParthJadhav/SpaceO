@@ -703,7 +703,6 @@ public enum SessionReport {
                     malformed += 1
                 }
             }
-            // Reuse small line storage, but don't retain a rare huge receipt for the whole report.
             pending.removeAll(keepingCapacity: pending.count <= 65_536)
         }
         let bytes = try SessionRecorder.readBoundedChunks(actionsURL, maximumBytes: maximumActionsBytes) { chunk in
@@ -743,8 +742,6 @@ public enum SessionReport {
         return html
     }
 
-    /// Prepend the completed summary to the uniquely owned row string. This avoids retaining
-    /// an array of receipts or creating a second complete body just to assemble the document.
     private static func finishHTML(_ html: inout String, manifest: RecordingManifest,
                                    actionCount: Int, failures: Int, malformedLines: Int) {
         var header = ""

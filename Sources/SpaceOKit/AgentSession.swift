@@ -158,7 +158,6 @@ struct SessionControllerSnapshot: Sendable {
     let idleSeconds: TimeInterval
     let abandoned: Bool
     let reclaimable: Bool
-    /// This session's grace between abandonment and reclamation.
     let gracePeriod: TimeInterval
     /// When the janitor may reclaim an abandoned session; nil while it is owned.
     let reclaimableAt: Date?
@@ -208,7 +207,6 @@ public final class AgentSession: @unchecked Sendable {
     public var stage: Stage { slot.stage }
     /// The region of that display this session may use. Agent windows go here.
     public var frame: CGRect { slot.frame }
-    /// True when this session has the whole display to itself.
     public var hasExclusiveDisplay: Bool { slot.isExclusive }
     /// True when cleanup is terminal for new work but retained resources still need a retry.
     public var teardownPending: Bool {
@@ -1078,7 +1076,6 @@ public final class AgentSession: @unchecked Sendable {
         return true
     }
 
-    /// True once revalidation found this session's display gone.
     public var isDisplayLost: Bool { agentInputLock.withLock { displayLostAt != nil } }
 
     // MARK: - Web content
@@ -1347,7 +1344,6 @@ public final class AgentSession: @unchecked Sendable {
             + "Open the app again to continue"
     }
 
-    /// How many stray windows the watchers have contained, and how many refused to move.
     public var containment: (placed: Int, refused: Int) {
         watchers.values.reduce(into: (0, 0)) { total, watcher in
             total.0 += watcher.placedCount
@@ -1659,7 +1655,6 @@ public final class AgentSession: @unchecked Sendable {
         return (focused, focused == true ? observation?.modal : nil)
     }
 
-    /// Remember which surface the agent's last click or drag went to.
     func notePointerFocus(windowID: CGWindowID, pid: pid_t, web: Bool) {
         lastPointerFocus = PointerFocusMemory(windowID: windowID, pid: pid, web: web)
     }
@@ -1810,7 +1805,6 @@ public final class AgentSession: @unchecked Sendable {
         return findings
     }
 
-    /// Put stray windows back in our tile. Returns how many were moved.
     @discardableResult
     public func reparkEscapedWindows() -> Int {
         reparkEscapedWindows(ofPIDs: nil)

@@ -83,7 +83,6 @@ struct ViewerNotification: Equatable, Identifiable, Sendable {
     var actionTitle: String { notificationClass.actionTitle }
 }
 
-/// A click on a delivered notification, as the model sees it.
 struct ViewerNotificationAction: Equatable, Sendable {
     let sessionID: String
     let section: ViewerInspectorSection

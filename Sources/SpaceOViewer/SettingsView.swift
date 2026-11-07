@@ -57,7 +57,6 @@ struct SettingsPaneIcon: View {
     }
 }
 
-/// A pane's first section: its icon, name and one line about what it is for.
 private struct PaneHeader: View {
     let pane: ViewerSettingsPane
     let summary: String
@@ -166,7 +165,6 @@ private struct AgentsSettingsPane: View {
     }
 }
 
-/// One row per supported client, with its status and a one-click Connect.
 struct AgentConnectionsList: View {
     @Environment(ViewerModel.self) private var model
 
@@ -252,7 +250,6 @@ private struct AgentConnectionRow: View {
     }
 }
 
-/// The client's own app icon when it has one, else a symbol.
 private struct ClientIcon: View {
     let client: MCPClient
 
@@ -358,7 +355,6 @@ private struct PermissionsSettingsPane: View {
     }
 }
 
-/// One permission: what it is for, whether it is on, and the way to turn it on.
 struct PermissionRow: View {
     @Environment(ViewerModel.self) private var model
     let kind: ViewerPermissionKind

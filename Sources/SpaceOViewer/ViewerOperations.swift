@@ -62,7 +62,6 @@ enum ViewerHealthAction: Equatable, Sendable {
     case resumeSession(String)
     /// End every session on a SpaceO virtual display and remove the display.
     case removeDisplay(UInt32)
-    /// Walk the person through granting a permission.
     case guidePermission(ViewerPermissionKind)
 
     /// Actions that quit apps and cannot be undone. Every entry point — Health, the sidebar's
@@ -75,7 +74,6 @@ enum ViewerHealthAction: Equatable, Sendable {
         }
     }
 
-    /// The session a destructive action targets.
     var sessionID: String? {
         switch self {
         case let .destroySession(id), let .reclaimSession(id), let .selectSession(id),

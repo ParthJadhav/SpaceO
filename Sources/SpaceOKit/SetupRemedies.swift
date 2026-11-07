@@ -349,7 +349,6 @@ public enum AttentionMitigation {
     /// Optional, informational step. It never fails: the absence of a Focus is a user choice,
     /// not a broken host, so `.skipped` keeps `Setup.canSelfTest` unaffected.
     public static func quietAgentAppsStep(launchedAppNames: [String], focusActive: Bool?) -> SetupStep {
-        // Bound the list the same way every other user-facing collection is bounded.
         let names = Array(uniqueOrdered(launchedAppNames).prefix(32))
         guard !names.isEmpty else {
             return SetupStep(

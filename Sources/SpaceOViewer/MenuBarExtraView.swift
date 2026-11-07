@@ -61,7 +61,6 @@ struct MenuBarExtraView: View {
         Button("Quit SpaceO Viewer") { NSApp.terminate(nil) }
     }
 
-    /// Sessions waiting for the person first, then navigator order.
     private var menuSessions: [SessionInfo] {
         let order = model.navigationOrder
         return model.attachedSessions.sorted { lhs, rhs in
