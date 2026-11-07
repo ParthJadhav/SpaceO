@@ -80,6 +80,11 @@ public enum RuntimeIdentity {
               let data = try? BoundedRegularFile.read(executableURL, maximumBytes: maximumExecutableBytes) else {
             return nil
         }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        return sha256Hex(data)
     }
+}
+
+/// Lowercase hex SHA-256, the form every SpaceO identity and token uses.
+func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }

@@ -9,8 +9,6 @@ public struct WindowRef: Sendable, Equatable, Identifiable {
     public let title: String
     public let frame: CGRect
     public var id: CGWindowID { windowID }
-
-    public var isOffscreenPlaceholder: Bool { windowID == 0 }
 }
 
 /// Moves other apps' windows onto a stage — using accessibility, so no cursor moves and
