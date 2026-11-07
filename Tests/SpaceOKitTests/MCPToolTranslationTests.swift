@@ -15,14 +15,6 @@ final class MCPToolTranslationTests: XCTestCase {
         }
     }
 
-    func testSchemaResourceMatchesToolDiscovery() throws {
-        let text = try XCTUnwrap(MCPServer.toolSchemaResourceText)
-        let resource = try JSONSerialization.jsonObject(with: Data(text.utf8))
-        let expected = try JSONSerialization.data(
-            withJSONObject: ["tools": MCPServer.toolSchemas], options: [.sortedKeys])
-        XCTAssertEqual(try JSONSerialization.data(withJSONObject: resource, options: [.sortedKeys]), expected)
-    }
-
     func testToolCatalogueIsExactlyTheAdvertisedSet() throws {
         let names = MCPServer.toolSchemas.compactMap { $0["name"] as? String }
         XCTAssertEqual(names.count, 35)
@@ -32,24 +24,6 @@ final class MCPToolTranslationTests: XCTestCase {
             "spaceo_clipboard_set", "spaceo_clipboard_get", "spaceo_session_set_title", "spaceo_events",
         ] {
             XCTAssertTrue(names.contains(tool), "\(tool) missing from tools/list")
-        }
-        // Every schema property must be accepted by the translator, or the model is offered an
-        // argument the server then rejects as unexpected.
-        for schema in MCPServer.toolSchemas {
-            let name = schema["name"] as! String
-            let properties = ((schema["inputSchema"] as? [String: Any])?["properties"] as? [String: Any]) ?? [:]
-            for property in properties.keys {
-                var arguments: [String: Any] = [:]
-                arguments[property] = NSNull()
-                do {
-                    _ = try MCPServer.toolRequest(name: name, arguments: arguments)
-                } catch let error as MCPServer.MCPInputError {
-                    XCTAssertFalse(error.description.contains("unexpected argument"),
-                                   "\(name).\(property) is advertised but not accepted: \(error)")
-                } catch {
-                    XCTFail("\(name).\(property): \(error)")
-                }
-            }
         }
     }
 

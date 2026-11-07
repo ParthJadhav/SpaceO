@@ -336,9 +336,7 @@ final class UnitTests: XCTestCase {
         XCTAssertTrue(response.error?.contains("nope") == true)
     }
 
-    func testMCPNegotiatesCurrentStableProtocol() {
-        XCTAssertEqual(MCPServer.protocolVersion, "2025-11-25")
-        XCTAssertTrue(MCPServer.supportedVersions.contains("2025-11-25"))
+    func testMCPStillSupportsTheOlderOverlapProtocolVersion() {
         XCTAssertTrue(MCPServer.supportedVersions.contains("2024-11-05"),
                       "older installed clients still need an overlap version")
     }

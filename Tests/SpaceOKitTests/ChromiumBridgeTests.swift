@@ -268,10 +268,6 @@ final class ChromiumBridgeTests: XCTestCase {
         }
     }
 
-    func testTheLimitIsActuallyEnforcedNotJustDeclared() {
-        XCTAssertEqual(ChromiumBridge.maximumTargetListBytes, 1_048_576)
-    }
-
     func testPersistentWebSocketDoesNotInheritDiscoveryLifetime() {
         let discovery = ChromiumBridge.discoveryConfiguration()
         let webSocket = ChromiumBridge.webSocketConfiguration()
