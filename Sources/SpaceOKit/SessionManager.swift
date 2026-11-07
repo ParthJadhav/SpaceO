@@ -1434,8 +1434,7 @@ public actor SessionManager {
                 if !notes.isEmpty { response.ambient = (response.ambient ?? []) + notes }
             }
         }
-        let actions: Set<String> = ["click", "scroll", "move", "drag", "type", "key", "select", "run", "adopt", "place", "repark", "open.url"]
-        if actions.contains(request.cmd) || (request.cmd == "menu" && response.action != nil) {
+        if DaemonCommand.actions.contains(request.cmd) || (request.cmd == "menu" && response.action != nil) {
             // A transport/delivery acknowledgement is not a verified application postcondition.
             // The handler's delivery verdict survives; a response that failed here (isolation
             // requirements, a breach) is refused whatever the handler saw.
