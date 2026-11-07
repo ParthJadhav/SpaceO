@@ -915,7 +915,7 @@ public enum MCPServer {
         }
         // The daemon returns an in-memory image; validate it without re-encoding the PNG
         // or accepting a file path supplied by a daemon response.
-        if name == "spaceo_screenshot" {
+        if MCPTool.named[name]?.returnsImage == true {
             do {
                 let content = try screenshotContent(
                     message: render(response, context: context) + "\ncapture: in-memory; freshness=unknown; visibility=unknown; presentation=unverified",

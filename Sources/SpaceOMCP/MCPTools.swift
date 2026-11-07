@@ -33,6 +33,8 @@ struct MCPTool {
     let compatibilityArguments: Set<String>
     /// May run inside spaceo_run_steps.
     let batchable: Bool
+    /// The result is the daemon's in-memory PNG, returned as MCP image content.
+    let returnsImage: Bool
     let translate: (inout MCPToolCall) throws -> Void
 
     init(
@@ -47,6 +49,7 @@ struct MCPTool {
         advertisesRequireIsolation: Bool = false,
         compatibilityArguments: Set<String> = [],
         batchable: Bool = false,
+        returnsImage: Bool = false,
         translate: @escaping (inout MCPToolCall) throws -> Void
     ) {
         self.name = name
@@ -60,6 +63,7 @@ struct MCPTool {
         self.advertisesRequireIsolation = advertisesRequireIsolation
         self.compatibilityArguments = compatibilityArguments
         self.batchable = batchable
+        self.returnsImage = returnsImage
         self.translate = translate
     }
 
@@ -1044,7 +1048,8 @@ extension MCPTool {
                   "width": ["type": "integer", "minimum": 1, "description": "Region width in points."],
                   "height": ["type": "integer", "minimum": 1, "description": "Region height in points."],
                   "annotate": ["type": "boolean",
-                               "description": "Window captures: tag each actionable element with its read index (image only)."]]
+                               "description": "Window captures: tag each actionable element with its read index (image only)."]],
+        returnsImage: true
     ) { try $0.screenshot() }
 }
 
