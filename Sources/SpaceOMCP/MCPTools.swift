@@ -184,13 +184,11 @@ struct MCPTool {
 /// One tool call being translated: the model-supplied arguments, the request built from them,
 /// and the bounded readers every tool's translation uses. Readers never trap on a numeric cast.
 struct MCPToolCall {
-    let name: String
     let arguments: [String: Any]
     let defaultControllerOwner: DurableSessionOwner?
     var request = Request(cmd: "")
 
-    init(name: String, arguments: [String: Any], defaultControllerOwner: DurableSessionOwner?) {
-        self.name = name
+    init(arguments: [String: Any], defaultControllerOwner: DurableSessionOwner?) {
         self.arguments = arguments
         self.defaultControllerOwner = defaultControllerOwner
     }
@@ -425,7 +423,7 @@ extension MCPTool {
             """, ["session": sessionArg,
                   "reason": ["type": "string", "maxLength": AgentSession.maximumPauseReasonCharacters, "description": "Why the agent stopped; shown to the human."]],
         advertisesVerbose: false
-    ) { try $0.sessionControl() }
+    ) { try $0.sessionControl(paused: true) }
 }
 
 // MARK: - spaceo_session_resume
@@ -435,13 +433,13 @@ extension MCPTool {
         "spaceo_session_resume", "Lift a pause you set with spaceo_session_pause. An operator pause is released only by the operator.",
              ["session": sessionArg],
         advertisesVerbose: false
-    ) { try $0.sessionControl() }
+    ) { try $0.sessionControl(paused: false) }
 }
 
 extension MCPToolCall {
-    mutating func sessionControl() throws {
+    mutating func sessionControl(paused: Bool) throws {
         request.cmd = "session.control"
-        request.paused = name == "spaceo_session_pause"
+        request.paused = paused
         request.reason = try str("reason", max: AgentSession.maximumPauseReasonCharacters)
     }
 }
@@ -1195,7 +1193,7 @@ extension MCPTool {
         review: ["strict", "require_isolation"],
         observes: true,
         batchable: true
-    ) { try $0.pointerPath() }
+    ) { try $0.pointerPath("scroll") }
 }
 
 // MARK: - spaceo_select_text
@@ -1264,7 +1262,7 @@ extension MCPTool {
         review: ["strict", "require_isolation"],
         observes: true,
         batchable: true
-    ) { try $0.pointerPath() }
+    ) { try $0.pointerPath("move") }
 }
 
 // MARK: - spaceo_drag
@@ -1289,12 +1287,13 @@ extension MCPTool {
         review: ["duration", "geometry", "strict", "require_isolation"],
         observes: true,
         batchable: true
-    ) { try $0.pointerPath() }
+    ) { try $0.pointerPath("drag") }
 }
 
 extension MCPToolCall {
-    mutating func pointerPath() throws {
-        request.cmd = String(name.dropFirst("spaceo_".count))
+    /// scroll, move and drag share their start point; `command` is the daemon command.
+    mutating func pointerPath(_ command: String) throws {
+        request.cmd = command
         request.x = try dbl("x")
         request.y = try dbl("y")
         request.modifiers = try modifiers()
@@ -1312,7 +1311,7 @@ extension MCPToolCall {
         if let reference = startReference, Int(reference.hasPrefix("w") ? String(reference.dropFirst()) : reference) == nil {
             throw MCPInputError.invalid("element references look like \"3\" or \"w3\"")
         }
-        if name == "spaceo_scroll" {
+        if command == "scroll" {
             request.dx = try int32("dx")
             request.dy = try int32("dy")
             request.ticks = try int("ticks")
@@ -1323,7 +1322,7 @@ extension MCPToolCall {
                 throw MCPInputError.invalid("'ticks' must be from 1 through 100")
             }
         }
-        if name == "spaceo_drag" {
+        if command == "drag" {
             request.toX = try dbl("to_x")
             request.toY = try dbl("to_y")
             request.button = try str("button", max: 6)

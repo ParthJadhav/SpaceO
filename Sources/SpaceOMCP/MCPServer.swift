@@ -1675,7 +1675,7 @@ public enum MCPServer {
             arguments.keys, allowed: tool.acceptedArguments, advertised: tool.advertisedArguments) {
             throw MCPInputError.invalid(diagnostic)
         }
-        var call = MCPToolCall(name: name, arguments: arguments, defaultControllerOwner: defaultControllerOwner)
+        var call = MCPToolCall(arguments: arguments, defaultControllerOwner: defaultControllerOwner)
         try call.translate(with: tool)
         return call.request
     }
