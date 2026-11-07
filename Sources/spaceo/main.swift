@@ -591,7 +591,7 @@ func remote(_ build: (inout Request) -> Void) -> Never {
     request.strictIsolation = args.bool("strict") ? true : nil
     if let raw = stringArgument("require-isolation") {
         let names = raw.split(separator: ",").map(String.init)
-        guard !names.isEmpty, names.count <= IsolationDimension.allCases.count else { fail("require-isolation needs 1 through 6 dimensions") }
+        guard !names.isEmpty, names.count <= IsolationDimension.allCases.count else { fail("require-isolation needs 1 through \(IsolationDimension.allCases.count) dimensions") }
         request.requiredIsolation = names.map { name in
             guard let value = IsolationDimension(rawValue: name) else {
                 fail("unknown isolation dimension; use " + IsolationDimension.allCases.map(\.rawValue).joined(separator: ","))

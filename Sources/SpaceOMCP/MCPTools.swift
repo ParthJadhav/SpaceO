@@ -128,7 +128,7 @@ struct MCPTool {
         case "label": return ["type": "string", "maxLength": 480, "description": "Press the one element with this exact accessible label."]
         case "match": return ["type": "string", "enum": ["exact", "contains"], "description": "With label: exact (default) or contains."]
         case "role": return ["type": "string", "maxLength": 64, "description": "With label: only this role, e.g. Button."]
-        case "require_isolation": return ["type": "array", "minItems": 1, "maxItems": 6, "items": ["type": "string", "enum": IsolationDimension.allCases.map(\.rawValue)],
+        case "require_isolation": return ["type": "array", "minItems": 1, "maxItems": IsolationDimension.allCases.count, "items": ["type": "string", "enum": IsolationDimension.allCases.map(\.rawValue)],
                                           "description": "Fail unless these checks are observable."]
         case "strict": return ["type": "boolean", "description": "Refuse unless every isolation check is observable."]
         case "allow_no_windows": return ["type": "boolean", "description": "Accept a confirmed zero window count."]
@@ -200,7 +200,7 @@ struct MCPToolCall {
         try tool.translate(&self)
         request.strictIsolation = try flag("strict")
         if let raw = arguments["require_isolation"], !(raw is NSNull) {
-            guard let names = raw as? [String], !names.isEmpty, names.count <= 6 else { throw MCPInputError.invalid("require_isolation needs 1 through 6 dimension names") }
+            guard let names = raw as? [String], !names.isEmpty, names.count <= IsolationDimension.allCases.count else { throw MCPInputError.invalid("require_isolation needs 1 through \(IsolationDimension.allCases.count) dimension names") }
             request.requiredIsolation = try names.map {
                 guard let value = IsolationDimension(rawValue: $0) else { throw MCPInputError.invalid("unknown isolation dimension") }
                 return value
