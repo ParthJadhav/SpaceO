@@ -27,6 +27,19 @@ final class MCPToolTranslationTests: XCTestCase {
         }
     }
 
+    /// spaceo_run_steps accepts exactly the tools whose daemon commands a batch may run.
+    func testBatchableToolsAreExactlyTheDaemonsBatchCommands() throws {
+        let minimal: [String: [String: Any]] = [
+            "spaceo_click": ["element": "1"], "spaceo_type": ["text": "a"],
+            "spaceo_press_key": ["key": "a"], "spaceo_scroll": ["element": "1", "dy": 1],
+            "spaceo_move": ["element": "1"], "spaceo_drag": ["from_element": "1", "to_element": "2"],
+            "spaceo_wait_for": ["condition": "ms", "value": "10"], "spaceo_find": ["query": "a"],
+        ]
+        XCTAssertEqual(MCPTool.batchableNames, Set(minimal.keys))
+        let commands = try Set(minimal.map { try MCPServer.toolRequest(name: $0.key, arguments: $0.value).cmd })
+        XCTAssertEqual(commands, SessionManager.batchStepCommands)
+    }
+
     func testOpenURLTranslatesAndRefusesNonWebSchemes() throws {
         let request = try MCPServer.toolRequest(
             name: "spaceo_open_url",
