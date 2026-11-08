@@ -33,6 +33,14 @@ Status definitions:
   and a qualification exception for the full live suite, the computer-use matrix and
   signed-artifact behavior qualification. See the
   [preparation record](docs/validation/2026-11-08-release-1.0.10.md).
+- Published 1.0.10 as latest from tag object `fd0916e` (run 42490130296, candidate attempt 4
+  after three transient CloudKit stapler errors). The candidate and all five public downloads
+  passed independent verification; see the
+  [publication record](docs/validation/2026-11-08-publication-1.0.10.md).
+- Open: add a bounded retry around `stapler staple`/`validate` in `scripts/release.sh`; transient
+  CloudKit `-1005` errors failed 1.0.9 attempt 1 and 1.0.10 attempts 1–3.
+- Open: `AccessibilityBlackoutWindowTests.testSessionListSharesOneDiscoveryBudgetAcrossSessions`
+  crashes the test process (signal 11) under Swift 6.4.2; it passes on Swift 6.4 and pinned 6.2.
 
 ### October 16 ColorSync display identities (RA-057)
 
