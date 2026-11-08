@@ -162,7 +162,6 @@ enum NativeTextInput {
         return true
     }
 
-    /// Throws `TargetChanged` unless `element` still has focus in window `windowID`.
     static func verifyTarget<P: AXTraversalProviding>(
         _ element: P.Element, app: P.Element, windowID: CGWindowID, provider: P,
         budget: AXTraversalBudget

@@ -1,6 +1,5 @@
 import Foundation
 import CoreGraphics
-import CryptoKit
 
 /// Task readiness is separate from command success and from evidence of presentation.
 public struct ReadinessReport: Codable, Sendable, Equatable {
@@ -51,7 +50,7 @@ public struct GeometryReceipt: Codable, Sendable, Equatable {
         x = window.frame.minX; y = window.frame.minY
         width = window.frame.width; height = window.frame.height
         let source = "\(sessionGeneration)|\(displayID)|\(displayBounds)|\(window.windowID)|\(window.pid)|\(String(describing: process))|\(window.frame)|\(String(describing: backingScale))"
-        token = SHA256.hash(data: Data(source.utf8)).map { String(format: "%02x", $0) }.joined()
+        token = sha256Hex(Data(source.utf8))
     }
 }
 
@@ -142,7 +141,7 @@ public struct DisplayTargetReceipt: Codable, Sendable {
         self.logicalBounds = logicalBounds
         self.backingScale = backingScale
         let value = "\(identity)|\(displayID)|\(logicalBounds)|\(String(describing: backingScale))"
-        self.topologyGeneration = SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+        self.topologyGeneration = sha256Hex(Data(value.utf8))
     }
 }
 

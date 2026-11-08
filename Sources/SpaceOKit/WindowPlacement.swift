@@ -3,15 +3,12 @@ import ApplicationServices
 import CoreGraphics
 import SpaceOPrivate
 
-/// A window SpaceO knows about.
 public struct WindowRef: Sendable, Equatable, Identifiable {
     public let windowID: CGWindowID
     public let pid: pid_t
     public let title: String
     public let frame: CGRect
     public var id: CGWindowID { windowID }
-
-    public var isOffscreenPlaceholder: Bool { windowID == 0 }
 }
 
 /// Moves other apps' windows onto a stage — using accessibility, so no cursor moves and
@@ -271,7 +268,6 @@ public enum WindowPlacement {
         }
     }
 
-    /// Wait for `pid` to produce at least one accessibility window.
     public static func waitForWindow(
         of pid: pid_t,
         timeout: TimeInterval = 12,
@@ -373,7 +369,6 @@ public enum WindowPlacement {
         return !contained
     }
 
-    /// Space ids this window is associated with.
     public static func spaces(of window: WindowRef) -> [UInt64] {
         (SPOSpacesForWindow(window.windowID) ?? []).map { $0.uint64Value }
     }

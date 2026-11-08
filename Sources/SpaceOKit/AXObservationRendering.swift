@@ -9,8 +9,6 @@ extension AXNode {
         return line
     }
 
-    /// Append labels directly to the destination so a full outline does not copy them through
-    /// a temporary per-node line string first.
     func appendRenderedLine(to output: inout String, label override: String? = nil, indented: Bool = false) {
         if indented {
             output += String(repeating: "  ", count: min(max(depth, 0), 12))

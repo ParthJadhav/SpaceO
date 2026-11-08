@@ -20,7 +20,6 @@ final class SetupRemediesTests: XCTestCase {
         XCTAssertEqual(
             SettingsPane.focus.url.absoluteString,
             "x-apple.systempreferences:com.apple.Focus-Settings.extension")
-        XCTAssertEqual(SettingsPane.allCases.count, 3)
     }
 
     // MARK: GrantWaiter

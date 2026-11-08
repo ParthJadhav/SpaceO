@@ -41,7 +41,6 @@ public struct ResourceBudget: Sendable, Equatable {
         maximumCreationsPerMinute: 16, minimumTileSize: CGSize(width: 320, height: 240),
         maximumDisplayEdge: 8192)
 
-    public static let unsafeOperator = ResourceBudget.unrestricted
 
     public init(maximumSessions: Int,
                 maximumDisplays: Int,

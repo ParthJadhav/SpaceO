@@ -33,7 +33,6 @@ enum ViewerPreviewScenario: String, CaseIterable, Sendable {
     case settingsDisplays = "settings-displays"
     case settingsNotifications = "settings-notifications"
 
-    /// The scenario named on the command line, if any.
     static let current: ViewerPreviewScenario? = {
         let arguments = CommandLine.arguments
         guard let index = arguments.firstIndex(of: "--preview"), index + 1 < arguments.count
@@ -78,7 +77,6 @@ enum ViewerPreview {
                       isSpaceO: true, isActive: true, name: "Stage B")]
     }
 
-    /// The model for a preview launch: fixture transport, discovery and stream.
     static func makeModel(_ scenario: ViewerPreviewScenario) -> ViewerModel {
         let offline = scenario == .offline
         let sessionsVisible = scenario.hasSessions

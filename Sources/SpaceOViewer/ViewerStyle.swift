@@ -1,9 +1,7 @@
 import SpaceOKit
 import SwiftUI
 
-/// Colours, symbols and small formatting rules shared by the sidebar, console and inspector.
 enum ViewerStyle {
-    /// Corner radius for cards, notices and the console canvas.
     static let cornerRadius: CGFloat = 10
     /// The canvas backdrop: darker than the window so the agent's screen reads as the content.
     static let canvasBackdrop = Color(nsColor: .underPageBackgroundColor)

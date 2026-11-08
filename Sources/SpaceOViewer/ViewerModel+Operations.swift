@@ -47,7 +47,6 @@ extension ViewerModel {
 
     // MARK: - Walkthrough (SPAO-205)
 
-    /// Whether the empty workspace shows the walkthrough card instead of the plain empty state.
     var walkthroughInline: Bool {
         !preferences.walkthroughDismissed && connectivity != .disconnected
     }
@@ -133,7 +132,6 @@ extension ViewerModel {
         if enabled { notificationPoster?.requestAuthorization() }
     }
 
-    /// Record the outcome of an isolation `verify` for a session. `breached` false clears it.
     func recordIsolationVerdict(sessionID: String, breached: Bool) {
         if breached { isolationBreaches.insert(sessionID) } else { isolationBreaches.remove(sessionID) }
     }

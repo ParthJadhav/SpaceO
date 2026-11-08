@@ -299,7 +299,6 @@ public enum DiskHygiene {
         return destination
     }
 
-    /// UTC and a fixed locale so the same instant always yields the same directory name.
     static func timestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -308,7 +307,6 @@ public enum DiskHygiene {
         return formatter.string(from: date)
     }
 
-    /// Whole-unit sizes with a 1024 base; a hygiene summary does not need decimals.
     static func formatBytes(_ bytes: Int) -> String {
         let units = ["B", "KB", "MB", "GB", "TB"]
         var value = max(0, bytes)

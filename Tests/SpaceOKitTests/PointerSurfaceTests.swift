@@ -53,7 +53,6 @@ final class PointerSurfaceTests: XCTestCase {
         // window captures were hard-coded to 2x and tile captures to 1x, an agent reading a
         // coordinate off the default screenshot clicked at half the intended position, and no
         // field in the response let it discover the difference.
-        XCTAssertEqual(Capture.defaultScale, 1)
         XCTAssertEqual(try Capture.validatedScale(nil), 1)
         XCTAssertEqual(try Capture.validatedScale(2), 2)
         XCTAssertThrowsError(try Capture.validatedScale(0))

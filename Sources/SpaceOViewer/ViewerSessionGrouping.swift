@@ -31,7 +31,6 @@ enum ViewerSessionColorTag: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
-/// Human-facing naming and grouping rules for the navigator and tile overlays.
 enum ViewerSessionGrouping {
 
     /// Sessions under one controller label, in creation order.
@@ -50,18 +49,15 @@ enum ViewerSessionGrouping {
     static let unassignedKey = "\u{0}unassigned"
     static let unassignedLabel = "No controller"
 
-    /// The title an agent or the person gave the session, else its id.
     static func displayTitle(_ session: SessionInfo) -> String {
         let trimmed = session.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? session.id : trimmed
     }
 
-    /// Whether the row should also show the id, because the title replaced it.
     static func showsIdentifier(_ session: SessionInfo) -> Bool {
         displayTitle(session) != session.id
     }
 
-    /// The label a controller is grouped under: its label, else its id, else unassigned.
     static func groupLabel(_ session: SessionInfo) -> (key: String, label: String) {
         guard let owner = session.controllerOwner else {
             return (unassignedKey, unassignedLabel)

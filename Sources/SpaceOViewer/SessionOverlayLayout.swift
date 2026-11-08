@@ -129,7 +129,6 @@ extension SessionOverlayLayout {
         )
     }
 
-    /// Markers for every session on a display, in the order given.
     static func actionMarkers(
         for sessions: [SessionInfo],
         displayBounds: CGRect,

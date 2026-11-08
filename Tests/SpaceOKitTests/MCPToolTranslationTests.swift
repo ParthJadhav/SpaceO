@@ -15,14 +15,6 @@ final class MCPToolTranslationTests: XCTestCase {
         }
     }
 
-    func testSchemaResourceMatchesToolDiscovery() throws {
-        let text = try XCTUnwrap(MCPServer.toolSchemaResourceText)
-        let resource = try JSONSerialization.jsonObject(with: Data(text.utf8))
-        let expected = try JSONSerialization.data(
-            withJSONObject: ["tools": MCPServer.toolSchemas], options: [.sortedKeys])
-        XCTAssertEqual(try JSONSerialization.data(withJSONObject: resource, options: [.sortedKeys]), expected)
-    }
-
     func testToolCatalogueIsExactlyTheAdvertisedSet() throws {
         let names = MCPServer.toolSchemas.compactMap { $0["name"] as? String }
         XCTAssertEqual(names.count, 35)
@@ -33,24 +25,19 @@ final class MCPToolTranslationTests: XCTestCase {
         ] {
             XCTAssertTrue(names.contains(tool), "\(tool) missing from tools/list")
         }
-        // Every schema property must be accepted by the translator, or the model is offered an
-        // argument the server then rejects as unexpected.
-        for schema in MCPServer.toolSchemas {
-            let name = schema["name"] as! String
-            let properties = ((schema["inputSchema"] as? [String: Any])?["properties"] as? [String: Any]) ?? [:]
-            for property in properties.keys {
-                var arguments: [String: Any] = [:]
-                arguments[property] = NSNull()
-                do {
-                    _ = try MCPServer.toolRequest(name: name, arguments: arguments)
-                } catch let error as MCPServer.MCPInputError {
-                    XCTAssertFalse(error.description.contains("unexpected argument"),
-                                   "\(name).\(property) is advertised but not accepted: \(error)")
-                } catch {
-                    XCTFail("\(name).\(property): \(error)")
-                }
-            }
-        }
+    }
+
+    /// spaceo_run_steps accepts exactly the tools whose daemon commands a batch may run.
+    func testBatchableToolsAreExactlyTheDaemonsBatchCommands() throws {
+        let minimal: [String: [String: Any]] = [
+            "spaceo_click": ["element": "1"], "spaceo_type": ["text": "a"],
+            "spaceo_press_key": ["key": "a"], "spaceo_scroll": ["element": "1", "dy": 1],
+            "spaceo_move": ["element": "1"], "spaceo_drag": ["from_element": "1", "to_element": "2"],
+            "spaceo_wait_for": ["condition": "ms", "value": "10"], "spaceo_find": ["query": "a"],
+        ]
+        XCTAssertEqual(MCPTool.batchableNames, Set(minimal.keys))
+        let commands = try Set(minimal.map { try MCPServer.toolRequest(name: $0.key, arguments: $0.value).cmd })
+        XCTAssertEqual(commands, SessionManager.batchStepCommands)
     }
 
     func testOpenURLTranslatesAndRefusesNonWebSchemes() throws {

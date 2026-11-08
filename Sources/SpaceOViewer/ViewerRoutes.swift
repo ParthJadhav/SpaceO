@@ -197,7 +197,6 @@ extension ViewerModel {
         }
     }
 
-    /// Sessions attached to `displayID`, for the removal confirmation and the display list.
     func sessionCount(onDisplay displayID: UInt32) -> Int {
         sessions.filter { $0.displayID == displayID && $0.runtimeAttached != false }.count
     }

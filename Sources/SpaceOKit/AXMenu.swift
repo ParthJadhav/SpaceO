@@ -28,11 +28,9 @@ enum AXMenu {
     struct Result: Equatable {
         /// The listed level (top-level titles, a menu's items), or the pressed item's siblings.
         var items: [MenuItemInfo]
-        /// More items exist than `maximumListedItems`.
         var truncated: Bool
         /// Canonical titles of the path that was walked.
         var path: [String]
-        /// The item that was pressed, when `press` was requested.
         var pressed: MenuItemInfo?
         /// Items withheld from the listing for safety (Apple menu, Services, …).
         var withheld: Int
@@ -212,7 +210,6 @@ enum AXMenu {
                                    path: walked, provider: provider, budget: budget)
             }
         }
-        // Unreachable: a non-empty path returns inside the loop.
         throw SpaceOError.badRequest("menu path could not be resolved")
     }
 
@@ -254,7 +251,6 @@ enum AXMenu {
         return (result, count > maximumScannedItems)
     }
 
-    /// The `AXMenu` a menu-bar item or menu item opens, if any.
     private static func submenu<P: AXTraversalProviding>(
         of element: P.Element, provider: P, budget: AXTraversalBudget
     ) throws -> P.Element? {
@@ -326,7 +322,6 @@ enum AXMenu {
 
     // MARK: - Production entry point
 
-    /// Run against a live application with the system provider.
     static func perform(pid: pid_t, path: [String], press: Bool) throws -> Result {
         guard AX.isTrusted else { throw SpaceOError.accessibilityDenied }
         let budget = try AXTraversalBudget(

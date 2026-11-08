@@ -17,10 +17,6 @@ public enum TileLayout {
     /// Production allocation uses `rect(in:capacity:index:)`, which stays O(1).
     public static let maximumMaterializedCapacity = 64
 
-    /// Source-compatible name retained for callers that used the old materialization bound.
-    @available(*, deprecated, renamed: "maximumMaterializedCapacity")
-    public static let maximumCapacity = maximumMaterializedCapacity
-
     /// Column/row split for a given capacity. Wider than tall, because app windows are.
     public static func grid(for capacity: Int) -> (columns: Int, rows: Int) {
         let n = max(1, capacity)

@@ -20,7 +20,6 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
     /// The make-and-model tag of a generated display profile (about 3.4 KB) lies in its first
     /// kilobytes; larger profiles are only read this far, which is enough to rule them in or out.
     static let maximumProfilePrefix = 65_536
-    /// Every scan reads at most this much in total, however many profiles there are.
     static let maximumScanBytes = 33_554_432
     /// Bounded identities leave a handful; hundreds only come from per-attachment identities.
     public static let cleanupThreshold = 64
@@ -97,11 +96,9 @@ public struct DisplayIdentityResidue: Sendable, Equatable, Codable {
     struct Prefix {
         var data: Data
         var fileSize: Int
-        /// Whether `data` holds everything up to `prefix` bytes, or the whole of a shorter file.
         func complete(prefix: Int) -> Bool { data.count >= min(prefix, fileSize) }
     }
 
-    /// The first `maximum` bytes of a regular file; nil for anything else or on any read error.
     static func readPrefix(_ path: String, maximum: Int) -> Prefix? {
         guard maximum > 0, !path.utf8.contains(0) else { return nil }
         let descriptor = open(path, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)

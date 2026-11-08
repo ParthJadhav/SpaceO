@@ -483,20 +483,13 @@ public final class Stage: @unchecked Sendable {
         }
     }
 
-    /// True when the stage has its own Space, distinct from the user's active one.
     public var hasOwnSpace: Bool {
         let mine = Set(spaces)
         return !mine.isEmpty && !mine.contains(SPOActiveSpace())
     }
 
-    /// Does this rect sit on the agent's screen?
     public func contains(_ rect: CGRect) -> Bool {
         bounds.contains(CGPoint(x: rect.midX, y: rect.midY))
-    }
-
-    /// A sensible default frame for a window placed here: inset from the edges.
-    public func defaultWindowFrame(inset: CGFloat = 60) -> CGRect {
-        bounds.insetBy(dx: inset, dy: inset)
     }
 
     /// Refuse publishing a slot after any lifecycle failure. Allocation uses publication-time
@@ -522,8 +515,6 @@ public final class Stage: @unchecked Sendable {
         error is DisplayHostHealth.ReconfigurationSettlingRefusal || error is RetirementBudgetDeferral
     }
 
-    /// Drop the display.
-    ///
     /// WindowServer removes a virtual display asynchronously, so by default we wait for it to
     /// actually leave the online list. Merely becoming inactive is not teardown: an attached
     /// phantom can still poison the next display-graph change. The timeout is one total budget
@@ -860,7 +851,6 @@ public final class Stage: @unchecked Sendable {
         return nil
     }
 
-    /// Active displays that belong to the user's existing display graph, not SpaceO.
     public static func nonSpaceOActiveDisplayIDs() -> [CGDirectDisplayID] {
         activeDisplayIDs().filter { !isSpaceODisplay($0) }
     }
@@ -896,12 +886,6 @@ public final class Stage: @unchecked Sendable {
     /// displays that survived their owner unexpectedly.
     public static func spaceODisplayIDs() -> [CGDirectDisplayID] {
         onlineDisplayIDs().filter(isSpaceODisplay)
-    }
-
-    /// SpaceO displays attached to the login session but not owned by this process.
-    public static func orphanedSpaceODisplayIDs() -> [CGDirectDisplayID] {
-        let owned = ownership.lock.withLock { ownership.displayIDs }
-        return spaceODisplayIDs().filter { !owned.contains($0) }
     }
 
     private static func recordOwned(_ id: CGDirectDisplayID) {

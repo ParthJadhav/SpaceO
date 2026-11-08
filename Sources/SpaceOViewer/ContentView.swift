@@ -26,7 +26,6 @@ struct ContentView: View {
                 .navigationSubtitle(model.settingsPane == nil ? subtitle : "Settings")
         }
         .onAppear {
-            // A window exists now; any outstanding request for one is satisfied.
             model.acknowledgeWindowRequest()
             if let scenario = ViewerPreviewScenario.current {
                 // After the first fixture poll has landed and selected something.
@@ -135,7 +134,6 @@ private struct DetailView: View {
                         ) { model.dismissWalkthrough() }
                             .padding(.horizontal, 40)
                             .padding(.vertical, 28)
-                            // Centred in the window when it fits, scrollable when it does not.
                             .frame(maxWidth: .infinity, minHeight: geometry.size.height)
                     }
                 }
@@ -207,7 +205,6 @@ private struct NoSessionsView: View {
 
 // MARK: - Workspace
 
-/// The selected session: what needs attention, the live screen, and a status line.
 private struct SessionWorkspace: View {
     @Environment(ViewerModel.self) private var model
 
@@ -320,7 +317,6 @@ private struct NoticeStack: View {
 
 // MARK: - Canvas
 
-/// The agent's screen and everything drawn over it.
 struct SessionCanvas: View {
     @Environment(ViewerModel.self) private var model
     @State private var hovering = false
@@ -381,7 +377,6 @@ struct SessionCanvas: View {
             : "Click to take control"
     }
 
-    /// What the canvas says while there is no picture to show.
     @ViewBuilder
     private var placeholder: some View {
         if !model.permissions.screenRecording {
@@ -621,7 +616,6 @@ private struct ControlIntroCard: View {
     }
 }
 
-/// A soft wash of the brand colours behind the welcome guide.
 private struct WelcomeBackdrop: View {
     var body: some View {
         ZStack {

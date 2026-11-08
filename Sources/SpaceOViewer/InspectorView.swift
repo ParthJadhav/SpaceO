@@ -33,7 +33,6 @@ enum ViewerInspectorTab: String, CaseIterable, Identifiable {
     }
 }
 
-/// The right column: details about the selected session and what happened recently.
 struct InspectorView: View {
     @Environment(ViewerModel.self) private var model
 

@@ -35,7 +35,6 @@ BOOL SPOCapabilityAvailable(SPOCapability cap);
 NSString *SPOCapabilityName(SPOCapability cap);
 /// Nil when available; otherwise a user-facing runtime reason.
 NSString *_Nullable SPOCapabilityUnavailableReason(SPOCapability cap);
-/// Names of every symbol or class we wanted but could not resolve.
 NSArray<NSString *> *SPOMissingSymbols(void);
 
 /// Whether this translation unit was compiled with ARC.
@@ -85,7 +84,6 @@ BOOL SPOBuiltWithARC(void);
 /// decides which Spaces count as agent territory, so a guess reports the user's own Space as a
 /// breach. Callers must treat an absent or empty answer as "unknown", not "no Spaces exist".
 NSArray<NSNumber *> *_Nullable SPOSpacesForDisplay(CGDirectDisplayID displayID);
-/// Space ids a window is currently associated with.
 NSArray<NSNumber *> *_Nullable SPOSpacesForWindow(uint32_t windowID);
 /// The user's currently active space id (0 when unavailable).
 uint64_t SPOActiveSpace(void);

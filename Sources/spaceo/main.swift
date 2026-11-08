@@ -591,7 +591,7 @@ func remote(_ build: (inout Request) -> Void) -> Never {
     request.strictIsolation = args.bool("strict") ? true : nil
     if let raw = stringArgument("require-isolation") {
         let names = raw.split(separator: ",").map(String.init)
-        guard !names.isEmpty, names.count <= IsolationDimension.allCases.count else { fail("require-isolation needs 1 through 6 dimensions") }
+        guard !names.isEmpty, names.count <= IsolationDimension.allCases.count else { fail("require-isolation needs 1 through \(IsolationDimension.allCases.count) dimensions") }
         request.requiredIsolation = names.map { name in
             guard let value = IsolationDimension(rawValue: name) else {
                 fail("unknown isolation dimension; use " + IsolationDimension.allCases.map(\.rawValue).joined(separator: ","))
@@ -606,7 +606,6 @@ func remote(_ build: (inout Request) -> Void) -> Never {
     request.duration = doubleArgument("duration")
     request.snapshotID = stringArgument("snapshot")
     request.label = stringArgument("label")
-    // `match`/`role` refine label matching; `validateFlags` admits them only where they apply.
     request.match = stringArgument("match")
     if request.role == nil { request.role = stringArgument("role") }
     request.geometryToken = stringArgument("geometry")
@@ -757,11 +756,19 @@ func leaseArgument(required: Bool = false) -> UUID? {
 
 /// `--orphan-grace`: how long an abandoned session keeps its apps waiting for `session claim`.
 func orphanGraceArgument() -> Double? {
-    let grace = doubleArgument("orphan-grace")
-    if let grace, !(30...1_800).contains(grace) {
-        fail("--orphan-grace must be from 30 through 1800 seconds")
+    secondsArgument("orphan-grace", within: SessionReclamationPolicy.orphanGraceRange)
+}
+
+func controllerTTLArgument() -> Double? {
+    secondsArgument("controller-ttl", within: SessionReclamationPolicy.clientTTLRange)
+}
+
+func secondsArgument(_ name: String, within range: ClosedRange<Double>) -> Double? {
+    let value = doubleArgument(name)
+    if let value, !range.contains(value) {
+        fail("--\(name) must be from \(Int(range.lowerBound)) through \(Int(range.upperBound)) seconds")
     }
-    return grace
+    return value
 }
 
 func controllerOwnerArgument() -> DurableSessionOwner {
@@ -986,7 +993,6 @@ case "daemon":
         displaySize = TileLayout.displaySize(forCapacity: perDisplay)
     }
 
-    // Validate technical geometry before starting the daemon.
     do {
         _ = try budget.validateDisplaySize(displaySize, capacity: perDisplay)
     } catch {
@@ -1031,7 +1037,6 @@ case "daemon":
         let trace = PerformanceTrace.signposter.beginInterval("Daemon.Request", id: PerformanceTrace.signposter.makeSignpostID())
         defer { PerformanceTrace.signposter.endInterval("Daemon.Request", trace) }
         let started = ContinuousClock.now
-        // Keep baselines for unexpected failures, but an unconfigured logger cannot use one.
         let metricsStarted = DaemonLog.shared.isConfigured ? ProcessMetricsSnapshot.capture() : nil
         var response = await holder.handle(request)
         var runtime = daemonRuntime
@@ -1228,10 +1233,7 @@ case "session":
     case "create":
         validateFlags("session.create")
         let owner = controllerOwnerArgument()
-        let ttl = doubleArgument("controller-ttl")
-        if let ttl, !(30...3_600).contains(ttl) {
-            fail("--controller-ttl must be from 30 through 3600 seconds")
-        }
+        let ttl = controllerTTLArgument()
         let requestedLease = leaseArgument()
         let orphanGrace = orphanGraceArgument()
         if args.bool("export") {
@@ -1278,10 +1280,7 @@ case "session":
             fail("session claim needs --session ID; it never picks a session for you")
         }
         let owner = controllerOwnerArgument()
-        let ttl = doubleArgument("controller-ttl")
-        if let ttl, !(30...3_600).contains(ttl) {
-            fail("--controller-ttl must be from 30 through 3600 seconds")
-        }
+        let ttl = controllerTTLArgument()
         let orphanGrace = orphanGraceArgument()
         remote { request in
             request.cmd = "session.claim"

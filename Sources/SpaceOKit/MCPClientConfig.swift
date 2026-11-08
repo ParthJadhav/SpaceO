@@ -206,7 +206,6 @@ public struct MCPClientConfig {
         if oldLines.count > maximumDiffLines || newLines.count > maximumDiffLines {
             return (oldLines.map { "-" + $0 } + newLines.map { "+" + $0 }).joined(separator: "\n")
         }
-        // Longest common subsequence table; sizes are bounded above.
         let n = oldLines.count, m = newLines.count
         var table = [[Int]](repeating: [Int](repeating: 0, count: m + 1), count: n + 1)
         for i in stride(from: n - 1, through: 0, by: -1) {

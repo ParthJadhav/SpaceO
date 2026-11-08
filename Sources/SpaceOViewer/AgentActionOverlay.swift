@@ -56,7 +56,6 @@ struct AgentActionRipple: View {
     }
 }
 
-/// Every marker for the console, each keyed on its own action time.
 struct AgentActionOverlay: View {
     let markers: [SessionOverlayLayout.ActionMarker]
 

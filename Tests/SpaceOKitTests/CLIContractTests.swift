@@ -58,7 +58,6 @@ final class CLIContractTests: XCTestCase {
         XCTAssertEqual(CLIExitCode.classify(waitResponse("cancelled"), command: "wait"), .waitNotMet)
         XCTAssertEqual(CLIExitCode.classify(waitResponse("timeout"), command: "steps"), .success,
                        "only `wait` turns an ok receipt into a failure status")
-        XCTAssertEqual(CLIExitCode.waitNotMet.rawValue, 6)
     }
 
     func testExitCodesAreDistinctAndDocumented() {

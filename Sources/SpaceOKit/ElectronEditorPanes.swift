@@ -72,13 +72,6 @@ public enum ElectronEditorPanes {
         return .column(index + 1)
     }
 
-    /// Bounded compatibility read. An empty result can mean failure, so action routing must use
-    /// the checked discovery path instead of treating this result as proof of a single editor.
-    public static func editorFrames(in pid: pid_t, windowID: CGWindowID) -> [CGRect] {
-        (try? AXEditorPaneDiscovery.liveFrames(pid: pid, windowID: windowID)) ?? []
-    }
-
-    /// Drop degenerate frames and collapse ones that describe the same pane twice.
     private static func distinctPanes(_ frames: [CGRect]) -> [CGRect] {
         var kept: [CGRect] = []
         for frame in frames {

@@ -6,7 +6,6 @@ import SpaceOKit
 /// Whether one MCP client can reach SpaceO, from the person's point of view.
 enum ViewerAgentConnectionState: Equatable, Sendable {
     case checking
-    /// The client does not appear to be installed.
     case notInstalled
     case notConnected
     /// Registered, launching `path`. `current` is false when that is not this Viewer's `spaceo`

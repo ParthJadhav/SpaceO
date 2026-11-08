@@ -1857,8 +1857,8 @@ optional attribute can establish a leaf; a failed announced page cannot. Window 
 cardinality must match the checked count. Negative and oversized counts refuse before allocation.
 Matched Monaco surfaces prune their inner content groups; small proxies still descend. Pane
 geometry must be present, finite, nonnegative, and have finite outer edges. No partial frame list
-escapes a failed traversal. The compatibility `editorFrames` signature remains nonthrowing and
-bounded, with documented ambiguous empty results; production actions use the checked path.
+escapes a failed traversal. The nonthrowing compatibility `editorFrames` read, which had no callers,
+has been removed; production actions use the checked path.
 
 Complete zero/single-pane AX layouts preserve the existing active-editor behavior after the
 caller's editor hit test. Grid layouts and points outside a split remain refused. This is not an

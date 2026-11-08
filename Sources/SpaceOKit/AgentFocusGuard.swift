@@ -74,7 +74,6 @@ public final class AgentFocusGuard: @unchecked Sendable {
         }
     }
 
-    /// At most this many restorations per agent process within `restoreWindow` seconds.
     static let maximumRestores = 3
     static let restoreWindow: TimeInterval = 10
 
@@ -94,9 +93,7 @@ public final class AgentFocusGuard: @unchecked Sendable {
         self.environment = environment
     }
 
-    /// Processes with restoration history inside the current window (tests and bounds).
     var restoreHistoryCount: Int { lock.withLock { recentRestores.count } }
-    /// Agent processes with a queued activation check (tests and bounds).
     var pendingCheckCount: Int { lock.withLock { pendingChecks.count } }
 
     /// Follow activation for the life of the daemon. Notifications arrive on the main run loop;
@@ -105,7 +102,6 @@ public final class AgentFocusGuard: @unchecked Sendable {
         start(observingWorkspace: true, onBackgroundRestore: onBackgroundRestore)
     }
 
-    /// Tests drive `noteActivation` themselves instead of following the real workspace.
     func start(observingWorkspace: Bool, onBackgroundRestore: @escaping @Sendable (Outcome) -> Void) {
         lock.withLock {
             guard observer == nil, self.onBackgroundRestore == nil else { return }
@@ -206,7 +202,6 @@ public final class AgentFocusGuard: @unchecked Sendable {
                 // must have left the agent too before this counts.
                 if environment.isolationIntact() {
                     guard current.pid == target.pid else { return .notNeeded }
-                    AgentActivity.recordFocusRestore()
                     return .restored(app: target.name, agentPID: front.pid, agentName: front.name, session: session)
                 }
                 frontmostAgain = frontmostAgain || current.pid == target.pid

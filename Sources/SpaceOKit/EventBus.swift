@@ -173,7 +173,6 @@ public final class EventBus: @unchecked Sendable {
         return subscribers.count
     }
 
-    /// True when no further subscribers will be admitted.
     public var isSaturated: Bool {
         lock.lock(); defer { lock.unlock() }
         return subscribers.count >= Self.maximumSubscribers

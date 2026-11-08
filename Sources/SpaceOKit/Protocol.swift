@@ -172,6 +172,13 @@ public struct Request: Codable, Sendable {
 /// The daemon's command vocabulary, in the one place both sides can agree on.
 public enum DaemonCommand {
 
+    /// Commands that act on an application: their receipts carry a delivery verdict and a
+    /// recording captures them.
+    public static let actions: Set<String> = [
+        "click", "scroll", "move", "drag", "type", "key", "select", "run", "adopt", "place",
+        "repark", "open.url",
+    ]
+
     /// Commands that mutate a session and therefore need its controller lease.
     ///
     /// This exists as shared data rather than a literal in each client because the two copies

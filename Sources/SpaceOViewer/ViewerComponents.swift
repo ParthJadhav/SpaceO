@@ -59,7 +59,6 @@ struct AppIconView: View {
     }
 }
 
-/// A session's face in lists: its first app's icon with the status dot in the corner.
 struct SessionIconView: View {
     let session: SessionInfo
     let status: ViewerSessionStatus
@@ -103,7 +102,6 @@ struct StatusDot: View {
     }
 }
 
-/// "● Working" as a tinted capsule, for headers and cards.
 struct StatusBadge: View {
     let status: ViewerSessionStatus
 
@@ -173,7 +171,6 @@ extension NoticeCard where Actions == EmptyView {
 
 // MARK: - Canvas chrome
 
-/// A dark translucent capsule for text drawn over the agent's screen.
 struct CanvasPill: View {
     let text: String
     var systemImage: String?

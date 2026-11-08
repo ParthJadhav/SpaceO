@@ -109,7 +109,7 @@ public enum AppLauncher {
         }
 
         let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false           // the whole point
+        configuration.activates = false
         configuration.addsToRecentItems = false
         // Apple documents this as hiding the app immediately after launch. Windows still exist
         // for Accessibility placement, but are not shown on the user's monitor while we move
@@ -480,7 +480,6 @@ public enum AppLauncher {
                            temporaryProfile: nil)
     }
 
-    /// Move an already-described process's windows into `region`.
     public static func place(_ app: LaunchedApp, into region: CGRect) throws -> [WindowRef] {
         try WindowPlacement.requireAccessibility()
         try WindowPlacement.validate(frame: region)
@@ -491,7 +490,6 @@ public enum AppLauncher {
         return try WindowPlacement.placeAll(of: app.pid, into: region)
     }
 
-    /// Adopt an already-running process into a stage without launching anything.
     public static func adopt(pid: pid_t, into region: CGRect) throws -> (app: LaunchedApp, windows: [WindowRef]) {
         try WindowPlacement.validate(frame: region)
         let app = try describe(pid: pid)
@@ -716,11 +714,6 @@ public enum AppLauncher {
         return false
     }
 
-    /// VS Code-family Electron bundles have a stable semantic extension API that can scroll an
-    /// editor without synthesising input or activating the application.
-    ///
-    /// Do not classify arbitrary Electron shells here: loading a VS Code extension into an app
-    /// that merely happens to ship Electron would be both ineffective and an unsafe assumption.
     /// Per-launch defaults overrides for an AppKit app. They live in the launched process's
     /// argument domain only; the user's preferences and saved state are never written.
     ///
@@ -760,6 +753,11 @@ public enum AppLauncher {
             && bundle.object(forInfoDictionaryKey: "JVMOptions") == nil
     }
 
+    /// VS Code-family Electron bundles have a stable semantic extension API that can scroll an
+    /// editor without synthesising input or activating the application.
+    ///
+    /// Do not classify arbitrary Electron shells here: loading a VS Code extension into an app
+    /// that merely happens to ship Electron would be both ineffective and an unsafe assumption.
     public static func isVSCodeElectronFamily(_ appURL: URL) -> Bool {
         let resources = appURL.appendingPathComponent("Contents/Resources/app")
         let framework = appURL.appendingPathComponent(

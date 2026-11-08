@@ -171,7 +171,6 @@ extension SessionManager {
             profilesRemoved: outcome.profilesRemoved)
     }
 
-    /// Publish and log one completed session ending, and remember it for later questions.
     func announceDestroyed(_ id: String, summary: DestroySummary) {
         emit("session.destroyed", session: id, [
             "complete": "true",
@@ -213,11 +212,6 @@ extension SessionManager {
         }
         observer.start()
         displayEnvironmentObserver = observer
-    }
-
-    public func stopDisplayEnvironmentObservation() {
-        displayEnvironmentObserver?.stop()
-        displayEnvironmentObserver = nil
     }
 
     /// Re-check every live session's display after wake or reconfiguration.

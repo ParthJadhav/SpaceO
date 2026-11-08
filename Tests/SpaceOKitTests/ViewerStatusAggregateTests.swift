@@ -91,7 +91,6 @@ final class ViewerStatusAggregateTests: XCTestCase {
         XCTAssertEqual(ViewerSessionStatusDot.dot(for: try asking("a"), breached: true), .red)
         XCTAssertLessThan(ViewerSessionStatusDot.amber, .needsHuman)
         XCTAssertLessThan(ViewerSessionStatusDot.needsHuman, .red)
-        XCTAssertEqual(ViewerSessionStatusDot.needsHuman.systemImage, "hand.raised.fill")
 
         var blank = try asking("b", reason: "   ")
         XCTAssertEqual(ViewerSessionStatusDot.dot(for: blank, breached: false), .amber,

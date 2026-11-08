@@ -93,12 +93,12 @@ let liveWindowWatcherFactory: WindowWatcherFactory = { pid, region in
 ///
 /// The clock and liveness probe are injectable so expiry, PID reuse, and grace periods can be
 /// tested without sleeping or launching a controller process.
-struct SessionReclamationPolicy: Sendable {
-    static let clientTTLRange: ClosedRange<TimeInterval> = 30...3_600
+public struct SessionReclamationPolicy: Sendable {
+    public static let clientTTLRange: ClosedRange<TimeInterval> = 30...3_600
     /// Client-requested orphan grace (`orphanGraceSeconds`). The floor keeps today's 30 s
     /// behaviour reachable; the ceiling bounds how long an unowned session can hold a tile and
     /// keep its apps alive after its controller has gone.
-    static let orphanGraceRange: ClosedRange<TimeInterval> = 30...1_800
+    public static let orphanGraceRange: ClosedRange<TimeInterval> = 30...1_800
 
     let defaultTTL: TimeInterval
     let gracePeriod: TimeInterval
@@ -158,7 +158,6 @@ struct SessionControllerSnapshot: Sendable {
     let idleSeconds: TimeInterval
     let abandoned: Bool
     let reclaimable: Bool
-    /// This session's grace between abandonment and reclamation.
     let gracePeriod: TimeInterval
     /// When the janitor may reclaim an abandoned session; nil while it is owned.
     let reclaimableAt: Date?
@@ -208,7 +207,6 @@ public final class AgentSession: @unchecked Sendable {
     public var stage: Stage { slot.stage }
     /// The region of that display this session may use. Agent windows go here.
     public var frame: CGRect { slot.frame }
-    /// True when this session has the whole display to itself.
     public var hasExclusiveDisplay: Bool { slot.isExclusive }
     /// True when cleanup is terminal for new work but retained resources still need a retry.
     public var teardownPending: Bool {
@@ -835,7 +833,7 @@ public final class AgentSession: @unchecked Sendable {
                         operatorControlWindowIDs = Set(windows.map(\.windowID))
                     }
                 } else if let reason {
-                    agentPauseReason = String(reason.prefix(240))
+                    agentPauseReason = String(reason.prefix(Self.maximumPauseReasonCharacters))
                 }
                 return
             }
@@ -847,13 +845,13 @@ public final class AgentSession: @unchecked Sendable {
             if byOperator, let since = operatorControlSince {
                 let current = Set(windows.map(\.windowID))
                 pendingOperatorHandoff = OperatorHandoff(
-                    note: handoffNote.map { String($0.prefix(480)) },
+                    note: handoffNote.map { String($0.prefix(Self.maximumHandoffNoteCharacters)) },
                     controlDurationSeconds: max(0, now.timeIntervalSince(since)),
                     windowsChanged: current != operatorControlWindowIDs,
                     releasedAt: now)
             } else if byOperator, let handoffNote, !handoffNote.isEmpty {
                 pendingOperatorHandoff = OperatorHandoff(
-                    note: String(handoffNote.prefix(480)),
+                    note: String(handoffNote.prefix(Self.maximumHandoffNoteCharacters)),
                     controlDurationSeconds: 0,
                     windowsChanged: false,
                     releasedAt: now)
@@ -936,13 +934,18 @@ public final class AgentSession: @unchecked Sendable {
     }
 
     public static let colorTags: Set<String> = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
+    public static let maximumTitleCharacters = 120
+    /// The agent's reason for pausing, shown to the operator.
+    public static let maximumPauseReasonCharacters = 240
+    /// The operator's note handed back to the agent on resume.
+    public static let maximumHandoffNoteCharacters = 480
 
     /// Rename or colour-tag the session. Empty strings clear the field; nil leaves it alone.
     public func annotate(title: String?, colorTag: String?) throws {
         if let title {
-            guard title.count <= 120, title.utf8.count <= 480,
+            guard title.count <= Self.maximumTitleCharacters, title.utf8.count <= Self.maximumTitleCharacters * 4,
                   title.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
-                throw SpaceOError.badRequest("title must be at most 120 control-free characters")
+                throw SpaceOError.badRequest("title must be at most \(Self.maximumTitleCharacters) control-free characters")
             }
         }
         if let colorTag, !colorTag.isEmpty, colorTag != "none", !Self.colorTags.contains(colorTag) {
@@ -952,14 +955,6 @@ public final class AgentSession: @unchecked Sendable {
         agentInputLock.withLock {
             if let title { sessionTitle = title.isEmpty ? nil : title.trimmingCharacters(in: .whitespacesAndNewlines) }
             if let colorTag { sessionColorTag = (colorTag.isEmpty || colorTag == "none") ? nil : colorTag }
-        }
-    }
-
-    /// Restore annotation from a durable record on recovery.
-    func restoreAnnotation(title: String?, colorTag: String?) {
-        agentInputLock.withLock {
-            sessionTitle = title
-            sessionColorTag = colorTag
         }
     }
 
@@ -1081,7 +1076,6 @@ public final class AgentSession: @unchecked Sendable {
         return true
     }
 
-    /// True once revalidation found this session's display gone.
     public var isDisplayLost: Bool { agentInputLock.withLock { displayLostAt != nil } }
 
     // MARK: - Web content
@@ -1350,7 +1344,6 @@ public final class AgentSession: @unchecked Sendable {
             + "Open the app again to continue"
     }
 
-    /// How many stray windows the watchers have contained, and how many refused to move.
     public var containment: (placed: Int, refused: Int) {
         watchers.values.reduce(into: (0, 0)) { total, watcher in
             total.0 += watcher.placedCount
@@ -1662,7 +1655,6 @@ public final class AgentSession: @unchecked Sendable {
         return (focused, focused == true ? observation?.modal : nil)
     }
 
-    /// Remember which surface the agent's last click or drag went to.
     func notePointerFocus(windowID: CGWindowID, pid: pid_t, web: Bool) {
         lastPointerFocus = PointerFocusMemory(windowID: windowID, pid: pid, web: web)
     }
@@ -1813,7 +1805,6 @@ public final class AgentSession: @unchecked Sendable {
         return findings
     }
 
-    /// Put stray windows back in our tile. Returns how many were moved.
     @discardableResult
     public func reparkEscapedWindows() -> Int {
         reparkEscapedWindows(ofPIDs: nil)

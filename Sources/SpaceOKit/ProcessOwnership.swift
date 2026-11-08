@@ -30,7 +30,6 @@ public struct ProcessIdentity: Codable, Hashable, Sendable, CustomStringConverti
         isPrecise ? "pid \(pid)@\(startedAtMicroseconds)" : "pid \(pid) (start time unavailable)"
     }
 
-    /// Read the live identity of `pid`, or nil when no such process exists.
     public static func current(of pid: pid_t) -> ProcessIdentity? {
         guard pid > 0 else { return nil }
         if let micros = kernelStartTimeMicroseconds(of: pid) {
@@ -90,8 +89,6 @@ public enum ProcessOwnership {
 
     private static let state = State()
 
-    /// Take exclusive ownership of `identity` for `owner`.
-    ///
     /// - Throws: `SpaceOError.badRequest` when another session already owns the process.
     public static func claim(_ identity: ProcessIdentity, owner: String) throws {
         try state.lock.withLock {
@@ -126,15 +123,6 @@ public enum ProcessOwnership {
         state.lock.withLock {
             pruneLocked()
             return state.owners[identity]
-        }
-    }
-
-    /// Any live owner of this PID, whatever its start time. Used to answer "is this number
-    /// spoken for?" before an identity has been established.
-    public static func ownerOfPID(_ pid: pid_t) -> String? {
-        state.lock.withLock {
-            pruneLocked()
-            return state.owners.first { $0.key.pid == pid }?.value
         }
     }
 

@@ -73,10 +73,7 @@ extension SessionManager {
         }
     }
 
-    private static let recordedCommands: Set<String> = [
-        "click", "scroll", "move", "drag", "type", "key", "select", "run", "adopt", "place",
-        "repark", "open.url", "steps.run",
-    ]
+    private static let recordedCommands = DaemonCommand.actions.union(["steps.run"])
 
     /// Called under the operation gate after result metadata is final, or on an ordinary
     /// command's error path. Never changes the action outcome because evidence writing failed.

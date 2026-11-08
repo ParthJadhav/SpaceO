@@ -64,7 +64,6 @@ public struct Capabilities: Sendable {
             }
     }
 
-    /// True when SpaceO can additionally take screenshots.
     public var canCapture: Bool {
         items.first { $0.name == "virtual-display" }?.available == true
             && items.first { $0.name == "screen-recording" }?.available == true
@@ -72,31 +71,6 @@ public struct Capabilities: Sendable {
 
     private var required: [String] {
         ["virtual-display", "space-query", "per-pid-events", "ax-window-id", "accessibility"]
-    }
-
-    /// Throws the most useful error for whatever is missing, or returns.
-    public func requireDriving() throws {
-        if !builtWithARC {
-            throw SpaceOError.unavailable(
-                capability: "Objective-C ARC (required for virtual-display teardown)")
-        }
-        for name in required where name != "accessibility" {
-            if let item = items.first(where: { $0.name == name }), !item.available {
-                let capability = item.unavailableReason.map {
-                    "\(name): \($0)"
-                } ?? name
-                throw SpaceOError.unavailable(capability: capability)
-            }
-        }
-        if items.first(where: { $0.name == "accessibility" })?.available != true {
-            throw SpaceOError.accessibilityDenied
-        }
-    }
-
-    public func requireCapture() throws {
-        if items.first(where: { $0.name == "screen-recording" })?.available != true {
-            throw SpaceOError.screenRecordingDenied
-        }
     }
 
     /// Whether the private-API shim was built with ARC. If this is ever false, virtual

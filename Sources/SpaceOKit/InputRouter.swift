@@ -82,6 +82,11 @@ public struct KeyCombo: Sendable, Equatable {
     public let keyCode: CGKeyCode
     public let flags: CGEventFlags
 
+    /// `key` actions: a whole press, or only its down or up half.
+    public static let actions = ["tap", "down", "up"]
+    /// How long a tap may hold its key before releasing it.
+    public static let holdMillisecondsRange = 0...5_000
+
     /// Command-C and Command-X can replace the shared pasteboard; Command-V can disclose it.
     /// Extra modifiers do not make them safe: applications are free to bind variants such as
     /// Command-Shift-C to another kind of copy.
@@ -198,22 +203,6 @@ public enum InputRouter {
         let windowID: CGWindowID
     }
 
-    /// Bundle identifier prefixes whose renderer needs a primer click before real mouse input.
-    static let chromiumLike: [String] = [
-        "com.google.Chrome", "org.chromium.Chromium", "com.microsoft.edgemac",
-        "com.brave.Browser", "com.vivaldi.Vivaldi", "company.thebrowser.Browser",
-        "app.zen-browser", "com.electron.",
-    ]
-
-    static func bundleID(of pid: pid_t) -> String {
-        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier ?? ""
-    }
-
-    static func isChromiumLike(_ pid: pid_t) -> Bool {
-        let id = bundleID(of: pid)
-        return chromiumLike.contains { id.hasPrefix($0) }
-    }
-
     // MARK: - Focus
 
     enum FocusRecord: Int, CaseIterable, Sendable {
@@ -291,7 +280,6 @@ public enum InputRouter {
                 "pid \(window.pid) refused the \(record.description) focus record; "
                 + "the original user input route was restored and input was not sent")
         case .succeeded:
-            AgentActivity.recordFocusFlip()
             settle()
             return true
         }
@@ -380,7 +368,6 @@ public enum InputRouter {
         return route
     }
 
-    /// Restore a route returned by `beginPointerInput`.
     public static func endPointerInput(_ route: UserInputRoute?) {
         guard let route else { return }
         _ = restoreUserInputRoute(route)
@@ -407,10 +394,6 @@ public enum InputRouter {
         let focusedWindow = AX.element(appElement, kAXFocusedWindowAttribute as String)
         let windowID = focusedWindow.map(AX.windowID) ?? 0
         return UserInputRoute(app: app, windowID: windowID)
-    }
-
-    static func currentRouteTargets(_ pid: pid_t) -> Bool {
-        NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
     }
 
     static func userRouteIsCurrent(_ route: UserInputRoute) -> Bool {
@@ -595,7 +578,6 @@ public enum InputRouter {
         let deadline = Date().addingTimeInterval(1.0)
         repeat {
             if userRouteIsCurrent(route) {
-                AgentActivity.recordFocusRestore()
                 return true
             }
             usleep(20_000)
@@ -606,7 +588,6 @@ public enum InputRouter {
             let fallbackDeadline = Date().addingTimeInterval(1.0)
             repeat {
                 if userRouteIsCurrent(route) {
-                    AgentActivity.recordFocusRestore()
                     return true
                 }
                 usleep(20_000)

@@ -28,7 +28,6 @@ enum ProcessExitWait {
         let deadline = overflow ? UInt64.max : end
         var pending = values
         while !pending.isEmpty {
-            // Compact the same buffer instead of allocating another filtered array every poll.
             // An expired scan keeps its unqueried suffix; it does not manufacture exit evidence.
             pending.removeAll { value in
                 guard runtime.now() < deadline else { return false }

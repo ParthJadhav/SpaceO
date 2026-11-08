@@ -156,7 +156,6 @@ public struct CLIArguments: Sendable {
     ) {
         let known = booleanFlags.union(valueFlags)
 
-        /// True when `token` is a flag this CLI knows, so a preceding value flag must not eat it.
         func isKnownFlag(_ token: String) -> Bool {
             if token == "--" { return true }
             if token.hasPrefix("--") {

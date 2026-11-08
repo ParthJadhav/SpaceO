@@ -139,7 +139,6 @@ public enum MirrorInput {
             self.appName = appName
         }
 
-        /// The candidate as an event target.
         public var ref: WindowRef {
             WindowRef(windowID: windowID, pid: pid, title: title, frame: bounds)
         }
@@ -226,7 +225,6 @@ public enum MirrorInput {
         }
     }
 
-    /// Forward one pointer event to a window at a global point.
     public static func postPointer(
         _ phase: PointerPhase,
         button: MouseButton = .left,
@@ -322,7 +320,6 @@ public enum MirrorInput {
         }
     }
 
-    /// AppKit modifier flags translated for CGEvent delivery.
     public static func flags(from modifiers: NSEvent.ModifierFlags) -> CGEventFlags {
         var flags: CGEventFlags = []
         if modifiers.contains(.command)  { flags.insert(.maskCommand) }

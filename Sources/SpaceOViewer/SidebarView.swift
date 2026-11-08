@@ -360,7 +360,6 @@ struct SessionContextMenu: View {
     }
 }
 
-/// The sidebar while Settings is open: its panes, and the way back to sessions.
 private struct SettingsSidebar: View {
     @Environment(ViewerModel.self) private var model
     let pane: ViewerSettingsPane
@@ -400,7 +399,6 @@ private struct SettingsSidebar: View {
         .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
     }
 
-    /// An orange dot on panes that hold an unresolved problem.
     private func badge(for item: ViewerSettingsPane) -> Bool {
         switch item {
         case .permissions: ViewerPermissionKind.allCases.contains { !model.isGranted($0) }

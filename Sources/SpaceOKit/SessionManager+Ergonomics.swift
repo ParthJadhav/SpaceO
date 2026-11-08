@@ -326,9 +326,9 @@ extension SessionManager {
             // never what a well-formed query looks like against someone else's session.
             let session = try resolveForRead(request.session, leaseID: request.controllerLeaseID)
             guard let query = request.query else { throw SpaceOError.badRequest("ax.find needs a query") }
-            guard query.utf8.count <= 480,
+            guard query.utf8.count <= AXLabelMatcher.maximumTextBytes,
                   query.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) else {
-                throw SpaceOError.badRequest("query must be at most 480 control-free bytes")
+                throw SpaceOError.badRequest("query must be at most \(AXLabelMatcher.maximumTextBytes) control-free bytes")
             }
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
@@ -395,7 +395,8 @@ extension SessionManager {
             let lifecycleLease = try session.beginOperation()
             defer { lifecycleLease.finish() }
             let window = try session.resolveWindow(request.window)
-            let limit = min(max(request.maxChars ?? 20_000, 1), 20_000)
+            let range = AXTree.textCharacterRange
+            let limit = min(max(request.maxChars ?? range.upperBound, range.lowerBound), range.upperBound)
             var response = Response(ok: true)
             if let reference = request.element {
                 guard let index = Int(reference), index >= 0 else {

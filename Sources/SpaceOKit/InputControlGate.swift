@@ -45,7 +45,6 @@ public final class InputControlGate {
         }
     }
 
-    /// Turn control off. Returns the new epoch so a caller can log or assert on it.
     @discardableResult
     public func disable() -> UInt64 {
         lock.withLock {

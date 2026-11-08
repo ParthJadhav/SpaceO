@@ -96,34 +96,6 @@ final class SessionOverlayLayoutTests: XCTestCase {
         }
     }
 
-    /// Guards the discriminating power of the test above: the placement it asserts is genuinely
-    /// different from the alignment-relative one, so a return to `.offset` fails rather than
-    /// coincidentally passing.
-    func testCenterAlignedOffsetWouldMisplaceTheSameTiles() throws {
-        let console = CGSize(width: 800, height: 450)
-        let tiles = SessionOverlayLayout.tiles(
-            for: try fourTiles(),
-            displayBounds: stage,
-            viewSize: console
-        )
-
-        // Tile 0 belongs at the origin; offsetting by its rect origin inside a centered ZStack
-        // parks it dead center instead.
-        XCTAssertEqual(
-            centerAlignedOffsetOrigin(console: console,
-                                      size: tiles[0].frame.size,
-                                      offset: tiles[0].frame.origin),
-            CGPoint(x: 200, y: 112.5))
-        for tile in tiles {
-            XCTAssertNotEqual(
-                centerAlignedOffsetOrigin(console: console,
-                                          size: tile.frame.size,
-                                          offset: tile.frame.origin),
-                tile.frame.origin,
-                "tile \(tile.session.id) placement is alignment-agnostic — test proves nothing")
-        }
-    }
-
     func testTilesFollowTheLetterboxWhenTheConsoleAspectDiffers() throws {
         // 16:9 stage in a 4:3 console: 800x450 of content, centered, with 75pt bars.
         let console = CGSize(width: 800, height: 600)

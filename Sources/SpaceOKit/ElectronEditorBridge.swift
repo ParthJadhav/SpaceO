@@ -120,7 +120,6 @@ public actor ElectronEditorBridge {
         return response.document ?? ""
     }
 
-    /// Every visible editor pane and which one holds focus.
     public func layout() async throws -> Layout {
         let response = try await exchange(request("layout"))
         guard response.ok, let editors = response.editors else {

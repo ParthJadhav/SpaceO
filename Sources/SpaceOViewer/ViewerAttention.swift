@@ -129,7 +129,6 @@ extension ViewerAccessibility {
         return "\(endedTitle) ended. No session selected."
     }
 
-    /// Agent actions in the minute before `now`, for the row label.
     static func recentActionCount(_ timestamps: [Date], now: Date = Date()) -> Int {
         timestamps.filter { now.timeIntervalSince($0) <= 60 && $0 <= now }.count
     }
