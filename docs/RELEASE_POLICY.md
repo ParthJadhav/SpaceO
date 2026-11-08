@@ -146,8 +146,8 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.10` is prepared as an **owner-directed maintenance release with a qualification
-exception**. On November 8, 2026, after the untangle refactor ([#67](https://github.com/ParthJadhav/SpaceO/pull/67))
+Version `1.0.10` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.10)
+as an **owner-directed maintenance release with a qualification exception**. On November 8, 2026, after the untangle refactor ([#67](https://github.com/ParthJadhav/SpaceO/pull/67))
 merged, the owner instructed: **"merge, deploy and create a new version"**. This is recorded as GO
 to construct and publish 1.0.10 from remote `main`, conditional on passing source, CI, signing,
 notarization, immutable-candidate and distribution checks. The release carries the retired
@@ -158,7 +158,9 @@ the release was prepared from an agent session on the owner's active desktop, wh
 are not permitted. The normal-admission run recorded for RA-057 used a source build before #67.
 It does not relabel any of them as passed or approve a runtime safety bypass. See the
 [1.0.10 notes](RELEASE_NOTES_1.0.10.md) and
-[preparation record](validation/2026-11-08-release-1.0.10.md).
+[preparation record](validation/2026-11-08-release-1.0.10.md). The exact signed candidate and all five
+unauthenticated public downloads passed provenance and distribution verification through the
+normal protected approvals; see the [publication record](validation/2026-11-08-publication-1.0.10.md).
 
 Version `1.0.9` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.9)
 as an **owner-directed maintenance release with a qualification exception**. On October 16, 2026, after the RA-057 fix merged and the owner was told that no
