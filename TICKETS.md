@@ -24,6 +24,16 @@ Status definitions:
 
 ## Active milestone
 
+### November 8 maintenance release 1.0.10
+
+- Merged the untangle refactor #67 (one definition per MCP tool, shared limits, dead code and
+  restating comments removed); `tools/list`, CLI help, refusal messages and the daemon protocol
+  are unchanged.
+- Prepared 1.0.10 by owner direction ("merge, deploy and create a new version") with #62 and #67
+  and a qualification exception for the full live suite, the computer-use matrix and
+  signed-artifact behavior qualification. See the
+  [preparation record](docs/validation/2026-11-08-release-1.0.10.md).
+
 ### October 16 ColorSync display identities (RA-057)
 
 - Root cause established: per-attachment random serials grew ColorSync's device registry
