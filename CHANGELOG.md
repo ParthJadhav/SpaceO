@@ -6,6 +6,8 @@ All notable user-visible changes are recorded here. SpaceO follows
 
 ## [Unreleased]
 
+## [1.0.10] - 2026-11-08
+
 - A WindowServer crash or watchdog report from earlier in the boot no longer blocks display
   creation until the Mac restarts. With display identities bounded and ColorSync residue removable
   (RA-057), the owner retired that admission check: neither the daemon nor the live-test
@@ -13,6 +15,15 @@ All notable user-visible changes are recorded here. SpaceO follows
   and the `recent_windowserver_diagnostic` reason. Current ColorSync load, memory pressure, swap
   and creation budgets still refuse. A `recent_windowserver_diagnostic` latch recorded by 1.0.9
   or earlier can be cleared with `spaceo safety clear-host-health --operator`.
+- Internal cleanup with no intended behavior change (#67). Each MCP tool is defined once, and
+  request limits and vocabularies are defined once on the type that enforces them. `tools/list`,
+  accepted arguments, refusal messages, CLI help and the daemon protocol are unchanged. Unused
+  members of the internal `SpaceOKit` module were removed; it is built into the CLI, daemon, MCP
+  server and Viewer and is not distributed or supported as a library.
+
+Owner-directed maintenance release with a qualification exception: the full live suite, the
+computer-use matrix and signed-artifact behavior qualification were not run for this release.
+See the [release notes](docs/RELEASE_NOTES_1.0.10.md).
 
 ## [1.0.9] - 2026-10-16
 

@@ -146,7 +146,21 @@ approval, or instructing users to disable Gatekeeper or SIP.
 
 ## Current status
 
-Version `1.0.9` is [published as latest](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.9)
+Version `1.0.10` is prepared as an **owner-directed maintenance release with a qualification
+exception**. On November 8, 2026, after the untangle refactor ([#67](https://github.com/ParthJadhav/SpaceO/pull/67))
+merged, the owner instructed: **"merge, deploy and create a new version"**. This is recorded as GO
+to construct and publish 1.0.10 from remote `main`, conditional on passing source, CI, signing,
+notarization, immutable-candidate and distribution checks. The release carries the retired
+WindowServer-report admission check ([#62](https://github.com/ParthJadhav/SpaceO/pull/62)) and the
+behavior-preserving refactor (#67). The exception covers the missing full live suite and
+computer-use matrix on the release source, and missing signed-artifact behavior qualification;
+the release was prepared from an agent session on the owner's active desktop, where those runs
+are not permitted. The normal-admission run recorded for RA-057 used a source build before #67.
+It does not relabel any of them as passed or approve a runtime safety bypass. See the
+[1.0.10 notes](RELEASE_NOTES_1.0.10.md) and
+[preparation record](validation/2026-11-08-release-1.0.10.md).
+
+Version `1.0.9` remains [published for rollback](https://github.com/ParthJadhav/SpaceO/releases/tag/v1.0.9)
 as an **owner-directed maintenance release with a qualification exception**. On October 16, 2026, after the RA-057 fix merged and the owner was told that no
 release contained it and that the host cleanup had not been run, the owner granted
 administrator access on this Mac and instructed: **"do everything which is needed"** and
